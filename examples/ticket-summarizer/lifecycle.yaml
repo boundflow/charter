@@ -1,0 +1,11 @@
+apiVersion: charter/v1
+kind: LifecyclePolicy
+
+agent: ticket-summarizer
+
+rules:
+  - when: { metric: num_failures, threshold: 3 }
+    then: { pause: { window: 5 } }
+
+  - when: { metric: cost, threshold: 2.00 }
+    then: { set_version: { target: 1 } }

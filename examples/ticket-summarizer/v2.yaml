@@ -1,0 +1,31 @@
+apiVersion: charter/v1
+kind: AgentConfig
+
+name: ticket-summarizer
+version: 2
+description: Summarizes what changed across open tickets since the last look.
+
+model: claude-sonnet-5
+
+objective: |
+  Review the open support tickets and summarize what needs a human's attention.
+  Lead with anything that has been waiting longest.
+
+mcp:
+  - name: zendesk
+    command: npx
+    args: ["-y", "@zendesk/mcp"]
+    env: [ZENDESK_SUBDOMAIN, ZENDESK_API_TOKEN]
+    tools:
+      - tool: search_tickets
+        on_failure: fail
+      - tool: get_ticket
+
+outcome:
+  deliverable:
+    summary:
+      type: string
+      description: What needs attention, newest concerns first.
+    needs_attention:
+      type: integer
+      description: How many tickets warrant a human look.

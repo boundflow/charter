@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "charter"
+version = "0.0.1"
+description = "Declarative, governed agents on BoundFlow — objective, tools, and policy as YAML."
+requires-python = ">=3.10"
+
+dependencies = [
+    "boundflow>=0.3.0",
+    "pydantic>=2.0",
+    "pyyaml>=6.0",
+    "typer>=0.12",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "pytest-asyncio"]
+
+[project.scripts]
+charter = "charter.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["charter*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

@@ -1,0 +1,47 @@
+apiVersion: charter/v1
+kind: Worker
+
+name: worker-primary
+
+control_plane:
+  endpoint: ${BOUNDFLOW_ENDPOINT}
+  api_key: ${BOUNDFLOW_API_KEY}
+  tenant_id: ${BOUNDFLOW_TENANT_ID}
+
+llm:
+  provider: anthropic
+  api_key: ${ANTHROPIC_API_KEY}
+
+agents_dir: ./
+
+serves:
+  - agent: refund-triage
+    versions: [1]
+  - agent: ticket-summarizer
+    versions: [1, 2]
+
+notifications:
+  channels:
+    - name: finance
+      kind: webhook
+      url: ${CHARTER_FINANCE_WEBHOOK}
+      secret: ${CHARTER_WEBHOOK_SECRET}
+    - name: oncall
+      kind: webhook
+      url: ${CHARTER_ONCALL_WEBHOOK}
+      secret: ${CHARTER_WEBHOOK_SECRET}
+      timeout_seconds: 5
+      max_attempts: 3
+
+  routes:
+    - agent: refund-triage
+      channel: finance
+    - channel: oncall
+
+trace_sink:
+  kind: otel
+  endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT}
+
+model_pricing:
+  claude-haiku-4-5: { input: 0.80, output: 4.00 }
+  claude-sonnet-5: { input: 3.00, output: 15.00 }

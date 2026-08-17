@@ -1,0 +1,77 @@
+apiVersion: charter/v1
+kind: AgentConfig
+
+name: refund-triage
+version: 1
+description: Resolves customer refund requests up to a bounded amount.
+
+model: claude-haiku-4-5
+
+objective: |
+  Resolve the refund request on ticket {{ inputs.ticket_id }}.
+
+  Look up the ticket and the underlying charge before proposing anything. Never
+  propose a refund above ${{ inputs.max_refund_usd }}. If the customer's reason
+  is unclear, or the charge doesn't match what they describe, ask — do not guess.
+
+inputs:
+  ticket_id:
+    type: string
+    required: true
+    description: Zendesk ticket to resolve.
+  max_refund_usd:
+    type: number
+    default: 100
+    description: Ceiling this agent may propose without escalation.
+  priority:
+    type: string
+    default: normal
+    enum: [low, normal, urgent]
+
+mcp:
+  - name: zendesk
+    command: npx
+    args: ["-y", "@zendesk/mcp"]
+    env: [ZENDESK_SUBDOMAIN, ZENDESK_API_TOKEN]
+    tools:
+      - tool: get_ticket
+        on_failure: fail
+      - tool: search_tickets
+      - tool: add_internal_note
+      - tool: close_ticket
+
+  - name: stripe
+    url: https://mcp.stripe.com
+    env: [STRIPE_API_KEY]
+    tools:
+      - tool: get_charge
+      - tool: list_refunds
+      - tool: create_refund
+        approval: always
+        on_failure: fail
+
+outcome:
+  deliverable:
+    resolution:
+      type: string
+      description: What was done and why, in two sentences.
+    refunded_usd:
+      type: number
+      description: Amount refunded, or 0 if none.
+
+  deliverable_approval: always
+
+  approval:
+    timeout_seconds: 1800
+    on_timeout: reject
+    note: Ticket {{ inputs.ticket_id }}, priority {{ inputs.priority }}.
+
+  ask_human:
+    timeout_seconds: 240
+    on_timeout: continue
+    when: eagerly
+
+memory:
+  from_audit:
+    rejections: 10
+    answers: 10

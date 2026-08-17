@@ -1,0 +1,10 @@
+apiVersion: charter/v1
+kind: RuntimePolicy
+
+agent: ticket-summarizer
+
+per_run:
+  max_cost_usd: 0.15
+  tool_call_limits:
+    - tool: zendesk.get_ticket
+      max_calls: 25

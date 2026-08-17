@@ -1,0 +1,17 @@
+apiVersion: charter/v1
+kind: LifecyclePolicy
+
+agent: refund-triage
+
+rules:
+  - when: { metric: num_failures, threshold: 2 }
+    then: { pause: { window: 5 } }
+
+  - when: { metric: cost, threshold: 5.00 }
+    then: { cooldown: { window: 20, seconds: 300 } }
+
+  - when: { metric: approval_rejections, threshold: 3 }
+    then: { set_version: { target: 1 } }
+
+  - when: { metric: tool_failures, threshold: 3, tool: stripe.create_refund }
+    then: { pause: { window: 10 } }
