@@ -365,9 +365,9 @@ charter run refund-triage --inputs-file ./task.json     # scripted
 echo '{"ticket_id":"4821"}' | charter run refund-triage --inputs-file -
 ```
 
-`charter run <agent> --help` is generated from the `inputs` block — types,
-defaults, enums, and descriptions — so the config file is the only place a task's
-interface is written down. Values are validated and coerced before the request is
+A missing or unknown flag prints the `inputs` block — types, defaults, enums, and
+descriptions — so the config file is the only place a task's interface is written
+down. It isn't in `--help`, because Typer builds that before the agent is named. Values are validated and coerced before the request is
 created; an unknown flag or a missing required input fails locally, without
 burning a run.
 

@@ -219,6 +219,28 @@ async def _workflow_for(cp, agent: str):
     return None
 
 
+def _show_inputs(cfg) -> None:
+    """What this agent takes. Printed on the error paths rather than in --help,
+    because Typer builds --help before we know which agent was named — and the
+    moment someone needs this is the moment they got a flag wrong."""
+    if not cfg.inputs:
+        typer.echo("  (this agent declares no inputs)")
+        return
+    typer.echo(f"\ninputs for {cfg.name}:")
+    for name, spec in cfg.inputs.items():
+        flag = f"--{name.replace('_', '-')}"
+        bits = [spec.type]
+        if spec.required:
+            bits.append("required")
+        if spec.default is not None:
+            bits.append(f"default {spec.default}")
+        if spec.enum:
+            bits.append("one of " + "|".join(str(v) for v in spec.enum))
+        typer.echo(f"  {flag:<24} {', '.join(bits)}")
+        if spec.description:
+            typer.echo(f"  {'':<24} {spec.description}")
+
+
 def _coerce(spec, raw: str, name: str):
     """CLI flags arrive as strings; the declared type is what they must become."""
     try:
@@ -271,7 +293,7 @@ def run(
     unknown = set(flags) - set(cfg.inputs)
     if unknown:
         _err(f"unknown input(s): {', '.join(sorted(unknown))}")
-        _err(f"  declared: {', '.join(cfg.inputs) or '(none)'}")
+        _show_inputs(cfg)
         raise typer.Exit(1)
 
     context = {}
@@ -282,6 +304,7 @@ def run(
             context[name] = spec.default
         elif spec.required:
             _err(f"--{name.replace('_', '-')} is required")
+            _show_inputs(cfg)
             raise typer.Exit(1)
         if spec.enum and name in context and context[name] not in spec.enum:
             _err(f"--{name.replace('_', '-')} must be one of {spec.enum}")
