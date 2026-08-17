@@ -19,24 +19,27 @@ from pathlib import Path
 
 import typer
 
+from . import ui
 from .compile import compile_agent
 from .config.loader import ConfigError, load_agent, load_project
 
-app = typer.Typer(add_completion=False, help="Declarative, governed agents on BoundFlow.")
+app = typer.Typer(
+    add_completion=False,
+    # No rich panels: plain help reads faster and survives a pipe.
+    rich_markup_mode=None,
+    no_args_is_help=True,
+    # \b is Click's "don't rewrap the next paragraph" marker.
+    help="Governed agents from YAML.\n\n\b\n"
+         "  charter apply .              create or update agents\n"
+         "  charter run <agent> --flag   start one task\n"
+         "  charter pending <agent>      what's waiting on a human\n"
+         "  charter diff .               is what's running what you declared?\n",
+)
 
 ENV_REF = re.compile(r"\$\{([A-Z][A-Z0-9_]*)\}")
 
 
-def _err(msg: str) -> None:
-    typer.secho(msg, fg=typer.colors.RED, err=True)
-
-
-def _warn(msg: str) -> None:
-    typer.secho(msg, fg=typer.colors.YELLOW)
-
-
-def _ok(msg: str) -> None:
-    typer.secho(msg, fg=typer.colors.GREEN)
+_err, _warn, _ok = ui.err, ui.warn, ui.ok
 
 
 def _resolve(value: str) -> str:
@@ -75,9 +78,9 @@ def _load(path: Path):
 
 
 def _fail(e: ConfigError) -> None:
-    _err(f"{len(e.problems)} problem(s):")
+    ui.err(f"{len(e.problems)} problem(s) in configuration")
     for p in e.problems:
-        _err(f"  - {p}")
+        ui.detail(p)
     raise typer.Exit(1)
 
 
@@ -91,15 +94,15 @@ def validate(
     except ConfigError as e:
         _fail(e)
 
-    if hasattr(loaded, "agents"):
-        for name, bundle in sorted(loaded.agents.items()):
-            versions = ", ".join(f"v{v}" for v in sorted(bundle.versions))
-            typer.echo(f"  {name}  {versions}  ({bundle.latest.invoke_mode})")
-        _ok(f"ok — {len(loaded.agents)} agent(s)")
-    else:
-        versions = ", ".join(f"v{v}" for v in sorted(loaded.versions))
-        typer.echo(f"  {loaded.name}  {versions}  ({loaded.latest.invoke_mode})")
-        _ok("ok")
+    bundles = (sorted(loaded.agents.values(), key=lambda b: b.name)
+               if hasattr(loaded, "agents") else [loaded])
+    ui.table(["name", "versions", "mode", "tools", "gated"], [
+        [b.name,
+         ",".join(f"v{v}" for v in sorted(b.versions)),
+         b.latest.invoke_mode,
+         str(len(b.latest.all_tools)),
+         ",".join(t.split(".", 1)[1] for t in b.latest.gated_tools) or "-"]
+        for b in bundles])
 
 
 @app.command()
@@ -143,8 +146,8 @@ def apply(
     cp_cfg = project.manifest.control_plane
     try:
         endpoint, api_key = _resolve(cp_cfg.endpoint), _resolve(cp_cfg.api_key)
-        # Resolve the tenant too, so a missing var fails before any call is made.
-        project.manifest.control_plane.tenant_id = _resolve(cp_cfg.tenant_id)
+        if cp_cfg.tenant_id:
+            project.manifest.control_plane.tenant_id = _resolve(cp_cfg.tenant_id)
     except ConfigError as e:
         for p in e.problems:
             _err(f"  - {p}")
@@ -153,13 +156,23 @@ def apply(
     async def run() -> None:
         async with ControlPlaneClient(endpoint, api_key) as cp:
             for r in await apply_project(cp, project, only=only):
-                verb = "created" if r.created else "updated"
-                _ok(f"{verb}  {r.agent} v{r.version}  ({r.workflow_id})")
+                ui.ok(f"{ui.ref('agent', r.agent)} v{r.version} "
+                      f"{'created' if r.created else 'configured'}")
                 for w in r.warnings:
-                    _warn(f"  warning: {w}")
+                    ui.warn(f"  warning: {w}")
 
+    _run_apply(run)
+
+
+def _run_apply(run) -> None:
+    from .provisioning.apply import NoSuchTenant
     try:
         asyncio.run(run())
+    except NoSuchTenant as e:
+        _err(f"no tenant named {e.name!r}")
+        _err(f"  existing: {', '.join(e.existing) or '(none)'}")
+        _err(f"  create it:  charter tenant create {e.name}")
+        raise typer.Exit(1)
     except Exception as e:  # noqa: BLE001 — the CLI is the boundary; show it plainly
         _err(f"apply failed: {type(e).__name__}: {e}")
         raise typer.Exit(1)
@@ -181,30 +194,22 @@ def _apply_single(bundle, *, dry_run: bool) -> None:
         _ok("\ndry run — nothing applied")
         return
 
-    tenant_id = os.environ.get("BOUNDFLOW_TENANT_ID")
-    if not tenant_id:
-        _err("BOUNDFLOW_TENANT_ID is not set — needed to create a workflow")
-        _err("  (or point charter at a worker.yaml, which carries it)")
-        raise typer.Exit(1)
-
     from boundflow import ControlPlaneClient
 
-    from .provisioning.apply import apply_bundle
+    from .provisioning.apply import apply_bundle, resolve_tenant
 
     async def run() -> None:
         # Endpoint and key come from BOUNDFLOW_SERVER_ADDRESS / BOUNDFLOW_API_KEY.
         async with ControlPlaneClient() as cp:
+            tenant_id = (os.environ.get("BOUNDFLOW_TENANT_ID")
+                         or await resolve_tenant(cp, _tenant_name(None)))
             r = await apply_bundle(cp, bundle, tenant_id)
-            verb = "created" if r.created else "updated"
-            _ok(f"{verb}  {r.agent} v{r.version}  ({r.workflow_id})")
+            ui.ok(f"{ui.ref('agent', r.agent)} v{r.version} "
+                  f"{'created' if r.created else 'configured'}")
             for w in r.warnings:
-                _warn(f"  warning: {w}")
+                ui.warn(f"  warning: {w}")
 
-    try:
-        asyncio.run(run())
-    except Exception as e:  # noqa: BLE001
-        _err(f"apply failed: {type(e).__name__}: {e}")
-        raise typer.Exit(1)
+    _run_apply(run)
 
 
 # ── operating an applied agent ──────────────────────────────────────────────
@@ -219,9 +224,31 @@ def _cp():
     return ControlPlaneClient()
 
 
-async def _workflow_for(cp, agent: str):
+# An agent is identified by (tenant, name) — a workflow's tenant is fixed at
+# creation, so the same name in two tenants is two different agents.
+TENANT = typer.Option(None, "--tenant", "-t",
+                      help="Tenant the agent belongs to [env: CHARTER_TENANT]")
+
+
+def _tenant_name(explicit: str | None) -> str:
+    return explicit or os.environ.get("CHARTER_TENANT") or "default"
+
+
+async def _workflow_for(cp, agent: str, tenant: str | None = None):
+    """Resolve agent name -> workflow within one tenant. Matching on name alone
+    would let a staging command act on the production agent."""
+    from .provisioning.apply import NoSuchTenant, resolve_tenant
+
+    name = _tenant_name(tenant)
+    try:
+        tenant_id = await resolve_tenant(cp, name)
+    except NoSuchTenant as e:
+        ui.err(f"no tenant named {e.name!r}")
+        ui.detail(f"existing: {', '.join(e.existing) or '(none)'}")
+        raise typer.Exit(1)
+
     for w in await cp.list_workflows():
-        if w.workflow_type == agent:
+        if w.workflow_type == agent and w.tenant_id == tenant_id:
             return w
     return None
 
@@ -267,6 +294,7 @@ def run(
     ctx: typer.Context,
     agent: str = typer.Argument(..., help="Agent name (its directory)"),
     path: Path = typer.Option(Path("."), "--path", help="Where agents live"),
+    tenant: str = TENANT,
 ) -> None:
     """Start one task. Declared inputs become --flags, validated before the request
     is created so a typo fails here instead of burning a run."""
@@ -319,32 +347,90 @@ def run(
 
     async def go():
         async with _cp() as cp:
-            wf = await _workflow_for(cp, agent)
+            wf = await _workflow_for(cp, agent, tenant)
             if wf is None:
                 _err(f"{agent!r} has not been applied yet — run `charter apply` first")
                 raise typer.Exit(1)
             request_id = await cp.invoke_workflow(wf.id, context=context)
-            _ok(f"task {request_id}")
+            ui.ok(f"{ui.ref('task', request_id)} started")
+            ui.detail(f"charter status {request_id}")
 
     asyncio.run(go())
 
 
 @app.command()
-def tasks(agent: str = typer.Argument(...), limit: int = typer.Option(10, "--limit")) -> None:
-    """Recent tasks for an agent."""
+def tasks(agent: str = typer.Argument(...), limit: int = typer.Option(10, "--limit"),
+          tenant: str = TENANT,
+          path: Path = typer.Option(None, "--path",
+                                    help="Where agents live, to show how close rules are to firing")) -> None:
+    """An agent's recent tasks, and how close it is to its lifecycle rules.
+
+    The metrics BoundFlow tracks are exactly the ones lifecycle rules evaluate, so
+    showing them next to your thresholds answers the question an operator actually
+    has — not "what happened" but "is this about to pause itself".
+    """
+    thresholds = _thresholds(agent, path)
+
     async def go():
         async with _cp() as cp:
-            wf = await _workflow_for(cp, agent)
+            wf = await _workflow_for(cp, agent, tenant)
             if wf is None:
-                _err(f"{agent!r} has not been applied yet")
+                _err(f"{agent!r} has not been applied yet — run `charter apply` first")
                 raise typer.Exit(1)
-            typer.echo(f"{agent}  workflow={wf.id}  state={wf.lifecycle_state.value}")
-            for record in (await cp.get_audit_log(workflow_id=wf.id))[:limit]:
-                typer.echo(f"  {getattr(record, 'occurred_at', '')}  "
-                           f"{type(record).__name__}  "
-                           f"{getattr(record, 'decision', '')}")
+
+            wf = await cp.get_workflow(wf.id)
+            state = wf.lifecycle_state.value
+            line = f"{agent}  v{wf.version}  {state}"
+            (_warn if state in ("blocked", "awaiting_approval", "awaiting_input") else typer.echo)(line)
+
+            m = await cp.get_workflow_metrics(wf.id)
+            typer.echo(f"\n  {m.run_count} run(s), ${m.total_cost_usd:.4f}, "
+                       f"{m.total_llm_calls} llm calls")
+            for metric, value in (("num_failures", m.total_failures),
+                                  ("cost", round(m.total_cost_usd, 4)),
+                                  ("num_llm_calls", m.total_llm_calls),
+                                  ("approval_rejections", m.total_approval_rejections)):
+                _rule_line(metric, value, thresholds)
+            for tool, count in sorted(m.tool_failure_counts.items()):
+                _rule_line("tool_failures", count, thresholds, tool=tool)
+
+            runs = await cp.list_workflow_runs(wf.id)
+            if runs:
+                typer.echo("\n  recent tasks:")
+                for run in runs[:limit]:
+                    outcome = run.run_outcome.value if run.run_outcome else run.status.value
+                    typer.echo(f"    {run.request_id}  {outcome}"
+                               + (f"  {run.failure_reason}" if run.failure_reason else ""))
 
     asyncio.run(go())
+
+
+def _thresholds(agent: str, path: Path | None) -> list:
+    """The agent's lifecycle rules, if its files are to hand. Optional — `tasks`
+    works without a checkout, it just can't say how close a rule is."""
+    if path is None:
+        return []
+    try:
+        loaded = _load(Path(path))
+    except ConfigError:
+        return []
+    bundle = (loaded.agents.get(agent) if hasattr(loaded, "agents") else loaded)
+    return list(bundle.lifecycle.rules) if bundle and bundle.lifecycle else []
+
+
+def _rule_line(metric: str, value, rules: list, tool: str | None = None) -> None:
+    label = f"{metric}[{tool}]" if tool else metric
+    matching = [r for r in rules if r.when.metric == metric and (r.when.tool == tool)]
+    if not matching:
+        typer.echo(f"    {label:<28} {value}")
+        return
+    for rule in matching:
+        action = next(k for k in ("pause", "cooldown", "set_version")
+                      if getattr(rule.then, k))
+        at = rule.when.threshold
+        near = value >= at
+        text = f"    {label:<28} {value}  (of {at:g} -> {action})"
+        (_warn if near else typer.echo)(text)
 
 
 @app.command()
@@ -369,7 +455,8 @@ def status(task_id: str = typer.Argument(..., help="The id `charter run` printed
 
 
 @app.command()
-def pending(agent: str = typer.Argument(..., help="Agent name")) -> None:
+def pending(agent: str = typer.Argument(..., help="Agent name"),
+            tenant: str = TENANT) -> None:
     """Show the open gate, if the agent is parked on one.
 
     This is how you find an approval_id without a webhook — `get_workflow` carries
@@ -378,7 +465,7 @@ def pending(agent: str = typer.Argument(..., help="Agent name")) -> None:
     """
     async def go():
         async with _cp() as cp:
-            wf = await _workflow_for(cp, agent)
+            wf = await _workflow_for(cp, agent, tenant)
             if wf is None:
                 _err(f"{agent!r} has not been applied yet")
                 raise typer.Exit(1)
@@ -388,17 +475,21 @@ def pending(agent: str = typer.Argument(..., help="Agent name")) -> None:
 
             if wf.pending_approval:
                 gate = wf.pending_approval
-                _warn(f"awaiting approval  {gate.approval_id}")
+                ui.warn(f"{ui.ref('agent', agent)} awaiting approval")
+                typer.echo()
                 typer.echo(gate.justification)
-                typer.echo(f"\n  charter approve {gate.approval_id} --agent {agent} --reason \"...\"")
-                typer.echo(f"  charter reject  {gate.approval_id} --agent {agent} --reason \"...\"")
+                typer.echo()
+                ui.detail(f"charter approve {gate.approval_id} --agent {agent} --reason '...'")
+                ui.detail(f"charter reject  {gate.approval_id} --agent {agent} --reason '...'")
             elif wf.pending_input:
                 gate = wf.pending_input
-                _warn(f"awaiting input  {gate.input_id}")
+                ui.warn(f"{ui.ref('agent', agent)} awaiting input")
+                typer.echo()
                 typer.echo(gate.prompt)
-                typer.echo(f"\n  charter answer {gate.input_id} \"...\" --agent {agent}")
+                typer.echo()
+                ui.detail(f"charter answer {gate.input_id} '...' --agent {agent}")
             else:
-                typer.echo(f"{agent}: nothing parked ({wf.lifecycle_state.value})")
+                ui.dim(f"{agent}: nothing waiting ({wf.lifecycle_state.value})")
 
     asyncio.run(go())
 
@@ -409,10 +500,11 @@ def approve(
     agent: str = typer.Option(..., "--agent", "-a"),
     reason: str = typer.Option("", "--reason", "-r", help="Why — recorded in the audit log"),
     actor: str = typer.Option("", "--actor"),
+    tenant: str = TENANT,
 ) -> None:
     """Approve a parked gate. `--reason` is worth giving: it lands in the audit log
     and becomes memory the agent reads on its next task."""
-    _decide(agent, approval_id, reason, actor, approve=True)
+    _decide(agent, approval_id, reason, actor, approve=True, tenant=tenant)
 
 
 @app.command()
@@ -421,22 +513,25 @@ def reject(
     agent: str = typer.Option(..., "--agent", "-a"),
     reason: str = typer.Option("", "--reason", "-r"),
     actor: str = typer.Option("", "--actor"),
+    tenant: str = TENANT,
 ) -> None:
     """Reject a parked gate. The reason goes straight back into the agent's next
     round, which is the only reason a rejection teaches it anything."""
-    _decide(agent, approval_id, reason, actor, approve=False)
+    _decide(agent, approval_id, reason, actor, approve=False, tenant=tenant)
 
 
-def _decide(agent: str, approval_id: str, reason: str, actor: str, *, approve: bool) -> None:
+def _decide(agent: str, approval_id: str, reason: str, actor: str, *,
+            approve: bool, tenant: str | None = None) -> None:
     async def go():
         async with _cp() as cp:
-            wf = await _workflow_for(cp, agent)
+            wf = await _workflow_for(cp, agent, tenant)
             if wf is None:
                 _err(f"{agent!r} has not been applied yet")
                 raise typer.Exit(1)
             fn = cp.approve_workflow if approve else cp.reject_workflow
             await fn(wf.id, approval_id, actor, reason)
-            _ok(("approved " if approve else "rejected ") + approval_id)
+            ui.ok(f"{ui.ref('approval', approval_id)} "
+                  f"{'approved' if approve else 'rejected'}")
 
     asyncio.run(go())
 
@@ -447,16 +542,210 @@ def answer(
     text: str = typer.Argument(...),
     agent: str = typer.Option(..., "--agent", "-a"),
     actor: str = typer.Option("", "--actor"),
+    tenant: str = TENANT,
 ) -> None:
     """Answer an agent's question."""
     async def go():
         async with _cp() as cp:
-            wf = await _workflow_for(cp, agent)
+            wf = await _workflow_for(cp, agent, tenant)
             if wf is None:
                 _err(f"{agent!r} has not been applied yet")
                 raise typer.Exit(1)
             await cp.submit_input(wf.id, input_id, {"text": text}, actor)
-            _ok(f"answered {input_id}")
+            ui.ok(f"{ui.ref('input', input_id)} answered")
+
+    asyncio.run(go())
+
+
+tenant_app = typer.Typer(help="Tenants own agents. One per environment or customer.")
+app.add_typer(tenant_app, name="tenant")
+
+
+@tenant_app.command("list")
+def tenant_list() -> None:
+    """Tenants in this tenant group."""
+    async def go():
+        async with _cp() as cp:
+            tenants = await cp.list_tenants()
+            if not tenants:
+                ui.dim("no tenants — charter tenant create default")
+                return
+            ui.table(["name", "id"], [[t.name, t.id] for t in tenants])
+
+    asyncio.run(go())
+
+
+@tenant_app.command("create")
+def tenant_create(name: str = typer.Argument(..., help="e.g. default, staging, acme-corp")) -> None:
+    """Create a tenant. Agents belong to one, and `charter apply` refuses to invent
+    one for you — a typo would otherwise mint a second tenant with its own agents
+    and its own history, silently."""
+    async def go():
+        async with _cp() as cp:
+            for t in await cp.list_tenants():
+                if t.name == name:
+                    ui.warn(f"{ui.ref('tenant', name)} already exists")
+                    return
+            tenant = await cp.create_tenant(name)
+            ui.ok(f"{ui.ref('tenant', tenant.name)} created")
+
+    asyncio.run(go())
+
+
+@app.command()
+def diff(
+    path: Path = typer.Argument(Path("."), help="worker.yaml or a project dir"),
+) -> None:
+    """Compare what's armed on the control plane against your files.
+
+    Charter's central promise is that the effective runtime policy always equals
+    what runtime.yaml says. This is how you check rather than trust it — including
+    that no agent-lifecycle policy exists, since Charter never sets one and
+    anything there would silently move a declared cap.
+    """
+    try:
+        project = _load(path)
+    except ConfigError as e:
+        _fail(e)
+    if not hasattr(project, "manifest"):
+        _err("diff needs a worker manifest — point at worker.yaml or its directory")
+        raise typer.Exit(1)
+
+    async def go():
+        drift = 0
+        async with _cp() as cp:
+            for served in project.manifest.serves:
+                bundle = project.agents[served.agent]
+                version = max(v for v in served.versions if v in bundle.versions)
+                want = compile_agent(bundle, version)
+
+                wf = await _workflow_for(cp, served.agent)
+                if wf is None:
+                    _warn(f"{served.agent}: not applied")
+                    drift += 1
+                    continue
+
+                typer.echo(f"\n{served.agent}")
+                drift += _diff_line("version", wf.version, want.version)
+
+                live = await cp.get_agent_runtime_policy(wf.id, want.agent_name)
+                declared = want.runtime_policy.model_dump(exclude_defaults=True)
+                for key, value in declared.items():
+                    drift += _diff_line(f"runtime.{key}", _norm(live.get(_camel(key))), _norm(value))
+
+                live_rules = await cp.get_workflow_lifecycle_policy(wf.id)
+                drift += _diff_line("lifecycle rules", len(live_rules), len(want.workflow_rules))
+
+                # Charter never sets one. Anything here moved a cap without a version.
+                stray = await cp.get_agent_lifecycle_policy(wf.id, want.agent_name)
+                if stray:
+                    _err(f"  agent-lifecycle policy is set ({stray}) — Charter never "
+                         "sets one, so a declared cap may be silently overridden")
+                    drift += 1
+
+        if drift:
+            _warn(f"\n{drift} difference(s) — `charter apply` to reconcile")
+            raise typer.Exit(1)
+        _ok("\nin sync")
+
+    asyncio.run(go())
+
+
+def _camel(key: str) -> str:
+    head, *rest = key.split("_")
+    return head + "".join(w.title() for w in rest)
+
+
+def _norm(value):
+    """Live policy comes back from protobuf JSON, so numbers and lists need
+    flattening before they can be compared to what we declared."""
+    if isinstance(value, list):
+        return sorted(str(v) for v in value)
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return round(float(value), 6)
+    return value
+
+
+def _diff_line(label: str, live, want) -> int:
+    if live == want:
+        typer.echo(f"  {label:<26} {want}")
+        return 0
+    _warn(f"  {label:<26} {want}   (live: {live})")
+    return 1
+
+
+@app.command()
+def audit(agent: str = typer.Argument(...), limit: int = typer.Option(20, "--limit"),
+          tenant: str = TENANT) -> None:
+    """Every governance decision recorded for an agent — who approved what and why,
+    and which rule paused it. This is the answer to "prove it did what you say"."""
+    async def go():
+        async with _cp() as cp:
+            wf = await _workflow_for(cp, agent, tenant)
+            if wf is None:
+                _err(f"{agent!r} has not been applied yet")
+                raise typer.Exit(1)
+            entries = await cp.get_audit_log(workflow_id=wf.id)
+            if not entries:
+                typer.echo(f"{agent}: nothing recorded yet")
+                return
+            for e in entries[:limit]:
+                when = getattr(e, "occurred_at", None)
+                stamp = when.strftime("%Y-%m-%d %H:%M") if when else ""
+                if hasattr(e, "approval_id"):
+                    who = e.actor or "(no actor)"
+                    typer.echo(f"{stamp}  approval {e.decision.value} by {who}")
+                    if e.justification:
+                        typer.echo(f"                     {e.justification.splitlines()[0]}")
+                    if e.reason:
+                        typer.echo(f"                     reason: {e.reason}")
+                elif hasattr(e, "input_id"):
+                    typer.echo(f"{stamp}  input {e.decision.value}: "
+                               f"{(e.answer or {}).get('text', '')}")
+                else:
+                    typer.echo(f"{stamp}  policy fired: {getattr(e, 'metric', '')} -> "
+                               f"{getattr(e, 'action', '')}")
+
+    asyncio.run(go())
+
+
+@app.command()
+def resume(agent: str = typer.Argument(...), tenant: str = TENANT) -> None:
+    """Release an agent a lifecycle rule paused. Without this a `pause` rule is a
+    one-way door."""
+    async def go():
+        async with _cp() as cp:
+            wf = await _workflow_for(cp, agent, tenant)
+            if wf is None:
+                _err(f"{agent!r} has not been applied yet")
+                raise typer.Exit(1)
+            wf = await cp.get_workflow(wf.id)
+            if wf.last_interrupted_request_id:
+                await cp.resolve_interrupted_workflow(wf.id, wf.last_interrupted_request_id)
+            await cp.activate_workflow(wf.id)
+            ui.ok(f"{ui.ref('agent', agent)} active")
+
+    asyncio.run(go())
+
+
+@app.command()
+def delete(
+    agent: str = typer.Argument(...),
+    yes: bool = typer.Option(False, "--yes", help="Skip the confirmation"),
+    tenant: str = TENANT,
+) -> None:
+    """Delete an agent's workflow and its history. Mostly for iterating locally."""
+    if not yes:
+        typer.confirm(f"Delete {agent} and all its run history?", abort=True)
+
+    async def go():
+        async with _cp() as cp:
+            wf = await _workflow_for(cp, agent, tenant)
+            if wf is None:
+                _err(f"{agent!r} has not been applied yet")
+                raise typer.Exit(1)
+            await cp.delete_workflow(wf.id)
+            ui.ok(f"{ui.ref('agent', agent)} deleted")
 
     asyncio.run(go())
 

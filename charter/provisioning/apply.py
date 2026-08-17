@@ -23,6 +23,27 @@ from ..config.worker import Notifications
 # A workflow in one of these states is gone; don't reuse it.
 _DEAD = (LifecycleState.DELETED,)
 
+DEFAULT_TENANT = "default"
+
+
+class NoSuchTenant(Exception):
+    """The named tenant doesn't exist. Deliberately not created on the fly: a typo
+    would otherwise mint a second tenant with its own agents and its own history,
+    and nothing would ever show you. `charter tenant create` is the only way one
+    comes into existence."""
+
+    def __init__(self, name: str, existing: list[str]) -> None:
+        self.name, self.existing = name, existing
+        super().__init__(name)
+
+
+async def resolve_tenant(cp: ControlPlaneClient, name: str) -> str:
+    tenants = await cp.list_tenants()
+    for tenant in tenants:
+        if tenant.name == name:
+            return tenant.id
+    raise NoSuchTenant(name, [t.name for t in tenants])
+
 
 @dataclass
 class ApplyResult:
@@ -36,9 +57,15 @@ class ApplyResult:
 async def _find_or_create(cp: ControlPlaneClient, compiled: CompiledAgent, tenant_id: str):
     """Reuse a live workflow of this type rather than minting a new one — a fresh
     workflow has no run history, which would reset every lifecycle rule's window and
-    throw away the metrics an operator is judging the agent by."""
+    throw away the metrics an operator is judging the agent by.
+
+    Scoped by tenant, because an agent's identity is (tenant, name): a workflow's
+    tenant is fixed at creation and can never change. Matching on name alone would
+    let `charter apply` against staging reconfigure the production agent.
+    """
     for w in await cp.list_workflows():
-        if w.workflow_type == compiled.name and w.lifecycle_state not in _DEAD:
+        if (w.workflow_type == compiled.name and w.tenant_id == tenant_id
+                and w.lifecycle_state not in _DEAD):
             return w, False
     return await cp.create_workflow(
         compiled.name, tenant_id, config=compiled.workflow_config), True
@@ -127,7 +154,8 @@ async def apply_project(
     only: str | None = None,
 ) -> list[ApplyResult]:
     """Apply every agent the manifest serves. `only` limits it to one agent."""
-    tenant_id = project.manifest.control_plane.tenant_id
+    cp_cfg = project.manifest.control_plane
+    tenant_id = cp_cfg.tenant_id or await resolve_tenant(cp, cp_cfg.tenant)
 
     # Pricing is tenant-global in BoundFlow, not per-agent — which is why it lives
     # on the worker manifest and is applied once here.

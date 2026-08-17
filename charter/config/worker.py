@@ -22,7 +22,12 @@ Event = Literal["approval_requested", "input_requested"]
 class ControlPlane(Base):
     endpoint: str = Field(min_length=1)
     api_key: str = Field(min_length=1)
-    tenant_id: str = Field(min_length=1)
+    # Which tenant these agents belong to, by name — legible in a committed file in
+    # a way a uuid isn't. It must already exist (`charter tenant create`); Charter
+    # never creates one as a side effect of applying an agent.
+    tenant: str = "default"
+    # Pins an exact tenant by id, for when a name would be ambiguous. Wins over `tenant`.
+    tenant_id: str = ""
 
 
 class Llm(Base):

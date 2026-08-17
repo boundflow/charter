@@ -21,6 +21,13 @@ class FakeWorkflow:
     id: str
     workflow_type: str
     lifecycle_state: LifecycleState = LifecycleState.ACTIVE
+    tenant_id: str = "tenant-1"
+
+
+@dataclass
+class FakeTenant:
+    id: str
+    name: str
 
 
 @dataclass
@@ -28,11 +35,14 @@ class FakeControlPlane:
     workflows: list[FakeWorkflow] = field(default_factory=list)
     calls: list[tuple] = field(default_factory=list)
 
+    async def list_tenants(self):
+        return [FakeTenant("tenant-1", "default")]
+
     async def list_workflows(self):
         return list(self.workflows)
 
     async def create_workflow(self, workflow_type, tenant_id, config=None):
-        wf = FakeWorkflow(f"wf_{workflow_type}", workflow_type)
+        wf = FakeWorkflow(f"wf_{workflow_type}", workflow_type, tenant_id=tenant_id)
         self.workflows.append(wf)
         self.calls.append(("create_workflow", workflow_type, tenant_id, config))
         return wf
@@ -155,3 +165,15 @@ def test_no_warning_when_routed(project):
     cp = FakeControlPlane()
     results = run(apply_project(cp, project, only="refund-triage"))
     assert not any("slow timeout" in w for w in results[0].warnings)
+
+
+def test_the_same_agent_name_in_another_tenant_is_a_different_agent(project):
+    """A workflow's tenant is fixed at creation, so identity is (tenant, name).
+    Matching on name alone would let `charter apply` against one tenant
+    reconfigure another's agent."""
+    cp = FakeControlPlane([FakeWorkflow("wf_other", "refund-triage",
+                                        tenant_id="some-other-tenant")])
+    results = run(apply_project(cp, project, only="refund-triage"))
+    assert results[0].created is True
+    assert results[0].workflow_id == "wf_refund-triage"
+    assert len(cp.workflows) == 2
