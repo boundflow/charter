@@ -690,6 +690,24 @@ workflows.
 
 ## Asks of BoundFlow
 
+### Pagination on ListWorkflowRuns
+
+`list_workflow_runs` returns **every** run a workflow has ever had — no `LIMIT` in
+the query, no page token, and nothing trims them. `charter tasks` therefore fetches
+an entire history to show twenty rows, and filters locally.
+
+Fine at ten runs, wrong at ten thousand, and a periodic agent gets there in a
+month. The ask is keyset pagination — `limit` plus an `after` cursor on
+`(created_at, request_id)` — rather than offset, which skips and repeats rows when
+new runs land mid-scan, exactly when you'd be paging. A server-side outcome filter
+would help too: "show me the failures" is the question people actually have.
+
+Related: `WorkflowMetrics` is scoped to the workflow's **current version** while
+the run list spans every version, so after a `set_version` rollback the totals a
+lifecycle rule judges drop to that version's record while the history still shows
+everything. Defensible, but neither is labelled as such.
+
+
 Three related changes, all in the approval path. Together they make the audit log
 self-describing and remove a branch from Charter's state machine.
 

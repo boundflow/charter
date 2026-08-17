@@ -186,3 +186,43 @@ outcome:
         bundle = load_agent(Path("."))
         assert bundle.name == "my-agent"
         assert bundle.runtime.agent == "my-agent"
+
+
+class TestRunFilters:
+    """Narrowing a run history. The API returns everything with no server-side
+    filter, so this happens locally — correct, but see the pagination note in
+    DESIGN.md before anyone has a month of runs."""
+
+    class R:
+        def __init__(self, outcome=None, status="completed", ago_hours=0):
+            import datetime as dt
+            from types import SimpleNamespace
+            self.run_outcome = SimpleNamespace(value=outcome) if outcome else None
+            self.status = SimpleNamespace(value=status)
+            self.created_at = (dt.datetime.now(dt.timezone.utc)
+                               - dt.timedelta(hours=ago_hours))
+
+    def runs(self):
+        return [self.R("successful"), self.R("customer_marked_failure"),
+                self.R("operation_timeout", ago_hours=48), self.R("successful", ago_hours=48)]
+
+    def test_failed_catches_every_unsuccessful_outcome(self):
+        from charter.cli import _filter_runs
+        out = _filter_runs(self.runs(), failed=True, status=None, since=None)
+        assert {r.run_outcome.value for r in out} == {
+            "customer_marked_failure", "operation_timeout"}
+
+    def test_status_is_exact(self):
+        from charter.cli import _filter_runs
+        out = _filter_runs(self.runs(), failed=False, status="operation_timeout", since=None)
+        assert len(out) == 1
+
+    def test_since_accepts_durations_and_dates(self):
+        from charter.cli import _filter_runs
+        assert len(_filter_runs(self.runs(), failed=False, status=None, since="24h")) == 2
+        assert len(_filter_runs(self.runs(), failed=False, status=None, since="7d")) == 4
+
+    def test_filters_compose(self):
+        from charter.cli import _filter_runs
+        out = _filter_runs(self.runs(), failed=True, status=None, since="24h")
+        assert [r.run_outcome.value for r in out] == ["customer_marked_failure"]

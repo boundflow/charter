@@ -455,7 +455,12 @@ def describe(agent: str = typer.Argument(...), tenant: str = TENANT) -> None:
 
 
 @app.command()
-def tasks(agent: str = typer.Argument(...), limit: int = typer.Option(10, "--limit"),
+def tasks(agent: str = typer.Argument(...),
+          limit: int = typer.Option(20, "--limit", "-n", help="0 for all"),
+          failed: bool = typer.Option(False, "--failed", help="Only runs that didn't succeed"),
+          status: str = typer.Option(None, "--status",
+                                     help="successful | customer_marked_failure | operation_timeout | ..."),
+          since: str = typer.Option(None, "--since", help="24h, 7d, 30m, or 2026-08-01"),
           tenant: str = TENANT,
           path: Path = typer.Option(None, "--path",
                                     help="Where agents live, to show how close rules are to firing")) -> None:
@@ -490,15 +495,60 @@ def tasks(agent: str = typer.Argument(...), limit: int = typer.Option(10, "--lim
             for tool, count in sorted(m.tool_failure_counts.items()):
                 _rule_line("tool_failures", count, thresholds, tool=tool)
 
+            # The API returns every run, newest first, with no server-side filter —
+            # so this narrows locally. Correct, but it fetches the whole history to
+            # show twenty rows; see the `limit`/cursor ask on the BoundFlow side.
             runs = await cp.list_workflow_runs(wf.id)
-            if runs:
-                typer.echo("\n  recent tasks:")
-                for run in runs[:limit]:
-                    outcome = run.run_outcome.value if run.run_outcome else run.status.value
-                    typer.echo(f"    {run.request_id}  {outcome}"
-                               + (f"  {run.failure_reason}" if run.failure_reason else ""))
+            total = len(runs)
+            runs = _filter_runs(runs, failed=failed, status=status, since=since)
+            shown = runs if limit == 0 else runs[:limit]
+
+            typer.echo()
+            if not runs:
+                ui.dim(f"no matching tasks ({total} total)")
+                return
+            ui.table(["task", "outcome", "started", "detail"], [
+                [r.request_id,
+                 ui.state((r.run_outcome or r.status).value),
+                 r.created_at.strftime("%m-%d %H:%M") if r.created_at else "",
+                 (r.failure_reason or "")[:60]]
+                for r in shown])
+            if len(shown) < len(runs):
+                ui.dim(f"  {len(shown)} of {len(runs)} matching ({total} total) — -n 0 for all")
 
     asyncio.run(go())
+
+
+def _filter_runs(runs: list, *, failed: bool, status: str | None, since: str | None):
+    """Narrow a run history. `failed` is the filter people actually reach for —
+    "what broke" comes before "what happened on Tuesday"."""
+    out = runs
+    if failed:
+        out = [r for r in out if (r.run_outcome and r.run_outcome.value != "successful")
+               or r.status.value == "failed"]
+    if status:
+        out = [r for r in out
+               if (r.run_outcome and r.run_outcome.value == status) or r.status.value == status]
+    if since:
+        cutoff = _since(since)
+        out = [r for r in out if r.created_at and r.created_at.timestamp() >= cutoff]
+    return out
+
+
+def _since(spec: str) -> float:
+    """`24h`, `7d`, `30m`, or an ISO date."""
+    import datetime as dt
+
+    units = {"m": 60, "h": 3600, "d": 86400, "w": 604800}
+    if spec and spec[-1] in units and spec[:-1].isdigit():
+        return dt.datetime.now(dt.timezone.utc).timestamp() - int(spec[:-1]) * units[spec[-1]]
+    try:
+        parsed = dt.datetime.fromisoformat(spec)
+    except ValueError:
+        raise typer.BadParameter(f"--since {spec!r}: use 24h, 7d, 30m, or an ISO date")
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=dt.timezone.utc)
+    return parsed.timestamp()
 
 
 def _snake(key: str) -> str:
