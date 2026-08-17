@@ -130,13 +130,8 @@ def apply(
                 continue
             bundle = project.agents[served.agent]
             version = max(v for v in served.versions if v in bundle.versions)
-            c = compile_agent(bundle, version)
-            typer.echo(f"\n{c.name} v{c.version}  ({c.workflow_config.invoke_mode.value})")
-            typer.echo(f"  runtime   {c.runtime_policy.model_dump(exclude_defaults=True)}")
-            for rule in c.workflow_rules:
-                typer.echo(f"  lifecycle {rule.metric.value} >= {rule.threshold} -> "
-                           f"{rule.action.model_dump()}")
-        _ok("\ndry run — nothing applied")
+            _print_compiled(compile_agent(bundle, version))
+        ui.dim("\ndry run — nothing applied")
         return
 
     from boundflow import ControlPlaneClient
@@ -179,11 +174,25 @@ def _run_apply(run) -> None:
 
 
 def _print_compiled(c) -> None:
-    typer.echo(f"\n{c.name} v{c.version}  ({c.workflow_config.invoke_mode.value})")
-    typer.echo(f"  runtime   {c.runtime_policy.model_dump(exclude_defaults=True)}")
+    w = c.workflow_config
+    typer.secho(f"\n{c.name} v{c.version}", bold=True)
+    schedule = (f"every {_duration(w.repeat_every_seconds)}"
+                if w.repeat_every_seconds else "on demand")
+    ui.kv([
+        ("runs", f"{schedule}{'' if w.triggerable else ', no manual runs'}"),
+        ("piled-up invokes", f"{w.invoke_mode.value}"
+                             + (f", max {w.max_queue_depth} queued"
+                                if w.max_queue_depth else "")),
+        ("round deadline", _duration(w.invoke_timeout_seconds)),
+    ], indent="  ")
+    caps = c.runtime_policy.model_dump(exclude_defaults=True)
+    ui.kv([(_snake(k), _fmt(v)) for k, v in sorted(caps.items())], indent="  ")
     for rule in c.workflow_rules:
-        typer.echo(f"  lifecycle {rule.metric.value} >= {rule.threshold} -> "
-                   f"{rule.action.model_dump()}")
+        action = rule.action.model_dump()
+        kind = action.pop("kind", "?")
+        detail = " ".join(f"{k}={v}" for k, v in action.items())
+        typer.echo(f"  rule                 {rule.metric.value} >= {rule.threshold:g}"
+                   f" -> {kind} {detail}".rstrip())
 
 
 def _apply_single(bundle, *, dry_run: bool) -> None:
@@ -191,7 +200,7 @@ def _apply_single(bundle, *, dry_run: bool) -> None:
     compiled = compile_agent(bundle)
     if dry_run:
         _print_compiled(compiled)
-        _ok("\ndry run — nothing applied")
+        ui.dim("\ndry run — nothing applied")
         return
 
     from boundflow import ControlPlaneClient
@@ -564,12 +573,25 @@ def _snake(key: str) -> str:
 
 
 def _fmt(value):
-    """tool_call_limits arrives as a list of dicts; one line each is unreadable."""
+    """tool limits arrive as a list of dicts — camelCase from protobuf JSON on the
+    read path, snake_case from a pydantic dump on the compile path."""
     if isinstance(value, list):
-        return ", ".join(
-            f"{d.get('tool')}={d.get('maxCalls') or d.get('maxFailures')}"
-            if isinstance(d, dict) else str(d) for d in value)
+        return ", ".join(_one_limit(d) if isinstance(d, dict) else str(d) for d in value)
     return value
+
+
+def _one_limit(d: dict) -> str:
+    n = next((d[k] for k in ("maxCalls", "max_calls", "maxFailures", "max_failures")
+              if d.get(k) is not None), "?")
+    return f"{d.get('tool')}={n}"
+
+
+def _duration(seconds: int) -> str:
+    """Back to how it was written — nobody thinks in seconds past a minute."""
+    for unit, size in (("d", 86400), ("h", 3600), ("m", 60)):
+        if seconds >= size and seconds % size == 0:
+            return f"{seconds // size}{unit}"
+    return f"{seconds}s"
 
 
 def _when(ts) -> str:

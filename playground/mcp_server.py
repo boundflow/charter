@@ -50,6 +50,13 @@ def get_ticket(ticket_id: str) -> str:
 
 
 @mcp.tool()
+def list_open_tickets() -> str:
+    """Every ticket still open. How a scheduled agent finds its own work."""
+    return str([{"ticket_id": tid, "subject": t["subject"], "status": t["status"]}
+                for tid, t in TICKETS.items() if t["status"] == "open"])
+
+
+@mcp.tool()
 def get_charge(charge_id: str) -> str:
     """Look up one charge."""
     charge = CHARGES.get(charge_id)

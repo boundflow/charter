@@ -11,6 +11,9 @@ objective: |
   Review the open support tickets and summarize what needs a human's attention.
   Lead with anything that has been waiting longest.
 
+schedule:
+  every: 15m
+
 mcp:
   - name: zendesk
     command: npx

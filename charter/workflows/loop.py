@@ -187,20 +187,9 @@ class Loop:
         c[K_LLM_CALLS] = c.get(K_LLM_CALLS, 0) + result.llm_calls_used
 
     def _operation_timeout(self) -> int:
-        """How long the next round may take before the control plane cancels it.
-
-        Derived, not picked. A round is one full agent step — up to `max_llm_calls`
-        calls, each bounded by `max_call_seconds` — so a fixed 60s would cancel
-        exactly the slow, tool-heavy rounds and leave the fast ones untouched, which
-        is the worst possible selection bias for a bug to have.
-
-        Both inputs are already declared by the customer, so this needs no new knob.
-        """
-        per_run, limits = self.runtime.per_run, self.runtime.limits
-        worst_case = (per_run.max_llm_calls or 20) * limits.max_call_seconds
-        # A floor so a tiny budget still gets room to dispatch, and a ceiling so a
-        # wedged round can't hold its lease for hours.
-        return int(min(max(worst_case, 60), 3600))
+        """Same number the entry operation got via WorkflowConfig — see
+        RuntimePolicyFile.operation_timeout_seconds."""
+        return self.runtime.operation_timeout_seconds
 
     def _remaining(self, ctx: OperationContext) -> Budget | None:
         """What's left of the task budget, for this one agent step.

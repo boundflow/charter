@@ -225,3 +225,40 @@ class TestMemory:
         raw = load()
         raw.pop("memory")
         assert AgentConfig.model_validate(raw).memory is None
+
+
+class TestSchedule:
+    def test_periodic_agent(self):
+        raw = load()
+        raw.pop("inputs")
+        raw["objective"] = "Look for anything that needs attention."
+        raw["outcome"]["approval"]["note"] = "no refs"
+        raw["schedule"] = {"every": "15m"}
+        cfg = AgentConfig.model_validate(raw)
+        assert cfg.schedule.every_seconds == 900
+        assert cfg.schedule.manual is True  # still testable by hand
+
+    @pytest.mark.parametrize("spec,seconds",
+                             [("30s", 30), ("15m", 900), ("1h", 3600), ("7d", 604800)])
+    def test_durations(self, spec, seconds):
+        raw = load()
+        raw.pop("inputs")
+        raw["objective"] = "Look."
+        raw["outcome"]["approval"]["note"] = "no refs"
+        raw["schedule"] = {"every": spec}
+        assert AgentConfig.model_validate(raw).schedule.every_seconds == seconds
+
+    def test_a_bad_duration_says_what_to_write(self):
+        raw = load()
+        raw.pop("inputs")
+        raw["objective"] = "Look."
+        raw["outcome"]["approval"]["note"] = "no refs"
+        raw["schedule"] = {"every": "every 15 minutes"}
+        with pytest.raises(ValidationError, match="use 30s, 15m, 1h, 7d"):
+            AgentConfig.model_validate(raw)
+
+    def test_schedule_and_inputs_are_mutually_exclusive(self):
+        """A periodic run has nobody to supply a ticket id."""
+        raw = load(schedule={"every": "15m"})
+        with pytest.raises(ValidationError, match="mutually exclusive"):
+            AgentConfig.model_validate(raw)

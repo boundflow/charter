@@ -55,6 +55,10 @@ class PerRun(Base):
     # Failures of any ONE tool before the task gives up — a circuit breaker, per
     # tool rather than in aggregate, so the failure message names the broken thing.
     max_tool_failures: int = Field(default=3, gt=0)
+    # How many tasks may pile up unstarted before invoke is refused. Queue mode
+    # only — coalesce keeps the latest and discards the rest by design. 0 uses
+    # BoundFlow's default of 1000.
+    max_queue_depth: int = Field(default=0, ge=0)
 
     @model_validator(mode="after")
     def _check(self) -> PerRun:
@@ -76,6 +80,11 @@ class Limits(Base):
     max_call_seconds: float = Field(default=60.0, gt=0)
 
 
+# Floor so a tiny budget still gets room to dispatch; ceiling so a wedged round
+# can't hold its lease for hours.
+MIN_OPERATION_SECONDS, MAX_OPERATION_SECONDS = 60, 3600
+
+
 class RuntimePolicyFile(Base):
     apiVersion: Literal["charter/v1"]
     kind: Literal["RuntimePolicy"]
@@ -83,6 +92,21 @@ class RuntimePolicyFile(Base):
     agent: str = Field(pattern=AGENT_NAME)
     per_run: PerRun
     limits: Limits = Field(default_factory=Limits)
+
+    @property
+    def operation_timeout_seconds(self) -> int:
+        """How long one round may take before the control plane cancels it.
+
+        Derived, not picked: a round is one agent step — up to `max_llm_calls`
+        calls, each bounded by `max_call_seconds`. A fixed value would cancel
+        exactly the slow, tool-heavy rounds and leave the fast ones alone.
+
+        Both ends of a task need the same number. The entry operation takes it from
+        WorkflowConfig.invoke_timeout_seconds, every later round from Next.timeout —
+        so this lives here rather than in either caller, where they could drift.
+        """
+        worst_case = (self.per_run.max_llm_calls or 20) * self.limits.max_call_seconds
+        return int(min(max(worst_case, MIN_OPERATION_SECONDS), MAX_OPERATION_SECONDS))
 
 
 # What an agent gets when it ships no runtime.yaml. Deliberately conservative: an

@@ -102,3 +102,24 @@ def test_agent_lifecycle_policy_is_never_produced():
     compiled = refund()
     assert not hasattr(compiled, "agent_rules")
     assert compiled.agent_name == "refund-triage"
+
+
+def test_entry_operation_gets_the_same_timeout_as_every_other_round():
+    """WorkflowConfig.invoke_timeout_seconds is the entry operation's deadline and
+    Next.timeout is every later one's. Left unset it defaults to 60s, so round one
+    would be cancelled while rounds two onward had forty minutes."""
+    bundle = load_agent(EXAMPLES / "refund-triage")
+    compiled = compile_agent(bundle)
+    assert (compiled.workflow_config.invoke_timeout_seconds
+            == bundle.runtime.operation_timeout_seconds)
+    assert compiled.workflow_config.invoke_timeout_seconds == 40 * 60
+
+
+def test_schedule_becomes_repeat_and_triggerable():
+    c = compile_agent(load_agent(EXAMPLES / "ticket-summarizer"), 2)
+    assert c.workflow_config.repeat_every_seconds == 900
+    assert c.workflow_config.triggerable is True
+
+
+def test_no_schedule_means_no_repeat():
+    assert refund().workflow_config.repeat_every_seconds == 0

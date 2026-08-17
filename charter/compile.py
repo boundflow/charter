@@ -52,12 +52,21 @@ class CompiledAgent:
         return self.name
 
 
-def compile_workflow_config(cfg: AgentConfig) -> WorkflowConfig:
+def compile_workflow_config(cfg: AgentConfig, runtime: RuntimePolicyFile) -> WorkflowConfig:
     """`invoke_mode` is derived, never authored: an agent with inputs is doing
-    discrete tasks and must queue, since coalescing would silently discard one."""
+    discrete tasks and must queue, since coalescing would silently discard one.
+
+    `invoke_timeout_seconds` is the entry operation's deadline; every later round
+    gets the same number via Next.timeout. Left unset it defaults to 60s, so round
+    one would be cancelled while rounds two onward had forty minutes.
+    """
     return WorkflowConfig(
         version=cfg.version,
         invoke_mode=InvokeMode.QUEUE if cfg.invoke_mode == "queue" else InvokeMode.COALESCE,
+        invoke_timeout_seconds=runtime.operation_timeout_seconds,
+        repeat_every_seconds=cfg.schedule.every_seconds if cfg.schedule else 0,
+        triggerable=cfg.schedule.manual if cfg.schedule else True,
+        max_queue_depth=runtime.per_run.max_queue_depth,
     )
 
 
@@ -123,7 +132,7 @@ def compile_agent(bundle: AgentBundle, version: int | None = None) -> CompiledAg
     return CompiledAgent(
         name=cfg.name,
         version=cfg.version,
-        workflow_config=compile_workflow_config(cfg),
+        workflow_config=compile_workflow_config(cfg, bundle.runtime),
         runtime_policy=compile_runtime_policy(bundle.runtime),
         workflow_rules=compile_workflow_rules(bundle.lifecycle),
     )

@@ -1,0 +1,36 @@
+apiVersion: charter/v1
+kind: AgentConfig
+
+name: ticket-sweeper
+version: 1
+description: Checks the open queue on a clock and reports what needs a human.
+
+model: claude-haiku-4-5
+
+objective: |
+  List the open tickets and read any you haven't seen resolved.
+
+  Report which ones need a person and why. Do not act on anything — you have no
+  tools that change state, and that is deliberate.
+
+schedule:
+  every: 5m
+  manual: true
+
+mcp:
+  - name: desk
+    command: python
+    args: ["playground/mcp_server.py"]
+    tools:
+      - tool: list_open_tickets
+        on_failure: fail
+      - tool: get_ticket
+
+outcome:
+  deliverable:
+    summary:
+      type: string
+      description: What needs attention, most urgent first.
+    needs_attention:
+      type: integer
+      description: How many tickets warrant a human look.

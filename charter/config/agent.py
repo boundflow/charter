@@ -228,6 +228,36 @@ class Memory(Base):
     from_audit: AuditMemory | None = None
 
 
+class Schedule(Base):
+    """Run this agent on a clock instead of waiting to be asked.
+
+    Mutually exclusive with `inputs`: a periodic run has nobody to supply a ticket
+    id, so an agent that needs one can't be scheduled. That agent looks for its own
+    work instead — which is why a scheduled agent coalesces: two ticks that both
+    mean "something changed, go look" really are one piece of work.
+    """
+
+    # "15m", "1h", "30s", "7d" — seconds are what BoundFlow takes, but nobody
+    # thinks in seconds past about a minute.
+    every: str
+    # Whether `charter run` still works. Left on by default so a scheduled agent
+    # can be tested by hand without editing its config.
+    manual: bool = True
+
+    @property
+    def every_seconds(self) -> int:
+        units = {"s": 1, "m": 60, "h": 3600, "d": 86400}
+        raw = self.every.strip()
+        if raw[-1:] in units and raw[:-1].isdigit():
+            return int(raw[:-1]) * units[raw[-1]]
+        raise ValueError(f"every: {self.every!r} — use 30s, 15m, 1h, 7d")
+
+    @model_validator(mode="after")
+    def _check(self) -> Schedule:
+        self.every_seconds  # raises with the readable message
+        return self
+
+
 class Outcome(Base):
     """The three ways a task can leave the agent loop.
 
@@ -263,6 +293,7 @@ class AgentConfig(Base):
     objective: str = Field(min_length=1)
 
     inputs: dict[str, InputSpec] = Field(default_factory=dict)
+    schedule: Schedule | None = None
     mcp: list[McpServer] = Field(default_factory=list)
     outcome: Outcome
     memory: Memory | None = None
@@ -273,7 +304,14 @@ class AgentConfig(Base):
         self._check_templates()
         self._check_gates()
         self._check_memory()
+        self._check_schedule()
         return self
+
+    def _check_schedule(self) -> None:
+        if self.schedule and self.inputs:
+            raise ValueError(
+                "`schedule` and `inputs` are mutually exclusive — a periodic run has "
+                "nobody to supply them. A scheduled agent finds its own work.")
 
     def _check_servers_unique(self) -> None:
         names = [s.name for s in self.mcp]
