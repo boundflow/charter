@@ -260,11 +260,6 @@ class AgentConfig(Base):
     description: str | None = None
 
     model: str = Field(min_length=1)
-    # Which agent loop runs a round. Versioned, and deliberately next to `model`:
-    # it doesn't change what the agent can *reach*, but it changes how it behaves,
-    # and a rollback should restore the behaviour you had. Closer to choosing a
-    # model than to choosing a machine.
-    harness: Literal["boundflow", "langgraph", "deepagents"] = "boundflow"
     objective: str = Field(min_length=1)
 
     inputs: dict[str, InputSpec] = Field(default_factory=dict)

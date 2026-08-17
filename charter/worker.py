@@ -23,7 +23,6 @@ from boundflow import BoundFlowWorker, ControlPlaneClient
 from boundflow.anthropic_client import AnthropicLlmClient
 
 from .config.loader import AgentBundle, Project
-from .harness import HarnessUnavailable, check_available, needs_chat_model
 from .config.worker import Channel, WorkerManifest
 from .memory import AuditMemory
 from .mcp.client import QuarantineError, ToolSet
@@ -104,28 +103,12 @@ class CharterWorker:
                 key = (spec.agent, version)
                 cfg = bundle.versions[version]
                 tools = ToolSet()
-                chat_model = None
                 # Memory is built per task from the operation's own workflow_id, so
                 # the worker never has to look a workflow up by name.
                 memory = AuditMemory(cp) if cfg.memory else None
 
-                # A missing harness quarantines the agent the same way a missing
-                # MCP tool does — fail fast at boot with a fixable message, rather
-                # than a round into the first task.
-                try:
-                    check_available(cfg.harness)
-                    if needs_chat_model(cfg.harness):
-                        chat_model = _chat_model(self.project.manifest, cfg.model)
-                except HarnessUnavailable as e:
-                    log.error("quarantined %s@v%d: %s", spec.agent, version, e)
-                    served = Served(bundle, version, tools,
-                                    Loop(cfg, bundle.runtime, tools, memory))
-                    served.quarantined = str(e)
-                    self.served[key] = served
-                    continue
-
                 served = Served(bundle, version, tools,
-                                Loop(cfg, bundle.runtime, tools, memory, chat_model))
+                                Loop(cfg, bundle.runtime, tools, memory))
                 try:
                     await tools.connect(cfg)
                 except QuarantineError as e:
@@ -186,20 +169,6 @@ class CharterWorker:
     async def aclose(self) -> None:
         for served in self.served.values():
             await served.tools.aclose()
-
-
-def _chat_model(manifest: WorkerManifest, model: str):
-    """A LangChain chat model for the governed harnesses. BoundFlow wraps this in a
-    GovernedChatModel, so every call it makes is counted and capped."""
-    if manifest.llm.provider in ("anthropic", "langchain"):
-        try:
-            from langchain_anthropic import ChatAnthropic
-        except ImportError as e:
-            raise HarnessUnavailable(
-                "a non-BoundFlow harness needs `pip install langchain-anthropic`") from e
-        return ChatAnthropic(model=model, api_key=resolve(manifest.llm.api_key))
-    raise HarnessUnavailable(
-        f"no chat model wired up for provider {manifest.llm.provider!r}")
 
 
 def _llm(manifest: WorkerManifest):

@@ -17,9 +17,6 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest", "pytest-asyncio"]
-# Harnesses other than BoundFlow's own loop drive a LangChain chat model.
-langgraph = ["langgraph", "langchain-anthropic"]
-deepagents = ["deepagents", "langchain-anthropic"]
 
 [project.scripts]
 charter = "charter.cli:main"

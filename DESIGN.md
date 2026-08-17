@@ -511,33 +511,10 @@ Versioned and immutable once applied.
 | `version` | int | yes | `>= 1`, equals `N` in filename | `WorkflowConfig.version` |
 | `description` | string | no | human-facing only, never sent to the model | — |
 | `model` | string | yes | tenant must have pricing for it | `AgentDefinition.model` |
-| `harness` | string | no | `boundflow` (default) \| `langgraph` \| `deepagents` | which inner loop runs a round |
 | `objective` | string | yes | non-empty; `{{ inputs.<name> }}` only | `AgentDefinition.system_prompt` |
 | `inputs` | map | no | see below | `invoke_workflow(context=)` |
 | `mcp` | list | no | see below | `AgentDefinition.tools` |
 | `outcome` | object | yes | see below | `AgentDefinition.output_schema` |
-
-**`harness`** picks the loop that runs one round. Charter always owns the *outer*
-loop — rounds, gates, parks, durability — so a harness only ever replaces what
-happens inside a single round, and swapping it is one call site.
-
-| | |
-|---|---|
-| `boundflow` | BoundFlow's own loop. No planning, sub-agents, or compaction. The default, and the only one with no extra dependency. |
-| `langgraph` | LangGraph's prebuilt ReAct agent. Needs `langgraph`. |
-| `deepagents` | Planning, sub-agents, virtual filesystem, context management. Worth it for long many-step tasks. Needs `deepagents`. |
-
-Governance does not weaken when you swap: since BoundFlow's one-enforcement-core
-refactor, `run_step` and the governed path share a single `AgentGovernor`, so caps,
-per-tool limits and cost have one implementation and BoundFlow's own loop is just
-another client of it. `ctx.run_governed(output_schema=...)` injects a
-`submit_result` terminator, so a spent cap forces a graceful finish on any harness
-rather than raising.
-
-It lives in the versioned config next to `model` for the same reason: it doesn't
-change what the agent can *reach*, but it changes how it behaves, and a rollback
-should restore the behaviour you had. Only prebuilt agents qualify — a backend that
-made you write a graph wouldn't be a config choice, it would be code.
 
 **Templating** is `{{ inputs.<name> }}` and nothing else — no expressions, filters,
 conditionals, or loops. An undeclared reference fails at `charter apply`. It is
