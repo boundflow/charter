@@ -63,14 +63,37 @@ def kv(pairs: list[tuple[str, object]], indent: str = "") -> None:
         typer.echo(f"{indent}{key.ljust(width)}   {value}")
 
 
-# States that mean a person has to do something, so they're worth colouring.
-NEEDS_ATTENTION = {"awaiting_approval", "awaiting_input", "blocked", "failed"}
+# Two orthogonal state machines, and conflating them hides the important one.
+#
+#   workflow_state   may it work at all — active | paused | cooldown | disabled.
+#                    This is what the scheduler checks; a lifecycle rule moves it.
+#   lifecycle_state  what it's doing right now — invoking, awaiting_approval, ...
+#
+# A paused agent can sit at lifecycle_state "active", so showing only that would
+# report a stopped agent as healthy.
+STOPPED = {"paused", "disabled"}
+NEEDS_ATTENTION = {"awaiting_approval", "awaiting_input", "blocked", "failed",
+                   "interrupted", "cooldown"}
 
 
 def state(value: str) -> str:
+    if value in STOPPED:
+        return typer.style(value, fg=typer.colors.RED)
     if value in NEEDS_ATTENTION:
         return typer.style(value, fg=typer.colors.YELLOW)
     return value
+
+
+def working(workflow_state: str) -> bool:
+    """Only `active` schedules; everything else means no new tasks start."""
+    return workflow_state == "active"
+
+
+def activity(lifecycle_state: str) -> str:
+    """lifecycle_state 'active' means "idle, no run in flight" — BoundFlow's own
+    docs define it that way. Printed verbatim next to a workflow_state of 'paused'
+    it reads as a contradiction, so it's shown as what it means."""
+    return "idle" if lifecycle_state == "active" else lifecycle_state
 
 
 def gate(agent: str, kind: str, gate_id: str, body: str, actions: list[str],

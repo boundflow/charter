@@ -385,8 +385,14 @@ def describe(agent: str = typer.Argument(...), tenant: str = TENANT) -> None:
 
             typer.secho(f"{agent}", bold=True)
             ui.kv([("version", f"v{wf.version}"),
-                   ("state", ui.state(wf.lifecycle_state.value)),
+                   # workflow_state is the one that decides whether tasks start;
+                   # lifecycle_state is only where it happens to be right now.
+                   ("status", ui.state(wf.workflow_state.value)),
+                   ("activity", ui.state(ui.activity(wf.lifecycle_state.value))),
                    ("workflow", wf.id)], indent="  ")
+            if not ui.working(wf.workflow_state.value):
+                ui.detail("no new tasks will start — charter resume "
+                          f"{agent}" if wf.workflow_state.value == "paused" else "")
 
             # Armed caps. This is the promise — what's enforced should be what the
             # YAML said, and this is where you read it without the YAML.
@@ -480,9 +486,11 @@ def tasks(agent: str = typer.Argument(...),
                 raise typer.Exit(1)
 
             wf = await cp.get_workflow(wf.id)
-            state = wf.lifecycle_state.value
-            line = f"{agent}  v{wf.version}  {state}"
-            (_warn if state in ("blocked", "awaiting_approval", "awaiting_input") else typer.echo)(line)
+            line = (f"{agent}  v{wf.version}  {ui.state(wf.workflow_state.value)}"
+                    f"  {ui.state(ui.activity(wf.lifecycle_state.value))}")
+            typer.echo(line)
+            if not ui.working(wf.workflow_state.value):
+                ui.warn(f"  stopped — no new tasks will start")
 
             m = await cp.get_workflow_metrics(wf.id)
             typer.echo(f"\n  {m.run_count} run(s), ${m.total_cost_usd:.4f}, "
