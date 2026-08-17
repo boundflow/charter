@@ -156,3 +156,33 @@ class TestRouting:
         notif = proj.manifest.notifications
         assert notif.resolve("refund-triage", "approval_requested").name == "finance"
         assert notif.resolve("ticket-summarizer", "approval_requested").name == "oncall"
+
+
+class TestBadPaths:
+    """Pointing charter at the wrong directory should say so, not surface a pydantic
+    error about a field the user never wrote."""
+
+    def test_a_directory_that_is_not_an_agent(self, tmp_path):
+        (tmp_path / "notes.txt").write_text("hello")
+        with pytest.raises(ConfigError, match="not an agent directory"):
+            load_agent(tmp_path)
+
+    def test_dot_resolves_to_a_real_name(self, tmp_path, monkeypatch):
+        """Path('.').name is '', which reached pydantic as an agent named ''."""
+        d = tmp_path / "my-agent"
+        d.mkdir()
+        (d / "v1.yaml").write_text("""
+apiVersion: charter/v1
+kind: AgentConfig
+name: my-agent
+version: 1
+model: claude-haiku-4-5
+objective: Do the thing.
+outcome:
+  deliverable:
+    answer: { type: string }
+""")
+        monkeypatch.chdir(d)
+        bundle = load_agent(Path("."))
+        assert bundle.name == "my-agent"
+        assert bundle.runtime.agent == "my-agent"

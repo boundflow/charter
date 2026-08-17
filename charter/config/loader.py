@@ -91,7 +91,9 @@ class AgentBundle:
 def load_agent(path: Path) -> AgentBundle:
     """Load one agent directory. Raises ConfigError listing every problem found."""
     problems: list[str] = []
-    path = Path(path)
+    # Resolved so `.name` is a real directory name: Path(".").name is "", which
+    # would otherwise reach pydantic as an agent named "".
+    path = Path(path).resolve()
 
     if not path.is_dir():
         raise ConfigError([f"{path}: not a directory"])
@@ -113,8 +115,13 @@ def load_agent(path: Path) -> AgentBundle:
                 f"{file.name}: name {cfg.name!r} does not match directory {path.name!r}")
         versions[n] = cfg
 
-    if not versions and not problems:
-        problems.append(f"{path}: no version files (expected v1.yaml, v2.yaml, ...)")
+    # Checked before anything derived from the directory name, so "this isn't an
+    # agent directory" is what you're told rather than a consequence of it.
+    if not versions:
+        problems.append(
+            f"{path.name or path}: not an agent directory — expected v1.yaml "
+            f"(and optionally runtime.yaml, lifecycle.yaml)")
+        raise ConfigError(problems)
 
     # Both policy files are optional. The smallest useful agent is one v1.yaml:
     # runtime falls back to a conservative default (an agent always has a ceiling,

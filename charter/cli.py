@@ -65,7 +65,20 @@ def _load(path: Path):
         return load_project(path)
     if (path / "worker.yaml").exists():
         return load_project(path / "worker.yaml")
-    return load_agent(path)
+    try:
+        return load_agent(path)
+    except ConfigError:
+        raise
+    except Exception as e:  # noqa: BLE001 — a bug here must still read as a message
+        raise ConfigError([f"{path}: could not be read as an agent directory "
+                           f"({type(e).__name__}: {e})"]) from e
+
+
+def _fail(e: ConfigError) -> None:
+    _err(f"{len(e.problems)} problem(s):")
+    for p in e.problems:
+        _err(f"  - {p}")
+    raise typer.Exit(1)
 
 
 @app.command()
@@ -76,10 +89,7 @@ def validate(
     try:
         loaded = _load(path)
     except ConfigError as e:
-        _err(f"{len(e.problems)} problem(s):")
-        for p in e.problems:
-            _err(f"  - {p}")
-        raise typer.Exit(1)
+        _fail(e)
 
     if hasattr(loaded, "agents"):
         for name, bundle in sorted(loaded.agents.items()):
@@ -102,10 +112,7 @@ def apply(
     try:
         project = _load(path)
     except ConfigError as e:
-        _err(f"{len(e.problems)} problem(s):")
-        for p in e.problems:
-            _err(f"  - {p}")
-        raise typer.Exit(1)
+        _fail(e)
 
     # A bare agent directory applies straight from the environment — the smallest
     # path is one v1.yaml plus BOUNDFLOW_*. A worker manifest adds fleet concerns
@@ -462,10 +469,7 @@ def worker(
     try:
         project = _load(path)
     except ConfigError as e:
-        _err(f"{len(e.problems)} problem(s):")
-        for p in e.problems:
-            _err(f"  - {p}")
-        raise typer.Exit(1)
+        _fail(e)
 
     if not hasattr(project, "manifest"):
         _err("worker needs a worker.yaml — point at it or its directory")
