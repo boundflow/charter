@@ -49,29 +49,39 @@ class Notifier:
         self._notifications = notifications
 
     async def approval_requested(self, request) -> None:
-        await self._send("approval_requested", request, {
+        # Logged before routing, always. A worker with no channels configured would
+        # otherwise swallow the one identifier needed to unblock the task.
+        log.info("APPROVAL %s needs a decision: %s",
+                 request.approval_id, (request.justification or "").splitlines()[:1])
+        await self._send("approval_requested", request, request.approval_id, {
             "approval_id": request.approval_id,
             "justification": request.justification or "",
             "timeout_seconds": request.timeout,
         })
 
     async def input_requested(self, request) -> None:
-        await self._send("input_requested", request, {
+        log.info("INPUT %s needs an answer: %s", request.input_id, request.prompt)
+        await self._send("input_requested", request, request.input_id, {
             "input_id": request.input_id,
             "question": request.prompt or "",
             "timeout_seconds": request.timeout,
         })
 
-    async def _send(self, event: str, request, extra: dict) -> None:
+    async def _send(self, event: str, request, gate_id: str, extra: dict) -> None:
+        agent = (request.metadata or {}).get("agent") or ""
+
+        # Both undelivered paths carry the gate id. This is precisely when someone
+        # needs it — the task is parked and nothing is going to arrive to tell them.
         if self._notifications is None:
-            log.warning("%s for workflow %s but this worker has no notification "
-                        "channels — nobody was told", event, request.workflow_id)
+            log.warning("%s %s for %s undelivered: this worker has no notification "
+                        "channels. Unblock it with: charter pending %s",
+                        event, gate_id, agent or request.workflow_id, agent)
             return
 
-        agent = (request.metadata or {}).get("agent") or ""
         channel = self._notifications.resolve(agent, event)
         if channel is None:
-            log.warning("%s for %s but no route matches — nobody was told", event, agent)
+            log.warning("%s %s for %s undelivered: no route matches. Unblock it "
+                        "with: charter pending %s", event, gate_id, agent, agent)
             return
 
         payload = {
@@ -84,7 +94,7 @@ class Notifier:
         await self._post(channel, payload)
 
     async def _post(self, channel: Channel, payload: dict) -> None:
-        body = json.dumps(payload).encode()
+        body = json.dumps(_slack(payload) if channel.kind == "slack" else payload).encode()
         headers = {"Content-Type": "application/json"}
         if channel.secret:
             headers["X-Charter-Signature"] = sign(_resolve(channel.secret), body)
@@ -98,10 +108,31 @@ class Notifier:
             except Exception as e:  # noqa: BLE001
                 if attempt == channel.max_attempts:
                     log.error("notification to %s failed after %d attempts (%s) — "
-                              "the gate is open and nobody was told",
-                              channel.name, attempt, e)
+                              "gate %s is open and nobody was told",
+                              channel.name, attempt, e, payload.get("approval_id")
+                              or payload.get("input_id"))
                     return
                 await asyncio.sleep(2 ** (attempt - 1))
+
+
+def _slack(payload: dict) -> dict:
+    """Slack's incoming webhooks take {"text": ...}, not our envelope.
+
+    The rendering leads with what the approver has to decide and ends with the
+    exact command that decides it — someone reading this on a phone should not
+    have to go and look up an id.
+    """
+    agent = payload.get("agent") or "an agent"
+    gate = payload.get("approval_id") or payload.get("input_id") or ""
+
+    if payload["event"] == "approval_requested":
+        lines = [f"*{agent}* needs approval", "```", payload.get("justification", ""), "```",
+                 f"`charter approve {gate} --agent {agent} --reason \"...\"`",
+                 f"`charter reject  {gate} --agent {agent} --reason \"...\"`"]
+    else:
+        lines = [f"*{agent}* is asking:", "```", payload.get("question", ""), "```",
+                 f"`charter answer {gate} \"...\" --agent {agent}`"]
+    return {"text": "\n".join(lines)}
 
 
 def _post_once(url: str, body: bytes, headers: dict, timeout: int) -> None:

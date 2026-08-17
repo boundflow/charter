@@ -339,6 +339,41 @@ def status(task_id: str = typer.Argument(..., help="The id `charter run` printed
 
 
 @app.command()
+def pending(agent: str = typer.Argument(..., help="Agent name")) -> None:
+    """Show the open gate, if the agent is parked on one.
+
+    This is how you find an approval_id without a webhook — `get_workflow` carries
+    the open gate while the workflow is parked, which is exactly the "page reload
+    with no in-process state" case.
+    """
+    async def go():
+        async with _cp() as cp:
+            wf = await _workflow_for(cp, agent)
+            if wf is None:
+                _err(f"{agent!r} has not been applied yet")
+                raise typer.Exit(1)
+            # list_workflows returns a lighter view; the gate only comes back from
+            # the single-workflow read.
+            wf = await cp.get_workflow(wf.id)
+
+            if wf.pending_approval:
+                gate = wf.pending_approval
+                _warn(f"awaiting approval  {gate.approval_id}")
+                typer.echo(gate.justification)
+                typer.echo(f"\n  charter approve {gate.approval_id} --agent {agent} --reason \"...\"")
+                typer.echo(f"  charter reject  {gate.approval_id} --agent {agent} --reason \"...\"")
+            elif wf.pending_input:
+                gate = wf.pending_input
+                _warn(f"awaiting input  {gate.input_id}")
+                typer.echo(gate.prompt)
+                typer.echo(f"\n  charter answer {gate.input_id} \"...\" --agent {agent}")
+            else:
+                typer.echo(f"{agent}: nothing parked ({wf.lifecycle_state.value})")
+
+    asyncio.run(go())
+
+
+@app.command()
 def approve(
     approval_id: str = typer.Argument(...),
     agent: str = typer.Option(..., "--agent", "-a"),

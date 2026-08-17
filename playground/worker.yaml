@@ -1,0 +1,30 @@
+apiVersion: charter/v1
+kind: Worker
+
+name: playground
+
+control_plane:
+  endpoint: ${BOUNDFLOW_SERVER_ADDRESS}
+  api_key: ${BOUNDFLOW_API_KEY}
+  tenant_id: ${BOUNDFLOW_TENANT_ID}
+
+llm:
+  provider: anthropic
+  api_key: ${ANTHROPIC_API_KEY}
+
+agents_dir: ./
+
+serves:
+  - agent: refund-demo
+    versions: [1]
+
+model_pricing:
+  claude-haiku-4-5: { input: 0.80, output: 4.00 }
+
+notifications:
+  channels:
+    - name: slack
+      kind: slack
+      url: ${CHARTER_SLACK_WEBHOOK}
+  routes:
+    - channel: slack

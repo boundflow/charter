@@ -1,0 +1,13 @@
+apiVersion: charter/v1
+kind: RuntimePolicy
+
+agent: refund-demo
+
+per_run:
+  max_cost_usd: 0.25
+  max_llm_calls: 20
+  max_drafts: 2
+  max_tool_failures: 2
+  tool_call_limits:
+    - tool: desk.get_charge
+      max_calls: 6

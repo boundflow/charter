@@ -52,12 +52,15 @@ class Served(Base):
 
 
 class Channel(Base):
-    """One notification destination. Webhook only in v1: a URL and a secret are the
-    only credential material Charter has to hold, and Slack/PagerDuty/Zapier all
-    ingest webhooks."""
+    """One notification destination. A URL and an optional secret are the only
+    credential material Charter holds — no OAuth, no vendor SDK, no integration to
+    maintain."""
 
     name: str = Field(min_length=1)
-    kind: Literal["webhook"]
+    # `webhook` posts Charter's own JSON envelope. `slack` posts {"text": ...},
+    # because Slack's incoming webhooks reject arbitrary JSON — a formatting
+    # variant, not an integration: same signed POST to a URL you supply.
+    kind: Literal["webhook", "slack"]
     url: str = Field(min_length=1)
     # Body is signed HMAC-SHA256 into X-Charter-Signature. Omitting it sends
     # unsigned, which is only sane for localhost.

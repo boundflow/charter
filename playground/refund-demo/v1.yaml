@@ -1,0 +1,53 @@
+apiVersion: charter/v1
+kind: AgentConfig
+
+name: refund-demo
+version: 1
+description: Decides whether a duplicate-charge ticket deserves a refund.
+
+model: claude-haiku-4-5
+
+objective: |
+  Resolve the refund request on ticket {{ inputs.ticket_id }}.
+
+  Read the ticket, then look up every charge it mentions before deciding anything.
+  A refund is warranted when the customer was charged twice for the same order on
+  the same day. It is not warranted merely because they changed their mind.
+
+  Never propose a refund above ${{ inputs.max_refund_usd }}.
+
+inputs:
+  ticket_id:
+    type: string
+    required: true
+    description: The ticket to resolve.
+  max_refund_usd:
+    type: number
+    default: 500
+    description: Ceiling you may propose.
+
+mcp:
+  - name: desk
+    command: python
+    args: ["playground/mcp_server.py"]
+    tools:
+      - tool: get_ticket
+        on_failure: fail
+      - tool: get_charge
+      - tool: create_refund
+        approval: always
+        on_failure: fail
+
+outcome:
+  deliverable:
+    resolution:
+      type: string
+      description: What you did and why, in two sentences.
+    refunded_usd:
+      type: number
+      description: Amount refunded, or 0 if none.
+
+  approval:
+    timeout_seconds: 1800
+    on_timeout: reject
+    note: Ticket {{ inputs.ticket_id }}
