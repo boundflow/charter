@@ -79,6 +79,13 @@ async def _run_round(ctx: OperationContext, cfg: AgentConfig, agent: AgentDefini
         raise HarnessUnavailable(
             f"harness {cfg.harness!r} needs a chat model; the worker has none configured")
 
+    if not hasattr(ctx, "run_governed"):
+        # Only the default harness works against a BoundFlow without run_governed,
+        # so say that rather than dying on an attribute lookup mid-task.
+        raise HarnessUnavailable(
+            f"harness {cfg.harness!r} needs a BoundFlow SDK with ctx.run_governed; "
+            "this one has only the built-in loop (use harness: boundflow)")
+
     return await ctx.run_governed(
         cfg.name,
         build_invoke(cfg.harness, agent.system_prompt, [{"role": "user", "content": "Begin."}]),
