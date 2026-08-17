@@ -9,7 +9,12 @@ description = "Declarative, governed agents on BoundFlow — objective, tools, a
 requires-python = ">=3.10"
 
 dependencies = [
+    # Charter needs Budget and tool_failure_limits, which are unreleased — install
+    # the SDK from a checkout until they ship:
+    #     pip install -e ../convergeplane/sdk/python
     "boundflow>=0.3.0",
+    # The MCP client. `anthropic` arrives via boundflow.
+    "mcp>=1.0",
     "pydantic>=2.0",
     "pyyaml>=6.0",
     "typer>=0.12",
