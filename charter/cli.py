@@ -413,6 +413,10 @@ def tasks(agent: str = typer.Argument(...), limit: int = typer.Option(10, "--lim
     asyncio.run(go())
 
 
+def _when(ts) -> str:
+    return ts.strftime("%H:%M") if ts else ""
+
+
 def _thresholds(agent: str, path: Path | None) -> list:
     """The agent's lifecycle rules, if its files are to hand. Optional — `tasks`
     works without a checkout, it just can't say how close a rule is."""
@@ -482,20 +486,16 @@ def pending(agent: str = typer.Argument(..., help="Agent name"),
             wf = await cp.get_workflow(wf.id)
 
             if wf.pending_approval:
-                gate = wf.pending_approval
-                ui.warn(f"{ui.ref('agent', agent)} awaiting approval")
-                typer.echo()
-                typer.echo(gate.justification)
-                typer.echo()
-                ui.detail(f"charter approve {gate.approval_id} --agent {agent} --reason '...'")
-                ui.detail(f"charter reject  {gate.approval_id} --agent {agent} --reason '...'")
+                g = wf.pending_approval
+                ui.gate(agent, "approval", g.approval_id, g.justification, [
+                    f"charter approve {g.approval_id} --agent {agent} --reason '...'",
+                    f"charter reject  {g.approval_id} --agent {agent} --reason '...'",
+                ], timeout=_when(g.timeout_at))
             elif wf.pending_input:
-                gate = wf.pending_input
-                ui.warn(f"{ui.ref('agent', agent)} awaiting input")
-                typer.echo()
-                typer.echo(gate.prompt)
-                typer.echo()
-                ui.detail(f"charter answer {gate.input_id} '...' --agent {agent}")
+                g = wf.pending_input
+                ui.gate(agent, "an answer", g.input_id, g.prompt, [
+                    f"charter answer {g.input_id} '...' --agent {agent}",
+                ], timeout=_when(g.timeout_at))
             else:
                 ui.dim(f"{agent}: nothing waiting ({wf.lifecycle_state.value})")
 

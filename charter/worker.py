@@ -22,6 +22,7 @@ from dataclasses import dataclass, field
 from boundflow import BoundFlowWorker, ControlPlaneClient
 from boundflow.anthropic_client import AnthropicLlmClient
 
+from . import ui
 from .config.loader import AgentBundle, Project
 from .config.worker import Channel, WorkerManifest
 from .memory import AuditMemory
@@ -88,9 +89,17 @@ class CharterWorker:
             await self._connect_all(cp)
             self._register(worker, notifier)
 
-            log.info("charter worker %s serving %s", manifest.name or "worker",
-                     ", ".join(f"{a}@v{v}" for a, v in sorted(self.served)))
+            self._banner()
             await worker.run()
+
+    def _banner(self) -> None:
+        rows = []
+        for (agent, version), served in sorted(self.served.items()):
+            cfg = served.bundle.versions[version]
+            rows.append((agent, version, len(cfg.all_tools), len(cfg.gated_tools),
+                         served.quarantined or "ready"))
+        ui.worker_banner(self.project.manifest.name or "worker",
+                         self.project.manifest.control_plane.tenant, rows)
 
     # ── boot ────────────────────────────────────────────────────────────────
 
