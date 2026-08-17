@@ -6,6 +6,7 @@ name: playground
 control_plane:
   endpoint: ${BOUNDFLOW_SERVER_ADDRESS}
   api_key: ${BOUNDFLOW_API_KEY}
+  tenant: default
 
 llm:
   provider: anthropic

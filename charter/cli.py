@@ -231,7 +231,15 @@ TENANT = typer.Option(None, "--tenant", "-t",
 
 
 def _tenant_name(explicit: str | None) -> str:
-    return explicit or os.environ.get("CHARTER_TENANT") or "default"
+    """No default. Which tenant an agent belongs to is permanent, so it's named
+    rather than assumed."""
+    name = explicit or os.environ.get("CHARTER_TENANT")
+    if not name:
+        ui.err("no tenant given")
+        ui.detail("--tenant <name>, or export CHARTER_TENANT")
+        ui.detail("charter tenant list")
+        raise typer.Exit(1)
+    return name
 
 
 async def _workflow_for(cp, agent: str, tenant: str | None = None):

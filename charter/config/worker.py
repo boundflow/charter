@@ -23,9 +23,11 @@ class ControlPlane(Base):
     endpoint: str = Field(min_length=1)
     api_key: str = Field(min_length=1)
     # Which tenant these agents belong to, by name — legible in a committed file in
-    # a way a uuid isn't. It must already exist (`charter tenant create`); Charter
-    # never creates one as a side effect of applying an agent.
-    tenant: str = "default"
+    # a way a uuid isn't. Required, not defaulted: a workflow's tenant is fixed at
+    # creation, so an agent that silently landed in the wrong one can only be
+    # deleted and recreated, losing its run history and every lifecycle window.
+    # Must already exist — `charter tenant create`.
+    tenant: str = Field(min_length=1)
     # Pins an exact tenant by id, for when a name would be ambiguous. Wins over `tenant`.
     tenant_id: str = ""
 
