@@ -32,7 +32,7 @@ app = typer.Typer(
     help="Governed agents from YAML.\n\n\b\n"
          "  charter apply .              create or update agents\n"
          "  charter run <agent> --flag   start one task\n"
-         "  charter pending <agent>      what's waiting on a human\n"
+         "  charter describe <agent>     state, limits, rules, what's waiting\n"
          "  charter diff .               is what's running what you declared?\n",
 )
 
@@ -367,6 +367,94 @@ def run(
 
 
 @app.command()
+def describe(agent: str = typer.Argument(...), tenant: str = TENANT) -> None:
+    """Everything about one agent, from the control plane alone.
+
+    The screen you run when you get paged: what it is, what it's allowed to spend,
+    what will stop it, how close it is to that, and whether anything is waiting on
+    you. No checkout — whoever is on call has credentials and a name, not the repo.
+    """
+    async def go():
+        async with _cp() as cp:
+            wf = await _workflow_for(cp, agent, tenant)
+            if wf is None:
+                ui.err(f"no agent {agent!r} in tenant {_tenant_name(tenant)}")
+                ui.detail("charter agents  # what's there")
+                raise typer.Exit(1)
+            wf = await cp.get_workflow(wf.id)
+
+            typer.secho(f"{agent}", bold=True)
+            ui.kv([("version", f"v{wf.version}"),
+                   ("state", ui.state(wf.lifecycle_state.value)),
+                   ("workflow", wf.id)], indent="  ")
+
+            # Armed caps. This is the promise — what's enforced should be what the
+            # YAML said, and this is where you read it without the YAML.
+            policy = await cp.get_agent_runtime_policy(wf.id, agent)
+            typer.echo()
+            typer.secho("limits per task", fg=typer.colors.BRIGHT_BLACK)
+            if policy:
+                # Comes back as protobuf-JSON camelCase; show it the way it was
+                # written, so what you read here matches runtime.yaml verbatim.
+                ui.kv([(_snake(k), _fmt(v)) for k, v in sorted(policy.items())
+                       if v not in (0, "", [], None)], indent="  ")
+            else:
+                ui.detail("none armed")
+
+            stray = await cp.get_agent_lifecycle_policy(wf.id, agent)
+            if stray:
+                typer.echo()
+                ui.err("an agent-lifecycle policy is armed")
+                ui.detail("Charter never sets one — a declared cap may be overridden")
+                ui.detail(str(stray))
+
+            rules = await cp.get_workflow_lifecycle_policy(wf.id)
+            metrics = await cp.get_workflow_metrics(wf.id)
+            observed = {
+                "num_failures": metrics.total_failures,
+                "cost": round(metrics.total_cost_usd, 4),
+                "num_llm_calls": metrics.total_llm_calls,
+                "latency": round(metrics.total_latency_seconds, 1),
+                "approval_rejections": metrics.total_approval_rejections,
+            }
+            typer.echo()
+            typer.secho("rules", fg=typer.colors.BRIGHT_BLACK)
+            if not rules:
+                ui.detail("none armed")
+            labels = [f"{r.metric.value}{f'[{r.tool}]' if r.tool else ''}" for r in rules]
+            width = max((len(l) for l in labels), default=0)
+            for rule, label in zip(rules, labels):
+                action = rule.action.model_dump()
+                kind = action.pop("kind", "?")
+                detail = " ".join(f"{k}={v}" for k, v in action.items())
+                now = (metrics.tool_failure_counts.get(rule.tool, 0) if rule.tool
+                       else observed.get(rule.metric.value, 0))
+                line = (f"  {label.ljust(width)}   {now} of {rule.threshold:g}"
+                        f"   -> {kind} {detail}".rstrip())
+                (ui.warn if now >= rule.threshold else typer.echo)(line)
+
+            typer.echo()
+            typer.secho("so far", fg=typer.colors.BRIGHT_BLACK)
+            ui.kv([("runs", metrics.run_count),
+                   ("cost", f"${metrics.total_cost_usd:.4f}"),
+                   ("llm calls", metrics.total_llm_calls)], indent="  ")
+
+            if wf.pending_approval:
+                g = wf.pending_approval
+                ui.gate(agent, "approval", g.approval_id, g.justification, [
+                    f"charter approve {g.approval_id} --agent {agent} --reason '...'",
+                    f"charter reject  {g.approval_id} --agent {agent} --reason '...'",
+                ], timeout=_when(g.timeout_at))
+            elif wf.pending_input:
+                g = wf.pending_input
+                ui.gate(agent, "an answer", g.input_id, g.prompt, [
+                    f"charter answer {g.input_id} '...' --agent {agent}"],
+                    timeout=_when(g.timeout_at))
+
+    asyncio.run(go())
+
+
+@app.command()
 def tasks(agent: str = typer.Argument(...), limit: int = typer.Option(10, "--limit"),
           tenant: str = TENANT,
           path: Path = typer.Option(None, "--path",
@@ -411,6 +499,19 @@ def tasks(agent: str = typer.Argument(...), limit: int = typer.Option(10, "--lim
                                + (f"  {run.failure_reason}" if run.failure_reason else ""))
 
     asyncio.run(go())
+
+
+def _snake(key: str) -> str:
+    return "".join(f"_{c.lower()}" if c.isupper() else c for c in key)
+
+
+def _fmt(value):
+    """tool_call_limits arrives as a list of dicts; one line each is unreadable."""
+    if isinstance(value, list):
+        return ", ".join(
+            f"{d.get('tool')}={d.get('maxCalls') or d.get('maxFailures')}"
+            if isinstance(d, dict) else str(d) for d in value)
+    return value
 
 
 def _when(ts) -> str:
