@@ -35,6 +35,7 @@ from boundflow import (
 from boundflow.llm import AgentPolicyLimitExceeded
 
 from ..config.agent import AgentConfig
+from ..harness import HarnessUnavailable, build_invoke
 from ..mcp.client import McpError, ToolSet
 
 log = logging.getLogger(__name__)
@@ -63,7 +64,36 @@ K_TOOL_CALLS = "_tool_calls"  # {tool: calls} across the whole task
 MAX_AGENT_ATTEMPTS = 2
 
 
-async def run_agent_with_retry(ctx: OperationContext, agent: AgentDefinition,
+async def _run_round(ctx: OperationContext, cfg: AgentConfig, agent: AgentDefinition,
+                     tools: ToolSet, chat_model, budget: Budget | None):
+    """One round, on whichever inner loop the config names.
+
+    Both paths return the same StepResult, take the same Budget, and enforce
+    through the same governor — so everything downstream (branch dispatch, budget
+    accounting, tool-failure accounting) is identical either way.
+    """
+    if cfg.harness == "boundflow":
+        return await ctx.run_agent(agent, budget=budget)
+
+    if chat_model is None:
+        raise HarnessUnavailable(
+            f"harness {cfg.harness!r} needs a chat model; the worker has none configured")
+
+    return await ctx.run_governed(
+        cfg.name,
+        build_invoke(cfg.harness, agent.system_prompt, [{"role": "user", "content": "Begin."}]),
+        chat_model=chat_model,
+        tools=agent.tools,
+        model=cfg.model,
+        # The injected submit_result terminator: without a schema a spent cap
+        # raises, with one the last permitted call is forced to finalize.
+        output_schema=agent.output_schema,
+        budget=budget,
+    )
+
+
+async def run_agent_with_retry(ctx: OperationContext, cfg: AgentConfig,
+                               agent: AgentDefinition, tools: ToolSet, chat_model,
                                budget: Budget | None = None):
     """Run the agent, retrying in place on a *transient* error before letting it
     propagate (at which point there's no automatic retry left).
@@ -76,7 +106,7 @@ async def run_agent_with_retry(ctx: OperationContext, agent: AgentDefinition,
     last: Exception | None = None
     for _ in range(MAX_AGENT_ATTEMPTS):
         try:
-            return await ctx.run_agent(agent, budget=budget)
+            return await _run_round(ctx, cfg, agent, tools, chat_model, budget)
         except AgentPolicyLimitExceeded:
             raise
         except Exception as e:  # noqa: BLE001 — retried, then re-raised below
@@ -173,11 +203,14 @@ class Loop:
     """One agent version's handlers. Holds no per-task state — everything lives in
     `ctx.context`, so a task can resume on a different worker after a gate."""
 
-    def __init__(self, cfg: AgentConfig, runtime, tools: ToolSet, memory=None) -> None:
+    def __init__(self, cfg: AgentConfig, runtime, tools: ToolSet, memory=None,
+                 chat_model=None) -> None:
         self.cfg = cfg
         self.runtime = runtime
         self.tools = tools
         self.memory = memory
+        # Only used when `harness` names something other than BoundFlow's own loop.
+        self.chat_model = chat_model
 
     # ── budget, which BoundFlow can't see ───────────────────────────────────
 
@@ -334,7 +367,8 @@ class Loop:
 
         agent = build_agent(self.cfg, self.tools, c)
         try:
-            result = await run_agent_with_retry(ctx, agent, self._remaining(ctx))
+            result = await run_agent_with_retry(
+                ctx, self.cfg, agent, self.tools, self.chat_model, self._remaining(ctx))
         except AgentPolicyLimitExceeded as e:
             # The budget was already spent before this round could start. Nothing
             # was called, so there's no partial work to salvage — fail rather than

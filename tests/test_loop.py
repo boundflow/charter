@@ -324,3 +324,51 @@ class TestExecuteAct:
         run(lp.execute_act(ctx))
         snap = ctx.agent_state_updates["refund-triage"]
         assert snap["tool_failure_counts"] == {"stripe.create_refund": 1}
+
+
+class TestHarness:
+    """Which inner loop runs a round. Both paths return the same StepResult and
+    enforce through the same governor, so everything downstream is identical."""
+
+    def test_boundflow_is_the_default(self):
+        assert loop().cfg.harness == "boundflow"
+
+    def test_boundflow_uses_run_agent(self):
+        lp = loop()
+        ctx = FakeCtx({}, [FakeResult(DELIVERABLE)])
+        run(lp.entry(ctx))
+        assert len(ctx.budgets) == 1  # went through run_agent
+
+    def test_a_governed_harness_without_a_chat_model_is_an_error(self):
+        """Caught at boot by the worker; this pins that the loop doesn't silently
+        fall back to BoundFlow's loop if it ever isn't."""
+        from charter.harness import HarnessUnavailable
+        lp = loop()
+        lp.cfg.harness = "deepagents"
+        ctx = FakeCtx({}, [FakeResult(DELIVERABLE)])
+        with pytest.raises(HarnessUnavailable, match="needs a chat model"):
+            run(lp.entry(ctx))
+
+    def test_governed_harness_routes_through_run_governed(self, monkeypatch):
+        monkeypatch.setattr("charter.workflows.loop.build_invoke",
+                            lambda *a, **k: (lambda m, t: None))
+        lp = loop()
+        lp.cfg.harness = "langgraph"
+        lp.chat_model = object()
+        seen = {}
+
+        async def run_governed(name, invoke, *, chat_model, tools, model,
+                               output_schema, budget):
+            seen.update(name=name, output_schema=output_schema, budget=budget)
+            return FakeResult(DELIVERABLE)
+
+        ctx = FakeCtx({}, [])
+        ctx.run_governed = run_governed
+        run(lp.entry(ctx))
+
+        assert seen["name"] == "refund-triage"
+        # The output schema is what gets injected as submit_result, so a spent cap
+        # forces a graceful finish instead of raising.
+        assert "resolution" in seen["output_schema"]
+        assert "propose" in seen["output_schema"]
+        assert seen["budget"].max_cost_usd == pytest.approx(0.30)
