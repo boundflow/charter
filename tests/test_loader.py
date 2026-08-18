@@ -296,3 +296,38 @@ outcome:
         d = self._agent(tmp_path, refs=[bad])
         with pytest.raises(ConfigError):
             load_agent(d)
+
+
+class TestChannelKinds:
+    """Three body shapes, one signed POST. Chat products reject arbitrary JSON, so
+    the envelope has to change even though nothing else does."""
+
+    def _channel(self, **kw):
+        from charter.config.worker import Channel
+        return Channel(**{"name": "c", "url": "https://x", **kw})
+
+    def test_telegram_needs_a_chat_id(self):
+        from pydantic import ValidationError
+        with pytest.raises(ValidationError, match="requires `chat_id`"):
+            self._channel(kind="telegram")
+
+    def test_each_kind_shapes_the_body_it_needs(self):
+        from charter.notify import _shape
+        payload = {"event": "approval_requested", "agent": "a", "approval_id": "apr_1",
+                   "justification": "do the thing"}
+
+        assert _shape(self._channel(kind="webhook"), payload) == payload
+        assert set(_shape(self._channel(kind="slack"), payload)) == {"text"}
+
+        tg = _shape(self._channel(kind="telegram", chat_id="42"), payload)
+        assert tg["chat_id"] == "42"
+        assert "apr_1" in tg["text"]
+
+    def test_every_kind_carries_the_command_that_unblocks_it(self):
+        """Whoever reads this on a phone shouldn't have to go find an id."""
+        from charter.notify import _shape
+        for kind, extra in (("slack", {}), ("telegram", {"chat_id": "42"})):
+            body = _shape(self._channel(kind=kind, **extra),
+                          {"event": "approval_requested", "agent": "leads-finder",
+                           "approval_id": "apr_1", "justification": "x"})
+            assert "charter approve apr_1 --agent leads-finder" in body["text"]

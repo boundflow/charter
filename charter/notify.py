@@ -94,7 +94,7 @@ class Notifier:
         await self._post(channel, payload)
 
     async def _post(self, channel: Channel, payload: dict) -> None:
-        body = json.dumps(_slack(payload) if channel.kind == "slack" else payload).encode()
+        body = json.dumps(_shape(channel, payload)).encode()
         headers = {"Content-Type": "application/json"}
         if channel.secret:
             headers["X-Charter-Signature"] = sign(_resolve(channel.secret), body)
@@ -115,16 +115,22 @@ class Notifier:
                 await asyncio.sleep(2 ** (attempt - 1))
 
 
-def _slack(payload: dict) -> dict:
-    """Slack's incoming webhooks take {"text": ...}, not our envelope.
+def _shape(channel: Channel, payload: dict) -> dict:
+    """The same message in whatever body the destination accepts."""
+    if channel.kind == "webhook":
+        return payload
+    text = _text(payload)
+    if channel.kind == "telegram":
+        return {"chat_id": _resolve(channel.chat_id or ""), "text": text,
+                "parse_mode": "Markdown"}
+    return {"text": text}
 
-    The rendering leads with what the approver has to decide and ends with the
-    exact command that decides it — someone reading this on a phone should not
-    have to go and look up an id.
-    """
+
+def _text(payload: dict) -> str:
+    """One message: what needs deciding, then the command that decides it. Someone
+    reading this on a phone shouldn't have to go and look up an id."""
     agent = payload.get("agent") or "an agent"
     gate = payload.get("approval_id") or payload.get("input_id") or ""
-
     if payload["event"] == "approval_requested":
         lines = [f"*{agent}* needs approval", "```", payload.get("justification", ""), "```",
                  f"`charter approve {gate} --agent {agent} --reason \"...\"`",
@@ -132,7 +138,7 @@ def _slack(payload: dict) -> dict:
     else:
         lines = [f"*{agent}* is asking:", "```", payload.get("question", ""), "```",
                  f"`charter answer {gate} \"...\" --agent {agent}`"]
-    return {"text": "\n".join(lines)}
+    return "\n".join(lines)
 
 
 def _post_once(url: str, body: bytes, headers: dict, timeout: int) -> None:

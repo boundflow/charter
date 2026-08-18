@@ -64,16 +64,26 @@ class Channel(Base):
     maintain."""
 
     name: str = Field(min_length=1)
-    # `webhook` posts Charter's own JSON envelope. `slack` posts {"text": ...},
-    # because Slack's incoming webhooks reject arbitrary JSON — a formatting
-    # variant, not an integration: same signed POST to a URL you supply.
-    kind: Literal["webhook", "slack"]
+    # All three are the same signed POST to a URL you supply; they differ only in
+    # the body shape, because chat products reject arbitrary JSON.
+    #   webhook   Charter's own envelope
+    #   slack     {"text": ...}
+    #   telegram  {"chat_id": ..., "text": ...}
+    kind: Literal["webhook", "slack", "telegram"]
     url: str = Field(min_length=1)
     # Body is signed HMAC-SHA256 into X-Charter-Signature. Omitting it sends
     # unsigned, which is only sane for localhost.
     secret: str | None = None
     timeout_seconds: int = Field(default=5, gt=0)
     max_attempts: int = Field(default=3, ge=1)
+    # telegram only: which chat to send to.
+    chat_id: str | None = None
+
+    @model_validator(mode="after")
+    def _check(self) -> Channel:
+        if self.kind == "telegram" and not self.chat_id:
+            raise ValueError("kind `telegram` requires `chat_id`")
+        return self
 
 
 class Route(Base):

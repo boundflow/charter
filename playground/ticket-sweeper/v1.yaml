@@ -13,9 +13,9 @@ objective: |
   Report which ones need a person and why. Do not act on anything — you have no
   tools that change state, and that is deliberate.
 
-#schedule:
-  #every: 5m
-  #manual: true
+schedule:
+  every: 3h
+  manual: true
 
 mcp:
   - name: desk
