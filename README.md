@@ -175,3 +175,15 @@ python -m venv .venv && .venv/bin/pip install -e '.[dev]'
 
 The MCP tests spawn a real server process. The fakes alone once passed happily while
 a field rename made every tool failure look like a success.
+
+End-to-end tests need a control plane and are excluded by default:
+
+```bash
+docker compose -f ../convergeplane/docker-compose.dist.yml up -d
+export BOUNDFLOW_API_KEY=<from: ... -mode=provision -name=me>
+pytest tests/e2e
+```
+
+Real control plane, real MCP subprocess, real gates; only the model is faked, so
+they're deterministic and free. Every bug this project has hit came from a
+boundary a fake didn't model, which is what these exist to cover.

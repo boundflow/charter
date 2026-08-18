@@ -72,6 +72,10 @@ class Served:
 class CharterWorker:
     project: Project
     served: dict[tuple[str, int], Served] = field(default_factory=dict)
+    # Tests substitute a deterministic client here. Everything else in an
+    # end-to-end run stays real, because the model is the one component where
+    # determinism is worth more than fidelity.
+    llm: object | None = None
 
     async def run(self) -> None:
         manifest = self.project.manifest
@@ -81,7 +85,7 @@ class CharterWorker:
 
         async with cp:
             worker = BoundFlowWorker(
-                llm=_llm(manifest),
+                llm=self.llm or _llm(manifest),
                 api_key=resolve(manifest.control_plane.api_key),
             )
             notifier = Notifier(manifest.notifications)
@@ -187,8 +191,8 @@ def _llm(manifest: WorkerManifest):
         f"llm provider {manifest.llm.provider!r} is declared but not wired up yet")
 
 
-async def run_worker(project: Project) -> None:
-    worker = CharterWorker(project)
+async def run_worker(project: Project, llm=None) -> None:
+    worker = CharterWorker(project, llm=llm)
     try:
         await worker.run()
     finally:

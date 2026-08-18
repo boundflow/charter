@@ -578,7 +578,10 @@ def _config_lines(cfg) -> list[tuple[str, object]]:
               else ", server default depth" if cfg.invoke_mode.value == "queue" else "")
     return [("runs", schedule),
             ("piled-up invokes", cfg.invoke_mode.value + queued),
-            ("round deadline", _duration(cfg.invoke_timeout_seconds))]
+            # Not "round deadline": `round` is an internal unit, and the whole
+            # point of replacing max_iterations with drafts/questions/tool-failures
+            # was that nobody should have to know what one is.
+            ("cancelled after", _duration(cfg.invoke_timeout_seconds))]
 
 
 def _snake(key: str) -> str:

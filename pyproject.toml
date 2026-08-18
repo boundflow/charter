@@ -30,4 +30,8 @@ charter = "charter.cli:main"
 include = ["charter*"]
 
 [tool.pytest.ini_options]
+# e2e is excluded by default: it needs a running control plane. `pytest tests/e2e`
+# opts in.
 testpaths = ["tests"]
+addopts = "--ignore=tests/e2e"
+asyncio_mode = "auto"
