@@ -49,17 +49,6 @@ charter apply agents/refund-triage/
 charter run refund-triage --ticket-id 4821
 ```
 
-The agent reads the ticket and the charge, decides a $240 refund is warranted — and
-stops, because it cannot issue one. Whoever is on call gets the amount and its
-reasoning, and runs:
-
-```bash
-charter approve apr_01J8Z --agent refund-triage --reason "third dispute this month"
-```
-
-Now the refund happens. The agent sees it succeeded, closes the ticket, and reports
-what it did.
-
 > [!WARNING]
 > **Pre-alpha.** A first agent has run end to end against a live control plane, a
 > real model and a real MCP server. Plenty has not: expect rough edges, and expect
@@ -67,20 +56,18 @@ what it did.
 
 ---
 
-## Bounded powers
+## Explicit authority
 
-`approval: always` doesn't mean "stopped when it tries." The tool is **left out of
-the agent's toolset**. It can only name the tool in a proposal, and a separate step
-makes the call once a human approves — so nothing irreversible runs inside the
-agent's own loop. The worker says as much at boot:
+An agent can only act with the authority you explicitly give it.
 
-```
-mcp stripe: 34 tools available, 2 declared (32 ignored)
-```
+Charter exposes only the tools you declare. If an MCP server provides 34 tools and
+you authorize 2, the model sees 2 — the other 32 don't exist from the agent's
+perspective. New tools added by the server don't silently expand that authority.
 
-Tools a server exposes but your config doesn't declare are never shown to the
-model, which is also why a vendor shipping a new tool can't quietly widen what your
-agent can reach.
+For actions requiring approval, the agent isn't given the tool at all. It can
+propose the action, but execution happens separately only after a human approves
+it. That means consequential actions never run from inside the autonomous agent
+loop.
 
 ## An operational budget
 
