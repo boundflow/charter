@@ -19,6 +19,14 @@ EXAMPLES = Path(__file__).parent.parent / "examples"
 
 
 @dataclass
+class Ann:
+    """MCP ToolAnnotations, whose defaults matter: read_only_hint is false and
+    destructive_hint is true unless a server says otherwise."""
+    read_only_hint: bool | None = None
+    destructive_hint: bool | None = None
+
+
+@dataclass
 class FakeTool:
     """MCP 2.0 field names — snake_case. The 1.x camelCase spellings are covered
     separately, since reading the wrong one for is_error would treat every tool
@@ -26,6 +34,7 @@ class FakeTool:
     name: str
     description: str = "does a thing"
     input_schema: dict = field(default_factory=dict)
+    annotations: Ann | None = None
 
 
 @dataclass
@@ -226,3 +235,60 @@ class TestToolSet:
         cfg, ts = self._connected()
         tool = next(t for t in ts.inline_tools(cfg) if t.name == "zendesk__get_ticket")
         assert run(tool.handler({"id": "4821"})) == "ok"
+
+
+class TestAnnotationRules:
+    """`approval:` rules resolve a server's ToolAnnotations at boot — and may only
+    ever tighten. A server can make an agent safer without a deploy; making it less
+    safe takes one."""
+
+    def _conn(self, annotations, *, rules=None, explicit=None):
+        from charter.config.agent import ApprovalRules, McpServer, ToolSpec
+
+        spec = McpServer(
+            name="desk", url="https://example.com",
+            approval=ApprovalRules(**rules) if rules else None,
+            tools=[ToolSpec(tool="get_ticket"),
+                   ToolSpec(tool="create_refund", approval=explicit)])
+        tools = [FakeTool("get_ticket", annotations=annotations.get("get_ticket")),
+                 FakeTool("create_refund", annotations=annotations.get("create_refund"))]
+        c = Connection(spec, FakeSession(tools))
+        run(c.discover())
+        return c
+
+    def test_without_rules_nothing_changes(self):
+        c = self._conn({"create_refund": Ann(destructive_hint=True)})
+        assert not c.gated("create_refund")   # the `never` default stands
+
+    def test_a_destructive_hint_adds_a_gate(self):
+        c = self._conn({"get_ticket": Ann(read_only_hint=True),
+                        "create_refund": Ann(destructive_hint=True)},
+                       rules={"read_only": "never", "default": "always"})
+        assert c.gated("create_refund")
+        assert not c.gated("get_ticket")
+
+    def test_an_unannotated_tool_is_treated_as_dangerous(self):
+        """MCP's own defaults: not read-only, and destructive unless stated."""
+        c = self._conn({}, rules={"read_only": "never", "default": "always"})
+        assert c.gated("create_refund") and c.gated("get_ticket")
+
+    def test_a_read_only_hint_cannot_remove_an_explicit_gate(self):
+        """The ratchet. A server marking a money-moving tool read-only must not
+        ungate it — that decision belongs in a file with an author."""
+        c = self._conn({"create_refund": Ann(read_only_hint=True)},
+                       rules={"read_only": "never", "default": "always"},
+                       explicit="always")
+        assert c.gated("create_refund")
+
+    def test_explicit_never_survives_a_destructive_hint(self):
+        """Explicit config wins over a rule in both directions — the rule is a
+        default, and this is the escape hatch for a tool you've decided about."""
+        c = self._conn({"create_refund": Ann(destructive_hint=True)},
+                       rules={"read_only": "never", "default": "always"},
+                       explicit="never")
+        assert not c.gated("create_refund")
+
+    def test_it_records_why_it_tightened(self):
+        c = self._conn({"create_refund": Ann(destructive_hint=True)},
+                       rules={"read_only": "never", "default": "always"})
+        assert c.tightened["create_refund"] == "destructive_hint"

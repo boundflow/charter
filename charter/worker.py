@@ -125,6 +125,10 @@ class CharterWorker:
                                      bundle.instructions.get(version, "")))
                 try:
                     await tools.connect(cfg)
+                    for conn in tools._connections.values():
+                        for tool, why in conn.tightened.items():
+                            log.info("gated by policy: %s (%s)",
+                                     conn.spec.qualified(tool), why)
                 except QuarantineError as e:
                     served.quarantined = str(e)
                     log.error("quarantined %s@v%d: %s", spec.agent, version, e)

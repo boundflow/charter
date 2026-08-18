@@ -112,7 +112,7 @@ def render(template: str, inputs: dict) -> str:
     return out
 
 
-def build_output_schema(cfg: AgentConfig) -> dict:
+def build_output_schema(cfg: AgentConfig, gated: list[str] | None = None) -> dict:
     """The `submit_result` schema — the branch the model fills is what decides what
     happens next.
 
@@ -126,7 +126,9 @@ def build_output_schema(cfg: AgentConfig) -> dict:
             field["description"] = spec.description
         schema[name] = field
 
-    gated = cfg.gated_tools
+    # The resolved set, which includes anything a server's annotations tightened at
+    # boot — the config's own list is only the floor.
+    gated = cfg.gated_tools if gated is None else gated
     if gated:
         schema["propose"] = {
             "type": "object",
@@ -172,7 +174,7 @@ def build_agent(cfg: AgentConfig, tools: ToolSet, inputs: dict,
         system_prompt=system_prompt,
         model=cfg.model,
         tools=tools.inline_tools(cfg),
-        output_schema=build_output_schema(cfg),
+        output_schema=build_output_schema(cfg, tools.gated_tools(cfg)),
         cache=True,
     )
 
@@ -454,9 +456,10 @@ class Loop:
     def _propose(self, ctx: OperationContext, proposal: dict):
         """The model named a tool it cannot call. Park until a human decides."""
         tool = proposal.get("tool")
-        if tool not in self.cfg.gated_tools:
+        gated = self.tools.gated_tools(self.cfg)
+        if tool not in gated:
             return self._again(ctx, f"{tool!r} is not a tool you may propose. Choose "
-                                    f"one of: {', '.join(self.cfg.gated_tools)}.")
+                                    f"one of: {', '.join(gated)}.")
 
         spec = self.cfg.outcome.approval
         approved = Next(OP_EXECUTE_ACT, {**ctx.context, K_PROPOSAL: proposal}, self._operation_timeout())

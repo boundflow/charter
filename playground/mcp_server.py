@@ -10,6 +10,10 @@ the agent can only propose it and a human approves before it runs.
 """
 
 from mcp.server.mcpserver import MCPServer
+from mcp.types import ToolAnnotations
+
+READ_ONLY = ToolAnnotations(read_only_hint=True)
+MUTATES = ToolAnnotations(read_only_hint=False, destructive_hint=True)
 
 mcp = MCPServer("support-desk")
 
@@ -40,7 +44,7 @@ CHARGES = {
 REFUNDS: list[dict] = []
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 def get_ticket(ticket_id: str) -> str:
     """Fetch a support ticket by id, with the charge ids it refers to."""
     ticket = TICKETS.get(ticket_id)
@@ -49,14 +53,14 @@ def get_ticket(ticket_id: str) -> str:
     return str(ticket)
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 def list_open_tickets() -> str:
     """Every ticket still open. How a scheduled agent finds its own work."""
     return str([{"ticket_id": tid, "subject": t["subject"], "status": t["status"]}
                 for tid, t in TICKETS.items() if t["status"] == "open"])
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 def get_charge(charge_id: str) -> str:
     """Look up one charge."""
     charge = CHARGES.get(charge_id)
@@ -65,7 +69,7 @@ def get_charge(charge_id: str) -> str:
     return str(charge)
 
 
-@mcp.tool()
+@mcp.tool(annotations=MUTATES)
 def create_refund(charge_id: str, amount_usd: float, reason: str) -> str:
     """Refund a charge. Money moves — this is the one a human approves."""
     charge = CHARGES.get(charge_id)

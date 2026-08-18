@@ -563,11 +563,32 @@ any input makes the agent task-shaped, forcing `invoke_mode: queue`.
 
 | | values | default | meaning |
 |---|---|---|---|
-| `approval` | `never` \| `always` | `never` | `never`: handed to the model, called inline. `always`: the model never receives it; it can only propose it, and a human approves before it runs. |
+| `approval` | `never` \| `always` | unset | `never`: handed to the model, called inline. `always`: the model never receives it; it can only propose it, and a human approves before it runs. Unset follows the server's `approval:` rules, or `never` if it has none. |
 | `on_failure` | `continue` \| `fail` | `continue` | `continue`: the model is told and carries on. `fail`: `mark_failed()` + `Complete()`, checked at the next iteration boundary. |
 
 Tools the server exposes but this file does not declare are refused and never
 shown to the model.
+
+**`mcp[].approval`** decides gating from what the server says a tool does, instead
+of a per-tool entry for each of thirty:
+
+```yaml
+approval:
+  read_only: never      # read_only_hint: true
+  default: always       # everything else, including anything unannotated
+```
+
+Resolved at boot from MCP's `ToolAnnotations` — and it can only ever **tighten**. A
+server marking something destructive gates it at the next boot with no deploy; a
+server marking something read-only changes nothing, because removing a gate is a
+decision that belongs in a file with an author. Same rule as `Budget`, which can
+narrow what policy allows and never widen it.
+
+Annotations are hints, and the MCP spec says not to make tool-use decisions from
+them on an untrusted server. The ratchet is what makes them safe to honour: the
+worst a lying server can do is gate something unnecessarily. `charter import`
+drafts a config from the same hints, which is where they do the most good — a
+review, once, rather than a runtime decision forever.
 
 **`outcome`**:
 

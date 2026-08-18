@@ -74,6 +74,11 @@ class FakeTools:
     def inline_tools(self, cfg):
         return []
 
+    def gated_tools(self, cfg):
+        # The real ToolSet resolves this at boot from config plus annotations; the
+        # config's own list is the floor and enough for these tests.
+        return cfg.gated_tools
+
     async def call_gated(self, tool, args):
         self.calls.append((tool, args))
         if self.error:

@@ -86,6 +86,68 @@ def _fail(e: ConfigError) -> None:
     raise typer.Exit(1)
 
 
+@app.command("import")
+def import_(
+    name: str = typer.Argument(..., help="What to call the server in your config"),
+    url: str = typer.Option(None, "--url", help="Remote MCP server"),
+    command: str = typer.Option(None, "--command", help="stdio server, e.g. npx"),
+    args: list[str] = typer.Option([], "--arg", help="Argument to --command (repeatable)"),
+    env: list[str] = typer.Option([], "--env", help="Env var NAME the server needs (repeatable)"),
+    all_tools: bool = typer.Option(False, "--all", help="Declare every tool, don't comment them out"),
+) -> None:
+    """Draft the mcp block for a server by asking it what it offers.
+
+    Reading thirty tool descriptions before you can run anything is the most tedious
+    part of writing an agent. MCP already carries the answer: tools annotate
+    themselves read-only or destructive, so the draft arrives with the dangerous
+    ones already gated.
+
+    They're hints, not guarantees — which is why this writes a file for you to
+    review rather than deciding anything at runtime.
+    """
+    if bool(url) == bool(command):
+        ui.err("give exactly one of --url or --command")
+        raise typer.Exit(1)
+
+    from .mcp.client import QuarantineError, approval_for, probe
+
+    async def go():
+        try:
+            return await probe(command=command or "", args=list(args),
+                               url=url or "", env=list(env))
+        except QuarantineError as e:
+            ui.err(str(e))
+            raise typer.Exit(1)
+
+    tools = asyncio.run(go())
+    graded = sorted(((t.name, *approval_for(t)) for t in tools),
+                    key=lambda g: (g[1] == "always", g[0]))
+
+    typer.echo(f"mcp:\n  - name: {name}")
+    if url:
+        typer.echo(f"    url: {url}")
+    else:
+        typer.echo(f"    command: {command}")
+        if args:
+            typer.echo(f"    args: {list(args)}")
+    if env:
+        typer.echo(f"    env: {list(env)}")
+    typer.echo("    tools:")
+
+    for tool, approval, why in graded:
+        gate = "\n        approval: always" if approval == "always" else ""
+        # Everything is commented out by default. "34 available, 2 declared" then
+        # confronts you while authoring rather than as a log line at boot.
+        prefix = "      " if all_tools else "      # "
+        typer.echo(f"{prefix}- tool: {tool}{gate}   # {why}"
+                   if not gate else
+                   f"{prefix}- tool: {tool}   # {why}\n{prefix}  approval: always")
+
+    reads = sum(1 for _, a, _ in graded if a == "never")
+    ui.detail(f"\n{len(graded)} tools — {reads} read-only, {len(graded) - reads} gated"
+              + ("" if all_tools else ". Uncomment what this agent needs."))
+
+
 @app.command()
 def validate(
     path: Path = typer.Argument(Path("."), help="worker.yaml, a project dir, or an agent dir"),

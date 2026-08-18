@@ -24,7 +24,7 @@ from boundflow import Tool
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
-from ..config.agent import AgentConfig, McpServer, split_qualified
+from ..config.agent import AgentConfig, McpServer, ToolSpec, split_qualified
 
 log = logging.getLogger(__name__)
 
@@ -83,9 +83,13 @@ class Connection:
     session: ClientSession
     available: dict[str, Any] = field(default_factory=dict)  # tool name -> MCP Tool
 
+    # Tools the server's annotations gated beyond what the config asked for.
+    tightened: dict[str, str] = field(default_factory=dict)
+
     async def discover(self) -> None:
         listed = await self.session.list_tools()
         self.available = {t.name: t for t in listed.tools}
+        self._apply_annotations()
 
         declared = {t.tool for t in self.spec.tools}
         missing = sorted(declared - self.available.keys())
@@ -100,6 +104,32 @@ class Connection:
             # upstream server ships a release. They're simply never shown to the model.
             log.info("mcp %s: %d tools available, %d declared (%d ignored)",
                      self.spec.name, len(self.available), len(declared), extra)
+
+    def _apply_annotations(self) -> None:
+        """Resolve each declared tool's approval, honouring the server's hints.
+
+        A ratchet: annotations may only ever *add* a gate. If a server marks
+        something destructive, that applies at the next boot with no deploy — which
+        is what you want. If it marks something read-only, nothing happens, because
+        removing a gate is a decision that belongs in a file with an author.
+        """
+        rules = self.spec.approval
+        for declared in self.spec.tools:
+            if declared.approval is not None:
+                continue                      # explicit config always wins
+            if rules is None:
+                continue                      # no rules: the `never` default stands
+            tool = self.available.get(declared.tool)
+            suggested, why = approval_for(tool) if tool is not None else ("always", "unknown")
+            wanted = rules.read_only if suggested == "never" else rules.default
+            if wanted == "always":
+                self.tightened[declared.tool] = why
+                log.info("mcp %s: %s gated by policy (%s)",
+                         self.spec.name, declared.tool, why)
+
+    def gated(self, tool: str) -> bool:
+        declared = next(t for t in self.spec.tools if t.tool == tool)
+        return declared.gated or tool in self.tightened
 
     async def call(self, tool: str, args: dict | None) -> str:
         qualified = self.spec.qualified(tool)
@@ -129,6 +159,47 @@ class Connection:
 
     def description(self, tool: str) -> str:
         return getattr(self.available[tool], "description", None) or tool
+
+
+async def probe(*, command: str = "", args: list[str] | None = None,
+                url: str = "", env: list[str] | None = None) -> list[Any]:
+    """Connect to a server and return its tools, without a config to filter by.
+
+    `charter import` needs this before an agent exists — the ToolSet path validates
+    declared tools against what the server offers, which is exactly the list you're
+    trying to obtain.
+    """
+    spec = McpServer(name="probe", command=command or None, args=args or [],
+                     url=url or None, env=env or [],
+                     tools=[ToolSpec(tool="placeholder")])
+    ts = ToolSet()
+    try:
+        session = await ts._open(spec)
+        listed = await session.list_tools()
+        return list(listed.tools)
+    finally:
+        await ts.aclose()
+
+
+def approval_for(tool: Any) -> tuple[str, str]:
+    """What a server's annotations suggest for a tool, and why.
+
+    Hints, not guarantees — the MCP spec is explicit that a client shouldn't make
+    tool-use decisions from them on an untrusted server. Good enough to draft a
+    config a human then reviews; the committed file stays the authority.
+
+    The defaults fall the safe way: read_only_hint defaults false, and
+    destructive_hint defaults true when a tool isn't read-only, so a server that
+    says nothing is treated as dangerous.
+    """
+    ann = getattr(tool, "annotations", None)
+    if ann is None:
+        return "always", "unannotated"
+    if getattr(ann, "read_only_hint", None) is True:
+        return "never", "read_only_hint"
+    if getattr(ann, "destructive_hint", None) is False:
+        return "always", "additive but not read-only"
+    return "always", "destructive_hint"
 
 
 class ToolSet:
@@ -204,10 +275,16 @@ class ToolSet:
         for spec in cfg.mcp:
             conn = self._connections[spec.name]
             for declared in spec.tools:
-                if declared.gated:
+                if conn.gated(declared.tool):
                     continue  # proposal-only; never handed to the model
                 tools.append(self._as_tool(conn, declared.tool))
         return tools
+
+    def gated_tools(self, cfg: AgentConfig) -> list[str]:
+        """Qualified names the model may propose but never call — config plus
+        anything the servers' annotations tightened at boot."""
+        return [spec.qualified(t.tool) for spec in cfg.mcp
+                for t in spec.tools if self._connections[spec.name].gated(t.tool)]
 
     def _as_tool(self, conn: Connection, tool: str) -> Tool:
         qualified = conn.spec.qualified(tool)
@@ -232,6 +309,6 @@ class ToolSet:
         declared = next((t for t in conn.spec.tools if t.tool == tool), None)
         if declared is None:
             raise McpError(f"{qualified}: not declared by this agent")
-        if not declared.gated:
+        if not conn.gated(tool):
             raise McpError(f"{qualified}: not an approval-gated tool")
         return await conn.call(tool, args)

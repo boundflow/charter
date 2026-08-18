@@ -103,13 +103,37 @@ class ToolSpec(Base):
     """
 
     tool: str = Field(pattern=TOOL_NAME)
-    approval: Literal["never", "always"] = "never"
+    # None means "unset": follow the server's `approval` rules if it has any, and
+    # `never` if it doesn't. An explicit value always wins over a rule.
+    approval: Literal["never", "always"] | None = None
     on_failure: Literal["continue", "fail"] = "continue"
 
     @property
     def gated(self) -> bool:
-        """True when the model never receives this tool and can only propose it."""
+        """Whether the config alone gates this tool.
+
+        Annotation rules can only add gates on top of this at boot, never remove
+        one — so this is the floor, and what `charter validate` can report without
+        talking to a server.
+        """
         return self.approval == "always"
+
+
+class ApprovalRules(Base):
+    """What needs a human, by what the server says a tool does — rather than a
+    per-tool entry for each of thirty tools.
+
+    Resolved at boot from MCP's ToolAnnotations, and only ever able to *tighten*
+    what the config decided. A server can make your agent safer without a deploy;
+    making it less safe takes one. Same rule as Budget, which can narrow what policy
+    allows and never widen it.
+    """
+
+    # read_only_hint: true
+    read_only: Literal["never", "always"] = "never"
+    # Everything else, including anything the server didn't annotate — which MCP
+    # treats as destructive by default.
+    default: Literal["never", "always"] = "always"
 
 
 class McpServer(Base):
@@ -128,6 +152,9 @@ class McpServer(Base):
     # Variable NAMES only. Values come from the worker's environment — this file is
     # committed and immutable, and must never carry a secret.
     env: list[str] = Field(default_factory=list)
+    # Set this and a tool without its own `approval` follows the server's
+    # annotations instead of the `never` default.
+    approval: ApprovalRules | None = None
     tools: list[ToolSpec] = Field(min_length=1)
 
     @model_validator(mode="after")
