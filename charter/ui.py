@@ -41,17 +41,27 @@ def dim(msg: str) -> None:
     typer.secho(msg, fg=typer.colors.BRIGHT_BLACK)
 
 
-def table(headers: list[str], rows: list[list[str]]) -> None:
+def table(headers: list[str], rows: list[list[str]], notes: list[str] | None = None) -> None:
     """Left-aligned columns sized to content, two spaces between. No borders — they
-    survive neither a narrow terminal nor a pipe into awk."""
+    survive neither a narrow terminal nor a pipe into awk.
+
+    `notes` prints one dim line under its row — for anything too long to be a
+    column, like a failure reason, which would otherwise compete with a 36-char
+    identifier for width and always lose.
+    """
     if not rows:
         return
     cells = [[str(c) for c in row] for row in rows]
     widths = [max(len(h), *(len(r[i]) for r in cells)) for i, h in enumerate(headers)]
+
     typer.secho("  ".join(h.upper().ljust(w) for h, w in zip(headers, widths)).rstrip(),
                 fg=typer.colors.BRIGHT_BLACK)
-    for row in cells:
+    for i, row in enumerate(cells):
         typer.echo("  ".join(c.ljust(w) for c, w in zip(row, widths)).rstrip())
+        # A long message belongs under its row, not in a column: as a column it
+        # competes with the identifier for width and always loses.
+        if notes and i < len(notes) and notes[i]:
+            typer.secho(f"    {notes[i]}", fg=typer.colors.BRIGHT_BLACK)
 
 
 def kv(pairs: list[tuple[str, object]], indent: str = "") -> None:

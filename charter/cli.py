@@ -526,13 +526,12 @@ def tasks(agent: str = typer.Argument(...),
             if not runs:
                 ui.dim(f"no matching tasks ({total} total)")
                 return
-            ui.table(["task", "outcome", "started", "took", "detail"], [
-                [r.request_id,
-                 ui.state((r.run_outcome or r.status).value),
-                 r.created_at.strftime("%m-%d %H:%M") if r.created_at else "",
-                 _took(r.created_at, r.completed_at),
-                 _first_line(r.failure_reason)]
-                for r in shown])
+            ui.table(["task", "outcome", "started", "took"],
+                     [[r.request_id,
+                       ui.state((r.run_outcome or r.status).value),
+                       r.created_at.strftime("%m-%d %H:%M") if r.created_at else "",
+                       _took(r.created_at, r.completed_at)] for r in shown],
+                     notes=[_first_line(r.failure_reason) for r in shown])
             if len(shown) < len(runs):
                 ui.dim(f"  {len(shown)} of {len(runs)} matching ({total} total) — -n 0 for all")
 
@@ -598,11 +597,9 @@ def _took(started, finished) -> str:
 
 
 def _first_line(reason: str) -> str:
-    """One line in a table; `charter status` prints the whole thing."""
-    if not reason:
-        return ""
-    line = reason.strip().splitlines()[0]
-    return line if len(line) <= 70 else line[:69] + "\u2026"
+    """The first line, whole. ui.table fits it to the terminal; `charter status`
+    prints the entire reason including the rest of a traceback."""
+    return reason.strip().splitlines()[0] if reason else ""
 
 
 def _duration(seconds: int) -> str:
