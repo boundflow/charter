@@ -33,6 +33,7 @@ app = typer.Typer(
     help="Governed agents from YAML.\n\n\b\n"
          "  charter apply .              create or update agents\n"
          "  charter run <agent> --flag   start one task\n"
+         "  charter agents               what every agent is doing\n"
          "  charter describe <agent>     state, limits, rules, what's waiting\n"
          "  charter diff .               is what's running what you declared?\n",
 )
@@ -364,6 +365,62 @@ def run(
             request_id = await cp.invoke_workflow(wf.id, context=context)
             ui.ok(f"{ui.ref('task', request_id)} started")
             ui.detail(f"charter status {request_id}")
+
+    asyncio.run(go())
+
+
+@app.command()
+def agents(tenant: str = TENANT) -> None:
+    """Every agent in a tenant and what it's doing.
+
+    Both states, because they answer different questions: `status` is whether a
+    rule has stopped it, `activity` is whether it's waiting on you. An agent can be
+    active and blocked on a human, or paused and idle, and only one of those is
+    something you fix by approving something.
+    """
+    async def go():
+        from .provisioning.apply import NoSuchTenant, resolve_tenant
+
+        async with _cp() as cp:
+            name = _tenant_name(tenant)
+            try:
+                tenant_id = await resolve_tenant(cp, name)
+            except NoSuchTenant as e:
+                ui.err(f"no tenant named {e.name!r}")
+                ui.detail(f"existing: {', '.join(e.existing) or '(none)'}")
+                raise typer.Exit(1)
+
+            mine = [w for w in await cp.list_workflows()
+                    if w.tenant_id == tenant_id and w.lifecycle_state.value != "deleted"]
+            if not mine:
+                ui.dim(f"no agents in {name} — charter apply .")
+                return
+
+            mine.sort(key=lambda w: w.workflow_type)
+            ui.table(["agent", "ver", "status", "activity", "runs"],
+                     [[w.workflow_type, f"v{w.version}",
+                       ui.state(w.workflow_state.value),
+                       ui.state(ui.activity(w.lifecycle_state.value)),
+                       (f"every {_duration(w.config.repeat_every_seconds)}"
+                        if w.config.repeat_every_seconds else "on demand")]
+                      for w in mine])
+
+            # The two reasons an agent isn't working, and they need different acts.
+            waiting = [w.workflow_type for w in mine
+                       if w.lifecycle_state.value in ("awaiting_approval", "awaiting_input")]
+            stopped = [w.workflow_type for w in mine if not ui.working(w.workflow_state.value)]
+
+            if waiting:
+                typer.echo()
+                ui.warn(f"{len(waiting)} waiting on a human")
+                for a in waiting:
+                    ui.detail(f"charter pending {a}")
+            if stopped:
+                typer.echo()
+                ui.warn(f"{len(stopped)} stopped — no new tasks will start")
+                for a in stopped:
+                    ui.detail(f"charter audit {a}    # what fired")
+                    ui.detail(f"charter resume {a}   # release it")
 
     asyncio.run(go())
 

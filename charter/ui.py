@@ -11,9 +11,22 @@ that needs a person, dim is context. Everything else is plain.
 
 from __future__ import annotations
 
+import re
 import sys
 
 import typer
+
+# Colour is invisible but not zero-width to str.ljust, which pads by byte count
+# and silently ruins every column after a styled cell.
+ANSI = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _visible(text: str) -> int:
+    return len(ANSI.sub("", text))
+
+
+def _pad(text: str, width: int) -> str:
+    return text + " " * max(width - _visible(text), 0)
 
 # kubectl's convention, and it reads well: `agent/refund-demo approved`.
 def ref(kind: str, name: str) -> str:
@@ -52,12 +65,12 @@ def table(headers: list[str], rows: list[list[str]], notes: list[str] | None = N
     if not rows:
         return
     cells = [[str(c) for c in row] for row in rows]
-    widths = [max(len(h), *(len(r[i]) for r in cells)) for i, h in enumerate(headers)]
+    widths = [max(len(h), *(_visible(r[i]) for r in cells)) for i, h in enumerate(headers)]
 
     typer.secho("  ".join(h.upper().ljust(w) for h, w in zip(headers, widths)).rstrip(),
                 fg=typer.colors.BRIGHT_BLACK)
     for i, row in enumerate(cells):
-        typer.echo("  ".join(c.ljust(w) for c, w in zip(row, widths)).rstrip())
+        typer.echo("  ".join(_pad(c, w) for c, w in zip(row, widths)).rstrip())
         # A long message belongs under its row, not in a column: as a column it
         # competes with the identifier for width and always loses.
         if notes and i < len(notes) and notes[i]:
