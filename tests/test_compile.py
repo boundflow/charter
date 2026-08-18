@@ -44,8 +44,8 @@ def test_runtime_policy():
     assert p.max_tokens_per_call == 1024
     assert p.max_call_seconds == 60
     assert {l.tool: l.max_calls for l in p.tool_call_limits} == {
-        "stripe.get_charge": 5,
-        "zendesk.search_tickets": 10,
+        "stripe__get_charge": 5,
+        "zendesk__search_tickets": 10,
     }
 
 
@@ -86,7 +86,7 @@ def test_tool_failures_renames_to_boundflows_misnomer():
     a ratio. BoundFlow's metric is named TOOL_FAILURE_RATE."""
     rule = next(r for r in refund().workflow_rules
                 if r.metric == WorkflowMetric.TOOL_FAILURE_RATE)
-    assert rule.tool == "stripe.create_refund"
+    assert rule.tool == "stripe__create_refund"
     assert rule.threshold == 3
 
 

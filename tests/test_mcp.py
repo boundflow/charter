@@ -187,36 +187,42 @@ class TestToolSet:
         never receives it. That's the safety claim, not a runtime check."""
         cfg, ts = self._connected()
         names = {t.name for t in ts.inline_tools(cfg)}
-        assert "stripe.create_refund" not in names
-        assert "stripe.get_charge" in names
-        assert "zendesk.close_ticket" in names  # approval: never -> inline
+        assert "stripe__create_refund" not in names
+        assert "stripe__get_charge" in names
+        assert "zendesk__close_ticket" in names  # approval: never -> inline
 
     def test_undeclared_tools_are_never_handed_to_the_model(self):
         cfg, ts = self._connected(extra=["delete_customer"])
         names = {t.name for t in ts.inline_tools(cfg)}
         assert not any("delete_customer" in n for n in names)
 
-    def test_tools_are_namespaced(self):
+    def test_tool_names_are_namespaced_and_wire_legal(self):
+        """`server__tool`, not `server.tool` — Anthropic rejects a dot in a tool
+        name with a 400 before the model ever sees the request."""
+        import re
+        from charter.config.agent import SEPARATOR, WIRE_TOOL_NAME
         cfg, ts = self._connected()
-        assert all("." in t.name for t in ts.inline_tools(cfg))
+        for tool in ts.inline_tools(cfg):
+            assert SEPARATOR in tool.name
+            assert re.match(WIRE_TOOL_NAME, tool.name), tool.name
 
     def test_call_gated_invokes_the_approved_tool(self):
         cfg, ts = self._connected()
-        assert run(ts.call_gated("stripe.create_refund", {"amount": 240})) == "ok"
+        assert run(ts.call_gated("stripe__create_refund", {"amount": 240})) == "ok"
         assert ts._connections["stripe"].session.calls == [("create_refund", {"amount": 240})]
 
     def test_call_gated_refuses_an_ungated_tool(self):
         """execute_act must not become a way to run anything the model names."""
         cfg, ts = self._connected()
         with pytest.raises(McpError, match="not an approval-gated tool"):
-            run(ts.call_gated("stripe.get_charge", {}))
+            run(ts.call_gated("stripe__get_charge", {}))
 
     def test_call_gated_refuses_an_undeclared_tool(self):
         cfg, ts = self._connected(extra=["delete_customer"])
         with pytest.raises(McpError, match="not declared"):
-            run(ts.call_gated("stripe.delete_customer", {}))
+            run(ts.call_gated("stripe__delete_customer", {}))
 
     def test_inline_tool_handler_calls_through(self):
         cfg, ts = self._connected()
-        tool = next(t for t in ts.inline_tools(cfg) if t.name == "zendesk.get_ticket")
+        tool = next(t for t in ts.inline_tools(cfg) if t.name == "zendesk__get_ticket")
         assert run(tool.handler({"id": "4821"})) == "ok"

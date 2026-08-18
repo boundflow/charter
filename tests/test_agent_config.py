@@ -24,10 +24,10 @@ def test_example_parses():
 
 def test_derived_views():
     cfg = AgentConfig.model_validate(load())
-    assert cfg.gated_tools == ["stripe.create_refund"]
-    assert "zendesk.get_ticket" in cfg.inline_tools
-    assert "stripe.create_refund" not in cfg.inline_tools
-    assert cfg.fail_fast_tools == {"zendesk.get_ticket", "stripe.create_refund"}
+    assert cfg.gated_tools == ["stripe__create_refund"]
+    assert "zendesk__get_ticket" in cfg.inline_tools
+    assert "stripe__create_refund" not in cfg.inline_tools
+    assert cfg.fail_fast_tools == {"zendesk__get_ticket", "stripe__create_refund"}
     assert len(cfg.all_tools) == 7
 
 
@@ -121,7 +121,7 @@ class TestMcpServer:
 
     def test_http_url_rejected(self):
         raw = load()
-        raw["mcp"][1]["url"] = "http://mcp.stripe.com"
+        raw["mcp"][1]["url"] = "http://mcp.stripe__com"
         with pytest.raises(ValidationError, match="https"):
             AgentConfig.model_validate(raw)
 
@@ -261,4 +261,22 @@ class TestSchedule:
         """A periodic run has nobody to supply a ticket id."""
         raw = load(schedule={"every": "15m"})
         with pytest.raises(ValidationError, match="mutually exclusive"):
+            AgentConfig.model_validate(raw)
+
+
+class TestWireToolNames:
+    def test_a_dot_would_be_rejected_by_the_provider(self):
+        """Anthropic requires ^[a-zA-Z0-9_-]{1,128}$. A dotted namespace 400s
+        before the model sees the request, so the config can't produce one."""
+        import re
+        from charter.config.agent import WIRE_TOOL_NAME
+        cfg = AgentConfig.model_validate(load())
+        for tool in cfg.all_tools:
+            assert re.match(WIRE_TOOL_NAME, tool), tool
+        assert not re.match(WIRE_TOOL_NAME, "stripe.create_refund")
+
+    def test_a_server_name_that_would_break_the_wire_name_is_rejected(self):
+        raw = load()
+        raw["mcp"][0]["name"] = "a" * 130
+        with pytest.raises(ValidationError):
             AgentConfig.model_validate(raw)

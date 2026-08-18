@@ -62,14 +62,14 @@ class TestAgentCrossFile:
 
     def test_tool_call_limit_for_undeclared_tool(self, project):
         def mutate(raw):
-            raw["per_run"]["tool_call_limits"][0]["tool"] = "stripe.nonexistent"
+            raw["per_run"]["tool_call_limits"][0]["tool"] = "stripe__nonexistent"
         edit(project / "refund-triage" / "runtime.yaml", mutate)
         with pytest.raises(ConfigError, match="no version of this agent declares"):
             load_agent(project / "refund-triage")
 
     def test_lifecycle_rule_for_undeclared_tool(self, project):
         def mutate(raw):
-            raw["rules"][-1]["when"]["tool"] = "stripe.nonexistent"
+            raw["rules"][-1]["when"]["tool"] = "stripe__nonexistent"
         edit(project / "refund-triage" / "lifecycle.yaml", mutate)
         with pytest.raises(ConfigError, match="no version of this agent declares"):
             load_agent(project / "refund-triage")

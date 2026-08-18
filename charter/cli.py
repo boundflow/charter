@@ -21,6 +21,7 @@ import typer
 
 from . import ui
 from .compile import compile_agent
+from .config.agent import split_qualified
 from .config.loader import ConfigError, load_agent, load_project
 
 app = typer.Typer(
@@ -101,7 +102,7 @@ def validate(
          ",".join(f"v{v}" for v in sorted(b.versions)),
          b.latest.invoke_mode,
          str(len(b.latest.all_tools)),
-         ",".join(t.split(".", 1)[1] for t in b.latest.gated_tools) or "-"]
+         ",".join(split_qualified(t)[1] for t in b.latest.gated_tools) or "-"]
         for b in bundles])
 
 

@@ -24,9 +24,15 @@ RESERVED_OUTPUT_FIELDS = frozenset({"propose", "ask_human"})
 TEMPLATE_REF = re.compile(r"\{\{\s*([a-zA-Z0-9_.]+)\s*\}\}")
 
 AGENT_NAME = r"^[a-z][a-z0-9-]{2,62}$"
+# What the model providers accept for a tool name. Enforced on the qualified name
+# so a config can't produce a request that 400s.
+WIRE_TOOL_NAME = r"^[a-zA-Z0-9_-]{1,128}$"
 SERVER_NAME = r"^[a-z][a-z0-9_]{1,31}$"
 TOOL_NAME = r"^[a-z][a-z0-9_]{0,63}$"
 ENV_NAME = r"^[A-Z][A-Z0-9_]*$"
+# How a tool is namespaced onto its server. Double underscore because a dot is
+# rejected by the providers' tool-name charset — see McpServer.qualified.
+SEPARATOR = "__"
 
 ScalarType = Literal["string", "integer", "number", "boolean"]
 
@@ -137,14 +143,38 @@ class McpServer(Base):
         seen = {t.tool for t in self.tools}
         if len(seen) != len(self.tools):
             raise ValueError("duplicate tool names")
+        for t in self.tools:
+            if not re.match(WIRE_TOOL_NAME, self.qualified(t.tool)):
+                raise ValueError(
+                    f"{self.qualified(t.tool)!r} is not a valid tool name — must "
+                    f"match {WIRE_TOOL_NAME} once namespaced")
         return self
 
     def qualified(self, tool: str) -> str:
-        return f"{self.name}.{tool}"
+        """`server__tool`, not `server.tool`.
+
+        Anthropic requires tool names to match ^[a-zA-Z0-9_-]{1,128}$ — a dot is
+        rejected with a 400 before the model ever sees the request. Double
+        underscore is the convention Claude Code uses for MCP tools (mcp__server__
+        tool) for the same reason.
+
+        One representation, used in the config, in tool_call_limits, in lifecycle
+        rules, and on the wire. A prettier config name translated at the boundary
+        would need converting in seven places, and missing one silently unenforces
+        a limit.
+        """
+        return f"{self.name}{SEPARATOR}{tool}"
 
     @property
     def tool_names(self) -> list[str]:
         return [self.qualified(t.tool) for t in self.tools]
+
+
+def split_qualified(qualified: str) -> tuple[str, str]:
+    """`server__tool` -> ("server", "tool"). The inverse of McpServer.qualified,
+    kept beside it so the two can't disagree about the separator."""
+    server, _, tool = qualified.partition(SEPARATOR)
+    return server, tool
 
 
 class FieldSpec(Base):

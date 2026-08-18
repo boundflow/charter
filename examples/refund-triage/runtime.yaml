@@ -10,9 +10,9 @@ per_run:
   max_cost_usd: 0.30
   max_llm_calls: 40
   tool_call_limits:
-    - tool: stripe.get_charge
+    - tool: stripe__get_charge
       max_calls: 5
-    - tool: zendesk.search_tickets
+    - tool: zendesk__search_tickets
       max_calls: 10
 
 limits:

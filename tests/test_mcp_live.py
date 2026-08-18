@@ -61,7 +61,7 @@ def test_only_declared_ungated_tools_reach_the_model():
         try:
             names = [t.name for t in ts.inline_tools(cfg)]
             # close_ticket is gated, undeclared_danger isn't declared at all.
-            assert names == ["tickets.get_ticket"]
+            assert names == ["tickets__get_ticket"]
         finally:
             await ts.aclose()
     run(go())
@@ -98,7 +98,7 @@ def test_real_tool_failure_raises():
         cfg, ts = await _connected()
         try:
             with pytest.raises(McpError, match="already closed"):
-                await ts.call_gated("tickets.close_ticket", {"ticket_id": "4821"})
+                await ts.call_gated("tickets__close_ticket", {"ticket_id": "4821"})
         finally:
             await ts.aclose()
     run(go())

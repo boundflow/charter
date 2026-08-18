@@ -24,7 +24,7 @@ from boundflow import Tool
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
-from ..config.agent import AgentConfig, McpServer
+from ..config.agent import AgentConfig, McpServer, split_qualified
 
 log = logging.getLogger(__name__)
 
@@ -225,7 +225,7 @@ class ToolSet:
     async def call_gated(self, qualified: str, args: dict | None) -> str:
         """Invoke an approval-gated tool. Called from `execute_act` only, after a
         human has approved — never from inside the agent loop."""
-        server, _, tool = qualified.partition(".")
+        server, tool = split_qualified(qualified)
         conn = self._connections.get(server)
         if conn is None:
             raise McpError(f"{qualified}: no such server")

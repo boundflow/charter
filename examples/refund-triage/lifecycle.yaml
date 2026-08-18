@@ -13,5 +13,5 @@ rules:
   - when: { metric: approval_rejections, threshold: 3 }
     then: { set_version: { target: 1 } }
 
-  - when: { metric: tool_failures, threshold: 3, tool: stripe.create_refund }
+  - when: { metric: tool_failures, threshold: 3, tool: stripe__create_refund }
     then: { pause: { window: 10 } }

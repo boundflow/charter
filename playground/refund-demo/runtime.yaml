@@ -10,5 +10,5 @@ per_run:
   max_tool_failures: 2
   max_queue_depth: 50
   tool_call_limits:
-    - tool: desk.get_charge
+    - tool: desk__get_charge
       max_calls: 6

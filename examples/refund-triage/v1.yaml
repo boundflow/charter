@@ -41,7 +41,7 @@ mcp:
       - tool: close_ticket
 
   - name: stripe
-    url: https://mcp.stripe.com
+    url: https://mcp.stripe__com
     env: [STRIPE_API_KEY]
     tools:
       - tool: get_charge

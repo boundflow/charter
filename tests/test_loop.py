@@ -93,7 +93,7 @@ def run(coro):
 
 
 DELIVERABLE = {"resolution": "refunded in full", "refunded_usd": 240}
-PROPOSAL = {"propose": {"tool": "stripe.create_refund",
+PROPOSAL = {"propose": {"tool": "stripe__create_refund",
                         "args": {"amount": 240}, "why": "duplicate charge"}}
 
 
@@ -135,10 +135,10 @@ class TestBudget:
 
     def test_repeated_tool_failure_fails_naming_the_tool(self):
         lp = loop(max_tool_failures=3)
-        ctx = FakeCtx({"_tool_fails": {"stripe.create_refund": 3}}, [FakeResult(DELIVERABLE)])
+        ctx = FakeCtx({"_tool_fails": {"stripe__create_refund": 3}}, [FakeResult(DELIVERABLE)])
         result = run(lp.entry(ctx))
         assert ctx.failed
-        assert "stripe.create_refund failed 3 times" in result.result["reason"]
+        assert "stripe__create_refund failed 3 times" in result.result["reason"]
         assert "integration looks broken" in result.result["reason"]
 
 
@@ -146,27 +146,27 @@ class TestBudget:
         """BoundFlow's own per-tool caps reset every step, so `max_calls: 5` on a
         six-round task used to mean thirty calls."""
         lp = loop()
-        ctx = FakeCtx({"_tool_calls": {"stripe.get_charge": 4}}, [FakeResult(DELIVERABLE)])
+        ctx = FakeCtx({"_tool_calls": {"stripe__get_charge": 4}}, [FakeResult(DELIVERABLE)])
         run(lp.entry(ctx))
-        assert ctx.budgets[0].tool_call_limits["stripe.get_charge"] == 5 - 4
+        assert ctx.budgets[0].tool_call_limits["stripe__get_charge"] == 5 - 4
 
     def test_per_tool_failure_allowance_is_passed_down(self):
         lp = loop()
-        ctx = FakeCtx({"_tool_fails": {"stripe.create_refund": 2}}, [FakeResult(DELIVERABLE)])
+        ctx = FakeCtx({"_tool_fails": {"stripe__create_refund": 2}}, [FakeResult(DELIVERABLE)])
         run(lp.entry(ctx))
         limits = ctx.budgets[0].tool_failure_limits
-        assert limits["stripe.create_refund"] == 3 - 2
-        assert limits["zendesk.get_ticket"] == 3  # untouched tools keep the full allowance
+        assert limits["stripe__create_refund"] == 3 - 2
+        assert limits["zendesk__get_ticket"] == 3  # untouched tools keep the full allowance
 
     def test_tool_failure_limit_is_not_retried(self):
         """ToolFailureLimitExceeded subclasses AgentPolicyLimitExceeded — retrying a
         broken tool would double its failures before propagating."""
         from boundflow.llm import ToolFailureLimitExceeded
         lp = loop()
-        ctx = FakeCtx({}, [ToolFailureLimitExceeded("stripe.create_refund", 3, 3)])
+        ctx = FakeCtx({}, [ToolFailureLimitExceeded("stripe__create_refund", 3, 3)])
         result = run(lp.entry(ctx))
         assert len(ctx.budgets) == 1  # not retried
-        assert ctx.failed and "stripe.create_refund" in result.result["reason"]
+        assert ctx.failed and "stripe__create_refund" in result.result["reason"]
 
     def test_spending_the_last_of_the_budget_marks_the_round_final(self):
         lp = loop()
@@ -198,14 +198,14 @@ class TestOutcomes:
         assert isinstance(result, AwaitApproval)
         # The approver is shown the tool, its arguments, and the agent's reasoning —
         # Charter renders all three, so a gate can't be authored with the amount left out.
-        assert "stripe.create_refund" in result.justification
+        assert "stripe__create_refund" in result.justification
         assert "240" in result.justification
         assert "duplicate charge" in result.justification
 
     def test_proposing_an_ungated_tool_is_refused(self):
         """execute_act must not become a way to run anything the model names."""
         lp = loop()
-        ctx = FakeCtx({}, [FakeResult({"propose": {"tool": "stripe.get_charge", "args": {}}})])
+        ctx = FakeCtx({}, [FakeResult({"propose": {"tool": "stripe__get_charge", "args": {}}})])
         result = run(lp.entry(ctx))
         assert isinstance(result, Next)
         assert "not a tool you may propose" in ctx.context["_history"][-1]
@@ -269,7 +269,7 @@ class TestResumption:
     def test_rejection_with_a_reason_teaches_the_agent(self):
         """The only reason a rejection is worth anything to the next round."""
         lp = loop()
-        ctx = FakeCtx({"_rejected": {"what": "your proposal to call stripe.create_refund"}},
+        ctx = FakeCtx({"_rejected": {"what": "your proposal to call stripe__create_refund"}},
                       [FakeResult(DELIVERABLE)], approval_reason="wrong charge")
         run(lp.entry(ctx))
         note = ctx.context["_history"][0]
@@ -293,9 +293,9 @@ class TestExecuteAct:
     def test_approved_tool_runs_and_loops_back(self):
         tools = FakeTools(result="refund re_123 created")
         lp = loop(tools=tools)
-        ctx = FakeCtx({"_proposal": {"tool": "stripe.create_refund", "args": {"amount": 240}}})
+        ctx = FakeCtx({"_proposal": {"tool": "stripe__create_refund", "args": {"amount": 240}}})
         result = run(lp.execute_act(ctx))
-        assert tools.calls == [("stripe.create_refund", {"amount": 240})]
+        assert tools.calls == [("stripe__create_refund", {"amount": 240})]
         # Not terminal: the agent sees the result and can act again or finish.
         assert isinstance(result, Next) and result.operation == ENTRY_OPERATION
         assert "refund re_123 created" in ctx.context["_history"][-1]
@@ -304,13 +304,13 @@ class TestExecuteAct:
         """A failed task is not an untouched one — an operator needs to know whether
         money moved before anything else."""
         lp = loop()
-        ctx = FakeCtx({"_proposal": {"tool": "stripe.create_refund", "args": {"amount": 240}}})
+        ctx = FakeCtx({"_proposal": {"tool": "stripe__create_refund", "args": {"amount": 240}}})
         run(lp.execute_act(ctx))
-        assert ctx.context[K_ACTS] == [{"tool": "stripe.create_refund", "args": {"amount": 240}}]
+        assert ctx.context[K_ACTS] == [{"tool": "stripe__create_refund", "args": {"amount": 240}}]
 
     def test_failure_of_a_fail_fast_tool_fails_the_task(self):
         lp = loop(tools=FakeTools(error=McpError("card declined")))
-        ctx = FakeCtx({"_proposal": {"tool": "stripe.create_refund", "args": {}}})
+        ctx = FakeCtx({"_proposal": {"tool": "stripe__create_refund", "args": {}}})
         result = run(lp.execute_act(ctx))
         assert isinstance(result, Complete) and ctx.failed
         assert "card declined" in result.result["reason"]
@@ -320,7 +320,7 @@ class TestExecuteAct:
         snapshot, an approved tool failing every time is invisible to the
         tool_failures rule meant to catch it."""
         lp = loop(tools=FakeTools(error=McpError("boom")))
-        ctx = FakeCtx({"_proposal": {"tool": "stripe.create_refund", "args": {}}})
+        ctx = FakeCtx({"_proposal": {"tool": "stripe__create_refund", "args": {}}})
         run(lp.execute_act(ctx))
         snap = ctx.agent_state_updates["refund-triage"]
-        assert snap["tool_failure_counts"] == {"stripe.create_refund": 1}
+        assert snap["tool_failure_counts"] == {"stripe__create_refund": 1}
