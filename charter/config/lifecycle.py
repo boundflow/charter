@@ -44,11 +44,15 @@ BOUNDFLOW_METRIC = {
 
 
 class When(Base):
-    metric: Metric
-    # Summed over the action's window, compared >=.
-    threshold: float
-    # Namespaced; checked against the agent config by the loader.
-    tool: str | None = None
+    metric: Metric = Field(description=(
+        "num_failures (includes budget-exceeded and on_failure: fail) | cost (USD) | "
+        "num_llm_calls | latency (seconds) | approval_rejections | tool_failures "
+        "(a count for one tool; requires `tool`)"))
+    threshold: float = Field(description=(
+        "The metric is summed over the action's window and compared >=."))
+    tool: str | None = Field(default=None, description=(
+        "Required with metric `tool_failures`, invalid otherwise. Namespaced "
+        "server__tool, and must be declared by some version of this agent."))
 
     @model_validator(mode="after")
     def _check(self) -> When:
@@ -62,7 +66,7 @@ class When(Base):
 class Pause(Base):
     """Hold all new tasks until `charter resume`. Queued tasks wait, not discarded."""
 
-    window: int = Field(gt=0)
+    window: int = Field(gt=0, description="How many recent tasks the metric sums over.")
 
 
 class Cooldown(Base):

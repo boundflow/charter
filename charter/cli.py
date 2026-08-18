@@ -11,6 +11,7 @@ approve, pending, memory, worker) lands with the worker.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import re
@@ -84,6 +85,70 @@ def _fail(e: ConfigError) -> None:
     for p in e.problems:
         ui.detail(p)
     raise typer.Exit(1)
+
+
+SCHEMAS = {
+    "agent": ("charter/agent.schema.json", "agents/*/v*.yaml"),
+    "runtime": ("charter/runtime.schema.json", "agents/*/runtime.yaml"),
+    "lifecycle": ("charter/lifecycle.schema.json", "agents/*/lifecycle.yaml"),
+    "worker": ("charter/worker.schema.json", "worker.yaml"),
+}
+
+
+@app.command()
+def schema(
+    out: Path = typer.Option(None, "--out", "-o", help="Write all four to this directory"),
+    kind: str = typer.Option(None, "--kind", help="agent | runtime | lifecycle | worker"),
+) -> None:
+    """Emit JSON Schema for the config files.
+
+    Point your editor at it and it does the work the docs otherwise have to: field
+    names autocomplete, `metric:` offers the six valid values, a typo is underlined
+    before you run anything, and each block carries its own explanation on hover.
+
+        charter schema -o .charter
+
+    then at the top of a file:
+
+        # yaml-language-server: $schema=.charter/agent.schema.json
+    """
+    from .config.agent import AgentConfig
+    from .config.lifecycle import LifecyclePolicyFile
+    from .config.runtime import RuntimePolicyFile
+    from .config.worker import WorkerManifest
+
+    models = {"agent": AgentConfig, "runtime": RuntimePolicyFile,
+              "lifecycle": LifecyclePolicyFile, "worker": WorkerManifest}
+
+    def build(name: str) -> dict:
+        doc = models[name].model_json_schema()
+        doc["$schema"] = "https://json-schema.org/draft/2020-12/schema"
+        doc["$id"] = f"https://charter.dev/schema/v1/{name}.json"
+        return doc
+
+    if kind:
+        if kind not in models:
+            ui.err(f"unknown kind {kind!r} — one of {', '.join(models)}")
+            raise typer.Exit(1)
+        typer.echo(json.dumps(build(kind), indent=2))
+        return
+
+    if out is None:
+        ui.err("give --out <dir> to write all four, or --kind <name> for one")
+        raise typer.Exit(1)
+
+    out.mkdir(parents=True, exist_ok=True)
+    for name in models:
+        path = out / f"{name}.schema.json"
+        path.write_text(json.dumps(build(name), indent=2) + "\n")
+        ui.ok(f"{path}")
+
+    typer.echo()
+    ui.dim("add to the top of each file (paths are relative to the file):")
+    for name, (_, glob) in SCHEMAS.items():
+        depth = glob.count("/")
+        rel = "../" * depth + f"{out.name}/{name}.schema.json"
+        ui.detail(f"{glob:<24} # yaml-language-server: $schema={rel}")
 
 
 @app.command("import")

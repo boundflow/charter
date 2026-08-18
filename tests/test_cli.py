@@ -256,3 +256,68 @@ class TestImport:
         assert runner.invoke(cli.app, ["import", "desk"]).exit_code == 1
         assert runner.invoke(cli.app, ["import", "desk", "--url", "https://x",
                                        "--command", "y"]).exit_code == 1
+
+
+class TestSchema:
+    """JSON Schema generation.
+
+    The value here is that the schema tracks the models automatically, so these
+    tests assert the properties an editor actually depends on — enums for the
+    closed vocabularies, `additionalProperties: false` so a typo is an error
+    rather than a silently-ignored key, and descriptions for hover text.
+    """
+
+    def test_emits_all_four(self, tmp_path):
+        import json
+
+        res = runner.invoke(cli.app, ["schema", "-o", str(tmp_path)])
+        assert res.exit_code == 0, res.output
+
+        for kind in ("agent", "runtime", "lifecycle", "worker"):
+            doc = json.loads((tmp_path / f"{kind}.schema.json").read_text())
+            assert doc["$schema"].startswith("https://json-schema.org/")
+            assert doc["$id"].endswith(f"/{kind}.json")
+            # Unknown keys must be errors — the whole point is catching typos.
+            assert doc["additionalProperties"] is False
+
+    def test_closed_vocabularies_are_enums(self, tmp_path):
+        """Someone writing `metric:` should get the six valid values offered."""
+        import json
+
+        runner.invoke(cli.app, ["schema", "-o", str(tmp_path)])
+        life = json.loads((tmp_path / "lifecycle.schema.json").read_text())
+        metric = life["$defs"]["When"]["properties"]["metric"]
+        assert set(metric["enum"]) == {
+            "num_failures", "cost", "num_llm_calls", "latency",
+            "approval_rejections", "tool_failures"}
+        # And the enum carries prose, so the dropdown explains itself.
+        assert "requires `tool`" in metric["description"]
+
+        agent = json.loads((tmp_path / "agent.schema.json").read_text())
+        approval = agent["$defs"]["ToolSpec"]["properties"]["approval"]
+        assert {"never", "always"} == {
+            v for branch in approval["anyOf"] for v in branch.get("enum", [])}
+
+    def test_authored_fields_carry_hover_text(self, tmp_path):
+        """Comments in the source are invisible to the schema, so the fields
+        people actually type need `description=` on the Field itself."""
+        import json
+
+        runner.invoke(cli.app, ["schema", "-o", str(tmp_path)])
+        run = json.loads((tmp_path / "runtime.schema.json").read_text())
+        props = run["$defs"]["PerRun"]["properties"]
+        for field in ("max_cost_usd", "max_llm_calls", "max_drafts",
+                      "max_questions", "max_tool_failures"):
+            assert props[field].get("description"), f"{field} has no hover text"
+
+    def test_single_kind_to_stdout(self):
+        import json
+
+        res = runner.invoke(cli.app, ["schema", "--kind", "agent"])
+        assert res.exit_code == 0
+        assert json.loads(res.output)["$id"].endswith("/agent.json")
+
+    def test_rejects_unknown_kind_and_missing_destination(self):
+        assert runner.invoke(cli.app, ["schema", "--kind", "nope"]).exit_code == 1
+        # No --out and no --kind is ambiguous rather than a silent no-op.
+        assert runner.invoke(cli.app, ["schema"]).exit_code == 1

@@ -105,8 +105,13 @@ class ToolSpec(Base):
     tool: str = Field(pattern=TOOL_NAME)
     # None means "unset": follow the server's `approval` rules if it has any, and
     # `never` if it doesn't. An explicit value always wins over a rule.
-    approval: Literal["never", "always"] | None = None
-    on_failure: Literal["continue", "fail"] = "continue"
+    approval: Literal["never", "always"] | None = Field(default=None, description=(
+        "never: handed to the model, called inline. always: the model never "
+        "receives it and can only propose it. Unset follows the server's "
+        "approval rules, or never if it has none."))
+    on_failure: Literal["continue", "fail"] = Field(default="continue", description=(
+        "continue: the model is told and carries on. fail: the task stops, "
+        "checked at the next round boundary."))
 
     @property
     def gated(self) -> bool:
@@ -297,7 +302,7 @@ class Schedule(Base):
 
     # "15m", "1h", "30s", "7d" — seconds are what BoundFlow takes, but nobody
     # thinks in seconds past about a minute.
-    every: str
+    every: str = Field(description="30s, 15m, 1h, 7d.")
     # Whether `charter run` still works. Left on by default so a scheduled agent
     # can be tested by hand without editing its config.
     manual: bool = True
@@ -347,8 +352,12 @@ class AgentConfig(Base):
     version: int = Field(ge=1)
     description: str | None = None
 
-    model: str = Field(min_length=1)
-    objective: str = Field(min_length=1)
+    model: str = Field(min_length=1, description=(
+        "Model id, e.g. claude-haiku-4-5. Needs pricing in worker.yaml or cost "
+        "reads as zero, which silently disables every cost limit."))
+    objective: str = Field(min_length=1, description=(
+        "What this agent is responsible for, in plain English. Becomes the system "
+        "prompt. Supports {{ inputs.<name> }} and nothing else."))
 
     inputs: dict[str, InputSpec] = Field(default_factory=dict)
     # Markdown the agent works from — a refund policy, an escalation matrix, worked

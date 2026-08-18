@@ -148,14 +148,20 @@ rules:
     then: { cooldown: { window: 20, seconds: 300 } }
   - when: { metric: approval_rejections, threshold: 3 }
     then: { set_version: 1 }
-  - when: { metric: tool_failure_rate, threshold: 0.5, tool: stripe.create_refund }
+  - when: { metric: tool_failures, threshold: 3, tool: stripe__create_refund }
     then: { pause: { window: 10 } }
 ```
 
-Metrics are BoundFlow's workflow vocabulary verbatim — `num_failures`, `cost`,
-`num_llm_calls`, `latency`, `approval_rejections`, `tool_failure_rate`. Actions
-are `pause`, `cooldown`, `set_version`. Charter adds no metrics of its own, so
+Metrics are `num_failures`, `cost`, `num_llm_calls`, `latency`,
+`approval_rejections`, `tool_failures`. Actions are `pause`, `cooldown`,
+`set_version`. All map to BoundFlow's workflow vocabulary verbatim except
+`tool_failures`, which compiles to `TOOL_FAILURE_RATE` — a misnomer in the SDK,
+where the engine sums a raw count for one tool rather than a ratio, so
+`threshold: 3` means three failed calls. Charter adds no metrics of its own, so
 anything expressible in the SDK's workflow policy is expressible in YAML.
+
+`charter schema -o .charter` writes these out as JSON Schema, so an editor
+offers the valid metrics rather than you looking them up here.
 
 ### Why no agent lifecycle policy
 

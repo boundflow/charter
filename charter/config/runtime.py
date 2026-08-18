@@ -42,19 +42,27 @@ class PerRun(Base):
     at something you can act on.
     """
 
-    max_cost_usd: float = Field(default=0.0, ge=0.0)
-    max_llm_calls: int = Field(default=0, ge=0)
+    max_cost_usd: float = Field(default=0.0, ge=0.0, description=(
+        "Total spend for one task, across every round and every retry."))
+    max_llm_calls: int = Field(default=0, ge=0, description=(
+        "Total model calls for one task. One round makes several."))
     tool_call_limits: list[ToolCallLimit] = Field(default_factory=list)
 
     # Submissions a human may reject before the task is given up on. An approved
     # act does not count — you accepted that one; the agent is drafting the next.
-    max_drafts: int = Field(default=3, gt=0)
+    max_drafts: int = Field(default=3, gt=0, description=(
+        "Submissions a human may reject before the task gives up. An approved "
+        "act does not count — you accepted that one."))
     # Questions the agent may ask before it must show you something. Resets after
     # each draft, so a rejection earns it a fresh allowance rather than a dead end.
-    max_questions: int = Field(default=2, gt=0)
+    max_questions: int = Field(default=2, gt=0, description=(
+        "Questions the agent may ask before it must show you something. Resets "
+        "after each draft."))
     # Failures of any ONE tool before the task gives up — a circuit breaker, per
     # tool rather than in aggregate, so the failure message names the broken thing.
-    max_tool_failures: int = Field(default=3, gt=0)
+    max_tool_failures: int = Field(default=3, gt=0, description=(
+        "Failures of any ONE tool before the task gives up — a circuit breaker, "
+        "per tool rather than in aggregate."))
     # How many tasks may pile up unstarted before invoke is refused. Queue mode
     # only — coalesce keeps the latest and discards the rest by design. 0 uses
     # BoundFlow's default of 1000.
