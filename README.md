@@ -63,8 +63,9 @@ Now the refund happens. The agent sees it succeeded, closes the ticket, and repo
 what it did.
 
 > [!WARNING]
-> **Pre-alpha.** Everything here is written and unit-tested, but no part of it has
-> run against a live control plane or a real model yet. Expect first-contact bugs.
+> **Pre-alpha.** A first agent has run end to end against a live control plane, a
+> real model and a real MCP server. Plenty has not: expect rough edges, and expect
+> the file formats to move.
 
 ---
 
