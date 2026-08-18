@@ -87,14 +87,30 @@ async def apply_agent(
     await cp.set_agent_runtime_policy(
         workflow.id, compiled.agent_name, compiled.runtime_policy)
     await cp.set_workflow_lifecycle_policy(workflow.id, compiled.workflow_rules)
-    await cp.activate_workflow(workflow.id)
+
+    notes = list(warnings or [])
+    if created:
+        # A workflow is created paused, and activate only accepts paused or
+        # cooldown — so it belongs on the create path alone. Calling it every time
+        # made the second apply fail with ErrActivateMismatch.
+        await cp.activate_workflow(workflow.id)
+    else:
+        state = getattr(workflow, "workflow_state", None)
+        state = state.value if hasattr(state, "value") else state
+        if state and state != "active":
+            # Config is config: it applies whatever the agent is doing. But a rule
+            # stopped this one for a reason, and a deploy silently restarting it is
+            # the kind of surprise the rest of the design refuses. Fix the config,
+            # then resume — two acts, because they're two decisions.
+            notes.append(f"still {state} — new config applied, but no tasks will "
+                         f"start until `charter resume {compiled.name}`")
 
     return ApplyResult(
         agent=compiled.name,
         version=compiled.version,
         workflow_id=workflow.id,
         created=created,
-        warnings=list(warnings or []),
+        warnings=notes,
     )
 
 

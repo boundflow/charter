@@ -22,6 +22,7 @@ class FakeWorkflow:
     workflow_type: str
     lifecycle_state: LifecycleState = LifecycleState.ACTIVE
     tenant_id: str = "tenant-1"
+    workflow_state: str = "active"
 
 
 @dataclass
@@ -42,7 +43,9 @@ class FakeControlPlane:
         return list(self.workflows)
 
     async def create_workflow(self, workflow_type, tenant_id, config=None):
-        wf = FakeWorkflow(f"wf_{workflow_type}", workflow_type, tenant_id=tenant_id)
+        # The server creates a workflow paused; activate is what starts it.
+        wf = FakeWorkflow(f"wf_{workflow_type}", workflow_type, tenant_id=tenant_id,
+                          workflow_state="paused")
         self.workflows.append(wf)
         self.calls.append(("create_workflow", workflow_type, tenant_id, config))
         return wf
@@ -60,6 +63,10 @@ class FakeControlPlane:
         raise AssertionError("Charter must never set an agent lifecycle policy")
 
     async def activate_workflow(self, workflow_id):
+        wf = next(w for w in self.workflows if w.id == workflow_id)
+        if wf.workflow_state not in ("paused", "cooldown"):
+            raise RuntimeError("workflow is not paused/cooldown")
+        wf.workflow_state = "active"
         self.calls.append(("activate_workflow", workflow_id))
 
     async def set_model_pricing(self, model_id, input_per_1m, output_per_1m):
@@ -177,3 +184,25 @@ def test_the_same_agent_name_in_another_tenant_is_a_different_agent(project):
     assert results[0].created is True
     assert results[0].workflow_id == "wf_refund-triage"
     assert len(cp.workflows) == 2
+
+
+def test_reapply_does_not_activate_an_already_active_workflow(project):
+    """A workflow is created paused and activate only accepts paused/cooldown, so
+    calling it unconditionally made the second apply fail."""
+    cp = FakeControlPlane()
+    run(apply_project(cp, project, only="refund-triage"))
+    cp.calls.clear()
+    run(apply_project(cp, project, only="refund-triage"))
+    assert "activate_workflow" not in cp.names()
+
+
+def test_reapply_configures_a_paused_agent_without_resuming_it(project):
+    """Config applies whatever the agent is doing — but a rule stopped this one for
+    a reason, and restarting is a separate decision."""
+    cp = FakeControlPlane([FakeWorkflow("wf_refund-triage", "refund-triage",
+                                        workflow_state="paused")])
+    results = run(apply_project(cp, project, only="refund-triage"))
+    assert "set_agent_runtime_policy" in cp.names()
+    assert "set_workflow_lifecycle_policy" in cp.names()
+    assert "activate_workflow" not in cp.names()
+    assert any("charter resume" in w for w in results[0].warnings)
