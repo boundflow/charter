@@ -221,3 +221,38 @@ class TestUnappliedAgent:
         for args in (("describe", "nope"), ("tasks", "nope"), ("pending", "nope")):
             result = invoke(*args)
             assert result.exit_code == 1, args
+
+
+class TestImport:
+    """charter import against the real fixture server — it's the one command whose
+    whole job is talking to a server, so a fake would test nothing."""
+
+    def test_drafts_a_block_with_dangerous_tools_gated(self):
+        # Run as a real process: CliRunner swaps stdout for a StringIO, and spawning
+        # an stdio MCP server needs a real file descriptor.
+        import subprocess
+        import sys
+        from pathlib import Path
+
+        server = Path(__file__).parent / "mcp_fixture_server.py"
+        charter = Path(sys.executable).parent / "charter"
+        if not charter.exists():
+            pytest.skip("charter console script not installed")
+        proc = subprocess.run(
+            [str(charter), "import", "desk", "--command", sys.executable, "--arg", str(server)],
+            capture_output=True, text=True, timeout=60)
+        assert proc.returncode == 0, proc.stderr
+        out = proc.stdout + proc.stderr
+
+        # get_ticket is annotated read-only in the fixture; the rest are not.
+        assert "- tool: get_ticket   # read_only_hint" in out
+        assert "close_ticket" in out and "approval: always" in out
+        # Undeclared by default, so "5 available, 2 declared" is visible while
+        # authoring rather than in a log line at boot.
+        assert "# - tool:" in out
+        assert "read-only" in out and "gated" in out
+
+    def test_needs_exactly_one_transport(self):
+        assert runner.invoke(cli.app, ["import", "desk"]).exit_code == 1
+        assert runner.invoke(cli.app, ["import", "desk", "--url", "https://x",
+                                       "--command", "y"]).exit_code == 1

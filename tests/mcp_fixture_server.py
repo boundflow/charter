@@ -6,11 +6,12 @@ Charter was reading `isError` against an SDK that had renamed it to `is_error`,
 which meant every tool failure was being recorded as a success.
 """
 from mcp.server.mcpserver import MCPServer
+from mcp.types import ToolAnnotations
 
 mcp = MCPServer("tickets")
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(read_only_hint=True))
 def get_ticket(ticket_id: str) -> str:
     """Fetch a support ticket by id."""
     return f"ticket {ticket_id}: customer wants a refund"

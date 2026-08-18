@@ -329,3 +329,29 @@ class TestExecuteAct:
         run(lp.execute_act(ctx))
         snap = ctx.agent_state_updates["refund-triage"]
         assert snap["tool_failure_counts"] == {"stripe__create_refund": 1}
+
+
+class TestInstructionsInThePrompt:
+    """The loader composes the documents; this is the half that proves they reach
+    the model, and that a document is rendered like the objective rather than being
+    a second, quieter set of rules."""
+
+    def _agent(self, instructions=""):
+        from charter.workflows.loop import build_agent
+        bundle = load_agent(EXAMPLES / "refund-triage")
+        return build_agent(bundle.latest, FakeTools(),
+                           {"ticket_id": "4821", "max_refund_usd": 500}, instructions)
+
+    def test_documents_are_appended_to_the_system_prompt(self):
+        agent = self._agent("# policy.md\n\nRefund duplicates only.")
+        assert "Refund duplicates only." in agent.system_prompt
+        # After the objective, so the task comes first.
+        assert agent.system_prompt.index("Resolve the refund") < \
+               agent.system_prompt.index("Refund duplicates only.")
+
+    def test_a_document_gets_the_same_templating_as_the_objective(self):
+        agent = self._agent("Never exceed {{ inputs.max_refund_usd }} dollars.")
+        assert "Never exceed 500 dollars." in agent.system_prompt
+
+    def test_no_documents_changes_nothing(self):
+        assert "# " not in self._agent().system_prompt.split("Resolve")[0]

@@ -111,3 +111,32 @@ def test_missing_declared_tool_quarantines():
             await ts.connect(Cfg(spec([ToolSpec(tool="not_a_real_tool")])))
         await ts.aclose()
     run(go())
+
+
+async def test_annotations_resolve_against_a_real_server():
+    """The fakes in test_mcp.py use a hand-written Ann dataclass. This is the same
+    exposure that let `isError` pass every fake while the SDK had renamed it — only
+    a real server proves the field names are right."""
+    from charter.config.agent import ApprovalRules, McpServer, ToolSpec
+    from charter.mcp.client import Connection, ToolSet
+
+    spec = McpServer(
+        name="tickets", command=sys.executable, args=[SERVER],
+        approval=ApprovalRules(read_only="never", default="always"),
+        tools=[ToolSpec(tool="get_ticket"), ToolSpec(tool="close_ticket")])
+
+    async def go():
+        ts = ToolSet()
+        try:
+            session = await ts._open(spec)
+            conn = Connection(spec, session)
+            await conn.discover()
+            return conn.gated("get_ticket"), conn.gated("close_ticket"), dict(conn.tightened)
+        finally:
+            await ts.aclose()
+
+    get_gated, close_gated, tightened = await go()
+    # The fixture annotates get_ticket read-only and leaves close_ticket alone.
+    assert not get_gated, "a read_only_hint tool should stay callable"
+    assert close_gated, "an unannotated tool must be treated as dangerous"
+    assert "close_ticket" in tightened
