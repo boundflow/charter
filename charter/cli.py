@@ -477,6 +477,7 @@ def tasks(agent: str = typer.Argument(...),
           status: str = typer.Option(None, "--status",
                                      help="successful | customer_marked_failure | operation_timeout | ..."),
           since: str = typer.Option(None, "--since", help="24h, 7d, 30m, or 2026-08-01"),
+          # `took` is wall clock and includes time parked at a gate.
           tenant: str = TENANT,
           path: Path = typer.Option(None, "--path",
                                     help="Where agents live, to show how close rules are to firing")) -> None:
@@ -525,11 +526,12 @@ def tasks(agent: str = typer.Argument(...),
             if not runs:
                 ui.dim(f"no matching tasks ({total} total)")
                 return
-            ui.table(["task", "outcome", "started", "detail"], [
+            ui.table(["task", "outcome", "started", "took", "detail"], [
                 [r.request_id,
                  ui.state((r.run_outcome or r.status).value),
                  r.created_at.strftime("%m-%d %H:%M") if r.created_at else "",
-                 (r.failure_reason or "")[:60]]
+                 _took(r.created_at, r.completed_at),
+                 _first_line(r.failure_reason)]
                 for r in shown])
             if len(shown) < len(runs):
                 ui.dim(f"  {len(shown)} of {len(runs)} matching ({total} total) — -n 0 for all")
@@ -587,11 +589,28 @@ def _one_limit(d: dict) -> str:
     return f"{d.get('tool')}={n}"
 
 
+def _took(started, finished) -> str:
+    """Wall clock, so it includes time parked at a gate — a task that waited 30
+    minutes for an approval reads 31m even though it worked for one."""
+    if not (started and finished):
+        return ""
+    return _duration(int((finished - started).total_seconds()))
+
+
+def _first_line(reason: str) -> str:
+    """One line in a table; `charter status` prints the whole thing."""
+    if not reason:
+        return ""
+    line = reason.strip().splitlines()[0]
+    return line if len(line) <= 70 else line[:69] + "\u2026"
+
+
 def _duration(seconds: int) -> str:
     """Back to how it was written — nobody thinks in seconds past a minute."""
     for unit, size in (("d", 86400), ("h", 3600), ("m", 60)):
-        if seconds >= size and seconds % size == 0:
-            return f"{seconds // size}{unit}"
+        if seconds >= size:
+            whole, rest = divmod(seconds, size)
+            return f"{whole}{unit}" if not rest or seconds >= 3600 else f"{whole}{unit}{rest}s"
     return f"{seconds}s"
 
 
@@ -633,17 +652,59 @@ def status(task_id: str = typer.Argument(..., help="The id `charter run` printed
     async def go():
         async with _cp() as cp:
             info = await cp.get_request_info(task_id)
-            typer.echo(f"state   {getattr(info, 'state', '?')}")
-            result = getattr(info, "result", None) or {}
+            outcome = info.run_outcome.value if info.run_outcome else info.status.value
+            ui.kv([("task", task_id),
+                   ("outcome", ui.state(outcome)),
+                   ("started", info.created_at.strftime("%Y-%m-%d %H:%M:%S") if info.created_at else ""),
+                   ("took", _took(info.created_at, info.completed_at) or "-")])
+
+            # An uncaught exception never got far enough to publish a result, so
+            # failure_reason is the only record of it. Printed whole — a truncated
+            # stack trace is the one thing nobody wants.
+            if info.failure_reason:
+                typer.echo()
+                ui.err("failed")
+                for line in info.failure_reason.splitlines():
+                    ui.detail(line)
+
+            if info.invoke_context:
+                given = {k: v for k, v in info.invoke_context.items() if not k.startswith("_")}
+                if given:
+                    typer.echo()
+                    typer.secho("inputs", fg=typer.colors.BRIGHT_BLACK)
+                    ui.kv(sorted(given.items()), indent="  ")
+
+            result = info.result or {}
+            if not result:
+                return
+
+            meta = ("failed", "reason", "history", "cost_usd", "rounds",
+                    "acts_performed", "truncated")
+            typer.echo()
             if result.get("failed"):
-                _err(f"failed  {result.get('reason', '')}")
-            for key in ("cost_usd", "rounds", "acts_performed", "truncated"):
-                if key in result:
-                    typer.echo(f"{key:8}{result[key]}")
-            for key, value in result.items():
-                if key not in ("failed", "reason", "cost_usd", "rounds",
-                               "acts_performed", "truncated", "history"):
-                    typer.echo(f"{key:8}{value}")
+                ui.err(result.get("reason", "failed"))
+            else:
+                typer.secho("result", fg=typer.colors.BRIGHT_BLACK)
+                ui.kv([(k, v) for k, v in result.items() if k not in meta], indent="  ")
+
+            typer.echo()
+            typer.secho("cost", fg=typer.colors.BRIGHT_BLACK)
+            ui.kv([(k, result[k]) for k in ("rounds", "cost_usd") if k in result], indent="  ")
+            if result.get("truncated"):
+                ui.warn("  produced after the task ran out of budget")
+
+            # A failed task is not an untouched one.
+            if acts := result.get("acts_performed"):
+                typer.echo()
+                typer.secho("actions taken", fg=typer.colors.BRIGHT_BLACK)
+                for act in acts:
+                    ui.kv([(act.get("tool", "?"), act.get("args", {}))], indent="  ")
+
+            if history := result.get("history"):
+                typer.echo()
+                typer.secho("what happened", fg=typer.colors.BRIGHT_BLACK)
+                for line in history:
+                    ui.detail(line)
 
     asyncio.run(go())
 
