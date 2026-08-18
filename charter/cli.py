@@ -400,6 +400,10 @@ def describe(agent: str = typer.Argument(...), tenant: str = TENANT) -> None:
                    ("status", ui.state(wf.workflow_state.value)),
                    ("activity", ui.state(ui.activity(wf.lifecycle_state.value))),
                    ("workflow", wf.id)], indent="  ")
+            # Schedule, invoke mode, queue depth and the round deadline would go
+            # here. GetWorkflow returns the whole workflow_config on the wire, but
+            # WorkflowInfo keeps only `version` (control_plane.py:207) — so there is
+            # no read path for the rest. `charter diff` shows them from your files.
             if not ui.working(wf.workflow_state.value):
                 ui.detail("no new tasks will start — charter resume "
                           f"{agent}" if wf.workflow_state.value == "paused" else "")
@@ -968,10 +972,23 @@ def resume(agent: str = typer.Argument(...), tenant: str = TENANT) -> None:
                 _err(f"{agent!r} has not been applied yet")
                 raise typer.Exit(1)
             wf = await cp.get_workflow(wf.id)
+            state = wf.workflow_state.value
+
+            if state == "active":
+                ui.dim(f"{agent} is already active")
+                return
+
+            # A platform interruption disables the workflow; that needs resolving
+            # before it can be activated at all.
             if wf.last_interrupted_request_id:
                 await cp.resolve_interrupted_workflow(wf.id, wf.last_interrupted_request_id)
-            await cp.activate_workflow(wf.id)
-            ui.ok(f"{ui.ref('agent', agent)} active")
+
+            # Activating a paused or cooling-down workflow has to name the policy
+            # decision that stopped it — proof you're resuming the thing you looked
+            # at, not racing a rule that fired since. Empty is correct only for a
+            # workflow that has never had a decision.
+            await cp.activate_workflow(wf.id, wf.last_policy_decision_request_id)
+            ui.ok(f"{ui.ref('agent', agent)} active  (was {state})")
 
     asyncio.run(go())
 
