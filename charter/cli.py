@@ -397,12 +397,13 @@ def agents(tenant: str = TENANT) -> None:
                 return
 
             mine.sort(key=lambda w: w.workflow_type)
-            ui.table(["agent", "ver", "status", "activity", "runs"],
+            # No schedule column: list_workflows returns the lighter view with
+            # config unset, and a fleet view that made an extra call per agent to
+            # fill one column would be the wrong trade. `charter describe` has it.
+            ui.table(["agent", "ver", "status", "activity"],
                      [[w.workflow_type, f"v{w.version}",
                        ui.state(w.workflow_state.value),
-                       ui.state(ui.activity(w.lifecycle_state.value)),
-                       (f"every {_duration(w.config.repeat_every_seconds)}"
-                        if w.config.repeat_every_seconds else "on demand")]
+                       ui.state(ui.activity(w.lifecycle_state.value))]
                       for w in mine])
 
             # The two reasons an agent isn't working, and they need different acts.
