@@ -226,3 +226,73 @@ class TestRunFilters:
         from charter.cli import _filter_runs
         out = _filter_runs(self.runs(), failed=True, status=None, since="24h")
         assert [r.run_outcome.value for r in out] == ["customer_marked_failure"]
+
+
+class TestInstructions:
+    """Instruction documents live in v<N>/ beside v<N>.yaml, so they're versioned by
+    the same rule the config is — `set_version: 1` restores the exact prompt v1 ran
+    with, and editing one in place is the same mistake as editing its yaml."""
+
+    def _agent(self, root, *, version=1, files=None, refs=None):
+        d = root / "policy-agent"
+        d.mkdir(exist_ok=True)
+        (d / f"v{version}.yaml").write_text(f"""
+apiVersion: charter/v1
+kind: AgentConfig
+name: policy-agent
+version: {version}
+model: claude-haiku-4-5
+objective: Decide something.
+instructions: {refs if refs is not None else list((files or {}).keys())}
+outcome:
+  deliverable:
+    answer: {{ type: string }}
+""")
+        if files:
+            vdir = d / f"v{version}"
+            vdir.mkdir(exist_ok=True)
+            for name, text in files.items():
+                (vdir / name).write_text(text)
+        return d
+
+    def test_documents_are_composed_with_their_filenames(self, tmp_path):
+        d = self._agent(tmp_path, files={"policy.md": "Refund duplicates only.",
+                                         "escalation.md": "Page finance over $1000."})
+        bundle = load_agent(d)
+        text = bundle.instructions[1]
+        assert "# policy.md" in text and "Refund duplicates only." in text
+        assert "# escalation.md" in text and "Page finance over $1000." in text
+
+    def test_each_version_reads_its_own_directory(self, tmp_path):
+        """The point of the layout: v1 keeps the document it shipped with."""
+        d = self._agent(tmp_path, version=1, files={"policy.md": "the old rule"})
+        self._agent(tmp_path, version=2, files={"policy.md": "the new rule"})
+        bundle = load_agent(d)
+        assert "the old rule" in bundle.instructions[1]
+        assert "the new rule" in bundle.instructions[2]
+
+    def test_a_missing_document_fails_at_validate(self, tmp_path):
+        d = self._agent(tmp_path, refs=["nope.md"])
+        with pytest.raises(ConfigError, match="does not exist"):
+            load_agent(d)
+
+    def test_a_document_may_reference_declared_inputs(self, tmp_path):
+        """Rendered with the objective, so a document isn't a second quieter set of
+        rules with different capabilities."""
+        d = self._agent(tmp_path, files={"policy.md": "Never exceed {{ inputs.cap }}."})
+        raw = (d / "v1.yaml").read_text().replace(
+            "objective: Decide something.",
+            "objective: Decide something.\ninputs:\n  cap: { type: number, default: 5 }")
+        (d / "v1.yaml").write_text(raw)
+        assert "{{ inputs.cap }}" in load_agent(d).instructions[1]
+
+    def test_an_undeclared_reference_in_a_document_is_caught(self, tmp_path):
+        d = self._agent(tmp_path, files={"policy.md": "Never exceed {{ inputs.nope }}."})
+        with pytest.raises(ConfigError, match="not a declared input"):
+            load_agent(d)
+
+    @pytest.mark.parametrize("bad", ["/etc/passwd", "../secrets.md", "policy.txt"])
+    def test_paths_are_constrained(self, tmp_path, bad):
+        d = self._agent(tmp_path, refs=[bad])
+        with pytest.raises(ConfigError):
+            load_agent(d)

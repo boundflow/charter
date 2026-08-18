@@ -12,13 +12,13 @@ miserable, and these files are edited by people who aren't reading a stack trace
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
 from pydantic import ValidationError
 
-from .agent import AgentConfig
+from .agent import AgentConfig, template_refs
 from .lifecycle import LifecyclePolicyFile
 from .runtime import RuntimePolicyFile, default_runtime
 from .worker import WorkerManifest
@@ -76,6 +76,10 @@ class AgentBundle:
     lifecycle: LifecyclePolicyFile | None
     # True when no runtime.yaml was present and defaults were substituted.
     runtime_defaulted: bool = False
+    # version -> the composed text of that version's instruction files. Read here
+    # rather than by the worker so a missing document fails at `charter validate`
+    # instead of a round into the first task.
+    instructions: dict[int, str] = field(default_factory=dict)
 
     @property
     def latest(self) -> AgentConfig:
@@ -137,12 +141,53 @@ def load_agent(path: Path) -> AgentBundle:
     if problems:
         raise ConfigError(problems)
 
+    instructions = {}
+    for n, cfg in versions.items():
+        text = _read_instructions(path, n, cfg, problems)
+        if text:
+            instructions[n] = text
+    if problems:
+        raise ConfigError(problems)
+
     bundle = AgentBundle(path.name, path, versions, runtime, lifecycle,
-                         runtime_defaulted=not runtime_path.exists())
+                         runtime_defaulted=not runtime_path.exists(),
+                         instructions=instructions)
     _check_agent(bundle, problems)
     if problems:
         raise ConfigError(problems)
     return bundle
+
+
+def _read_instructions(path: Path, version: int, cfg: AgentConfig,
+                       problems: list[str]) -> str:
+    """Compose a version's instruction files into one block.
+
+    They live in `v<N>/` beside `v<N>.yaml`, which makes them versioned by the same
+    rule the config is: you don't edit a version, you make a new one. Without that,
+    editing a document in place would leave `set_version` restoring an agent that
+    behaves differently from the one it rolled back to, silently.
+
+    Each file is headed by its own name so the model can tell the documents apart.
+    """
+    if not cfg.instructions:
+        return ""
+
+    directory = path / f"v{version}"
+    parts: list[str] = []
+    for name in cfg.instructions:
+        file = directory / name
+        if not file.is_file():
+            problems.append(
+                f"v{version}.yaml: instructions references {name!r}, "
+                f"but {directory.name}/{name} does not exist")
+            continue
+        text = file.read_text().strip()
+        for ref in template_refs(text):
+            if not ref.startswith("inputs.") or ref.split(".", 1)[1] not in cfg.inputs:
+                problems.append(
+                    f"v{version}/{name}: {{{{ {ref} }}}} is not a declared input")
+        parts.append(f"# {name}\n\n{text}")
+    return "\n\n".join(parts)
 
 
 def _check_agent(b: AgentBundle, problems: list[str]) -> None:

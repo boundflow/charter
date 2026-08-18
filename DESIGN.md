@@ -512,9 +512,37 @@ Versioned and immutable once applied.
 | `description` | string | no | human-facing only, never sent to the model | — |
 | `model` | string | yes | tenant must have pricing for it | `AgentDefinition.model` |
 | `objective` | string | yes | non-empty; `{{ inputs.<name> }}` only | `AgentDefinition.system_prompt` |
+| `instructions` | list | no | filenames under `v<N>/`, `.md`, no paths | appended to the system prompt |
 | `inputs` | map | no | see below | `invoke_workflow(context=)` |
 | `mcp` | list | no | see below | `AgentDefinition.tools` |
 | `outcome` | object | yes | see below | `AgentDefinition.output_schema` |
+
+**`instructions`** are markdown documents the agent works from — a refund policy,
+an escalation matrix, worked examples. They live in `v<N>/` beside `v<N>.yaml`:
+
+```
+agents/refund-triage/
+  v1.yaml            instructions: [refund-policy.md]
+  v1/refund-policy.md
+  v2.yaml
+  v2/refund-policy.md   ← a different one; v1's is untouched
+```
+
+Versioned by the same rule as the config, which is the point: `set_version: 1`
+restores the exact prompt v1 ran with, and editing a version's document in place is
+the same mistake as editing its yaml. A missing document fails at `charter
+validate`, not a round into the first task.
+
+They're appended to the system prompt, each headed by its filename, and rendered
+with the objective — so a document can reference `{{ inputs.* }}` the same way, and
+an undeclared reference is caught in the same pass. Being static per version, they
+sit in the cached prefix.
+
+What this is *not*: on-demand retrieval. Loading a document at runtime would be a
+tool call — in the tool list, against `max_llm_calls`, needing governance — and
+Charter already has a name for "the agent fetches knowledge while it works": an MCP
+server. `instructions` is what an agent always needs to know; a corpus too large to
+inline is a server.
 
 **Templating** is `{{ inputs.<name> }}` and nothing else — no expressions, filters,
 conditionals, or loops. An undeclared reference fails at `charter apply`. It is

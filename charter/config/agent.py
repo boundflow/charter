@@ -12,6 +12,7 @@ in the loader — see `charter.config.loader`.
 from __future__ import annotations
 
 import re
+from pathlib import Path
 from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -323,6 +324,12 @@ class AgentConfig(Base):
     objective: str = Field(min_length=1)
 
     inputs: dict[str, InputSpec] = Field(default_factory=dict)
+    # Markdown the agent works from — a refund policy, an escalation matrix, worked
+    # examples. Resolved from `v<N>/` beside this file, so instructions are
+    # versioned with the agent that reads them: `set_version: 1` restores the exact
+    # prompt v1 ran with, and editing a version's document in place is the same
+    # mistake as editing its yaml.
+    instructions: list[str] = Field(default_factory=list)
     schedule: Schedule | None = None
     mcp: list[McpServer] = Field(default_factory=list)
     outcome: Outcome
@@ -334,8 +341,19 @@ class AgentConfig(Base):
         self._check_templates()
         self._check_gates()
         self._check_memory()
+        self._check_instructions()
         self._check_schedule()
         return self
+
+    def _check_instructions(self) -> None:
+        for name in self.instructions:
+            if name.startswith("/") or ".." in Path(name).parts:
+                raise ValueError(
+                    f"instructions: {name!r} must be a plain filename under v{self.version}/")
+            if not name.endswith(".md"):
+                raise ValueError(f"instructions: {name!r} should be a .md file")
+        if len(set(self.instructions)) != len(self.instructions):
+            raise ValueError("instructions: duplicate file")
 
     def _check_schedule(self) -> None:
         if self.schedule and self.inputs:

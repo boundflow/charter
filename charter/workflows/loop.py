@@ -150,14 +150,22 @@ def build_output_schema(cfg: AgentConfig) -> dict:
     return schema
 
 
-def build_agent(cfg: AgentConfig, tools: ToolSet, inputs: dict) -> AgentDefinition:
+def build_agent(cfg: AgentConfig, tools: ToolSet, inputs: dict,
+                instructions: str = "") -> AgentDefinition:
     """Gated tools are absent from `tools` by construction — the model is never
     handed one, which is the safety claim rather than a runtime check."""
-    system_prompt = render(cfg.objective, inputs)
+    parts = [cfg.objective]
     if cfg.outcome.ask_human is not None:
         # Charter owns this wording so it's consistent and tested, rather than each
         # author writing their own weaker version of it.
-        system_prompt = f"{system_prompt}\n\n{cfg.outcome.ask_human.guidance}"
+        parts.append(cfg.outcome.ask_human.guidance)
+    if instructions:
+        parts.append(instructions)
+
+    # Rendered once over the whole prompt, so a document can reference an input the
+    # same way the objective does rather than being a second, quieter set of rules.
+    # Static per version, so it also caches as part of the stable prefix.
+    system_prompt = render("\n\n".join(parts), inputs)
 
     return AgentDefinition(
         name=cfg.name,
@@ -173,11 +181,14 @@ class Loop:
     """One agent version's handlers. Holds no per-task state — everything lives in
     `ctx.context`, so a task can resume on a different worker after a gate."""
 
-    def __init__(self, cfg: AgentConfig, runtime, tools: ToolSet, memory=None) -> None:
+    def __init__(self, cfg: AgentConfig, runtime, tools: ToolSet, memory=None,
+                 instructions: str = "") -> None:
         self.cfg = cfg
         self.runtime = runtime
         self.tools = tools
         self.memory = memory
+        # This version's instruction documents, already composed by the loader.
+        self.instructions = instructions
 
     # ── budget, which BoundFlow can't see ───────────────────────────────────
 
@@ -321,7 +332,7 @@ class Loop:
         if history := c.get(K_HISTORY):
             ctx.add_context("what's happened so far", _bullets(history))
 
-        agent = build_agent(self.cfg, self.tools, c)
+        agent = build_agent(self.cfg, self.tools, c, self.instructions)
         try:
             result = await run_agent_with_retry(ctx, agent, self._remaining(ctx))
         except AgentPolicyLimitExceeded as e:

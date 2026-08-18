@@ -16,6 +16,9 @@ objective: |
 
   Never propose a refund above ${{ inputs.max_refund_usd }}.
 
+instructions:
+  - refund-policy.md
+
 inputs:
   ticket_id:
     type: string

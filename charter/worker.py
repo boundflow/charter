@@ -121,7 +121,8 @@ class CharterWorker:
                 memory = AuditMemory(cp) if cfg.memory else None
 
                 served = Served(bundle, version, tools,
-                                Loop(cfg, bundle.runtime, tools, memory))
+                                Loop(cfg, bundle.runtime, tools, memory,
+                                     bundle.instructions.get(version, "")))
                 try:
                     await tools.connect(cfg)
                 except QuarantineError as e:
