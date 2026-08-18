@@ -177,15 +177,7 @@ def _run_apply(run) -> None:
 def _print_compiled(c) -> None:
     w = c.workflow_config
     typer.secho(f"\n{c.name} v{c.version}", bold=True)
-    schedule = (f"every {_duration(w.repeat_every_seconds)}"
-                if w.repeat_every_seconds else "on demand")
-    ui.kv([
-        ("runs", f"{schedule}{'' if w.triggerable else ', no manual runs'}"),
-        ("piled-up invokes", f"{w.invoke_mode.value}"
-                             + (f", max {w.max_queue_depth} queued"
-                                if w.max_queue_depth else "")),
-        ("round deadline", _duration(w.invoke_timeout_seconds)),
-    ], indent="  ")
+    ui.kv(_config_lines(w), indent="  ")
     caps = c.runtime_policy.model_dump(exclude_defaults=True)
     ui.kv([(_snake(k), _fmt(v)) for k, v in sorted(caps.items())], indent="  ")
     for rule in c.workflow_rules:
@@ -400,10 +392,10 @@ def describe(agent: str = typer.Argument(...), tenant: str = TENANT) -> None:
                    ("status", ui.state(wf.workflow_state.value)),
                    ("activity", ui.state(ui.activity(wf.lifecycle_state.value))),
                    ("workflow", wf.id)], indent="  ")
-            # Schedule, invoke mode, queue depth and the round deadline would go
-            # here. GetWorkflow returns the whole workflow_config on the wire, but
-            # WorkflowInfo keeps only `version` (control_plane.py:207) — so there is
-            # no read path for the rest. `charter diff` shows them from your files.
+
+            typer.echo()
+            typer.secho("configuration", fg=typer.colors.BRIGHT_BLACK)
+            ui.kv(_config_lines(wf.config), indent="  ")
             if not ui.working(wf.workflow_state.value):
                 ui.detail("no new tasks will start — charter resume "
                           f"{agent}" if wf.workflow_state.value == "paused" else "")
@@ -572,6 +564,21 @@ def _since(spec: str) -> float:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=dt.timezone.utc)
     return parsed.timestamp()
+
+
+def _config_lines(cfg) -> list[tuple[str, object]]:
+    """The workflow config as a customer reads it. Shared by `describe`, which reads
+    it from the control plane, and `apply --dry-run`, which compiles it from files —
+    so what you're about to apply and what is running are described the same way."""
+    schedule = (f"every {_duration(cfg.repeat_every_seconds)}"
+                if cfg.repeat_every_seconds else "on demand")
+    if not cfg.triggerable:
+        schedule += ", no manual runs"
+    queued = (f", max {cfg.max_queue_depth} queued" if cfg.max_queue_depth
+              else ", server default depth" if cfg.invoke_mode.value == "queue" else "")
+    return [("runs", schedule),
+            ("piled-up invokes", cfg.invoke_mode.value + queued),
+            ("round deadline", _duration(cfg.invoke_timeout_seconds))]
 
 
 def _snake(key: str) -> str:
