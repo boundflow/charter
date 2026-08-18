@@ -1,11 +1,16 @@
 # Charter
 
-**A fleet of AI agents you can actually let near production — without writing any
-code.**
+**An autonomous agent shouldn't just have a prompt and tools. It should have a
+charter** — a defined responsibility, a bounded set of powers, an operational
+budget, and rules for when humans or the platform take control.
 
-Point an agent at your tools, tell it what you want in plain English, and write down
-what it's allowed to do. Charter runs it, stops it at the parts that matter, and
-gives you one place to see what all of them are doing.
+Charter turns that contract into a persistent agent you can deploy and leave
+running in your own environment. It handles escalation and approvals while the
+agent works, and tracks its behavior across many tasks and versions. When its own
+metrics cross the thresholds you set, Charter pauses it, cools it off, or rolls it
+back.
+
+Your agents are config, not code.
 
 ```yaml
 apiVersion: charter/v1
@@ -25,13 +30,6 @@ inputs:
   max_refund_usd: { type: number, default: 100 }
 
 mcp:
-  - name: zendesk
-    command: npx
-    args: ["-y", "@zendesk/mcp"]
-    env: [ZENDESK_API_TOKEN]
-    tools:
-      - tool: get_ticket
-      - tool: close_ticket
   - name: stripe
     url: https://mcp.stripe.com
     env: [STRIPE_API_KEY]
@@ -52,8 +50,8 @@ charter run refund-triage --ticket-id 4821
 ```
 
 The agent reads the ticket and the charge, decides a $240 refund is warranted — and
-stops, because it cannot issue one. A webhook reaches your finance channel with the
-amount and its reasoning. Someone runs:
+stops, because it cannot issue one. Whoever is on call gets the amount and its
+reasoning, and runs:
 
 ```bash
 charter approve apr_01J8Z --agent refund-triage --reason "third dispute this month"
@@ -69,97 +67,156 @@ what it did.
 
 ---
 
-## Why you can trust it with real permissions
+## Bounded powers
 
-**A gated tool is never given to the agent.** `approval: always` doesn't mean
-"stopped when it tries" — the tool is left out of the agent's toolset entirely. It
-can only *name* the tool in a proposal, and a separate step makes the call once a
-human approves. Nothing irreversible runs inside the agent's own loop.
+`approval: always` doesn't mean "stopped when it tries." The tool is **left out of
+the agent's toolset**. It can only name the tool in a proposal, and a separate step
+makes the call once a human approves — so nothing irreversible runs inside the
+agent's own loop. The worker says as much at boot:
 
-**It waits for you, for as long as it takes.** A task that stops for approval is
-checkpointed, not held in memory. It can wait thirty minutes, resume on a completely
-different machine, and still know what it had found, what it spent, and what you
-told it last time. Every agent builder gives you a chat loop; almost none survive
-the human going to lunch.
+```
+mcp stripe: 34 tools available, 2 declared (32 ignored)
+```
 
-**When it gives up, it tells you why.** Not "it tried a lot" — the specific thing
-that went wrong, which is what you'd go fix:
+Tools a server exposes but your config doesn't declare are never shown to the
+model, which is also why a vendor shipping a new tool can't quietly widen what your
+agent can reach.
+
+## An operational budget
+
+Declared per task, and it holds across every round the agent takes and every retry
+underneath:
+
+```yaml
+per_run:
+  max_cost_usd: 0.30
+  max_llm_calls: 40
+  max_drafts: 3             # submissions a human may reject before giving up
+  max_questions: 2          # times it may come back to you before showing you something
+  max_tool_failures: 3      # per tool — a circuit breaker, not an aggregate
+```
+
+When one runs out, the failure names the cause, because that's what you'd go fix:
 
 ```
 a human rejected 3 drafts (max_drafts=3) — the objective or the agent is wrong for this task
-stripe.create_refund failed 3 times (max_tool_failures=3) — the integration looks broken
+stripe__create_refund failed 3 times (max_tool_failures=3) — the integration looks broken
 ```
 
-**Corrections stick.** Rejecting a proposal with a reason isn't just a "no" — the
-reason goes into the agent's next attempt, and into what it remembers on future
-tasks. An agent you correct three times has been corrected three times.
+## Escalation that survives the wait
 
-## Why it works as a fleet
+Two different interruptions. The agent **asks for approval** when it wants to do
+something it isn't allowed to do, and **asks a question** when it doesn't know
+something and won't guess. You answer either from anywhere:
 
-Thirty agents is a different problem from one agent, and it's the one Charter is
-built for.
+```bash
+charter pending refund-triage
+charter approve apr_01J8Z --agent refund-triage --reason "confirmed duplicate"
+charter answer inp_01J8Z "use the March charge" --agent refund-triage
+```
 
-**Agents react to their own history.** Write the rules once; they run without you:
+A parked task is checkpointed, not held in memory. It can wait thirty minutes,
+resume on a different machine, and still know what it found, what it spent, and
+what you told it. Every agent framework gives you a loop; few survive the human
+going to lunch.
+
+Rejecting with a reason isn't just a "no" — the reason goes into the agent's next
+attempt, and into what it remembers on later tasks.
+
+## Rules for when the platform takes control
+
+Written once, applied without you:
 
 ```yaml
 rules:
   - when: { metric: num_failures, threshold: 2 }
-    then: { pause: { window: 5 } }              # hold it, I'll look
+    then: { pause: { window: 5 } }                   # hold it, I'll look
   - when: { metric: cost, threshold: 5.00 }
-    then: { cooldown: { window: 20, seconds: 300 } }
+    then: { cooldown: { window: 20, seconds: 300 } } # back off, then resume
   - when: { metric: approval_rejections, threshold: 3 }
-    then: { set_version: { target: 1 } }        # roll back to what worked
+    then: { set_version: { target: 1 } }             # go back to what worked
 ```
 
-**Rolling back is real.** Configuration is versioned and version files are
-immutable, so `set_version: 1` restores an agent that still exists on disk —
-prompt, tools, gates and all. The thing that changed is a file in git with an
+Rolling back is real because configuration is versioned and version files are
+immutable — `set_version: 1` restores an agent that still exists on disk, prompt
+and tools and gates included. The thing that changed is a file in git with an
 author and a diff.
 
-**The limits you wrote are the limits in force.** No rule ever quietly adjusts a
-cap behind your back. If `runtime.yaml` says $0.30 a task, that's what's enforced,
-and the audit log will show it.
+And the limits you wrote are the limits in force: Charter never sets a BoundFlow
+agent-lifecycle policy, so no rule quietly adjusts a cap behind your back.
+`charter diff` proves it against your files.
 
-**Every decision is recorded.** Who approved what, when, why, and which rule paused
-which agent. Not logs you have to grep — a queryable record, because "prove this
-agent did what you say" is a question that eventually gets asked.
+## You can see all of it
+
+What each agent is doing, and which ones need you:
+
+```
+$ charter agents
+AGENT           VER  STATUS  ACTIVITY
+invoice-chaser  v1   paused  idle
+refund-triage   v1   active  awaiting_approval
+ticket-sweeper  v1   active  idle
+```
+
+What one is allowed to do, and how close its rules are to firing — from credentials
+and a name, no checkout:
+
+```
+$ charter describe refund-triage
+limits per task
+  max_cost_usd    0.25
+  max_llm_calls   20
+
+rules
+  num_failures   1 of 2     -> pause window=5
+  cost           5.2 of 5   -> cooldown window=20 seconds=300
+```
+
+And afterwards, who decided what, in their words, and which rule fired:
+
+```
+$ charter audit refund-triage
+2026-08-18 03:47  approval rejected by dana@example.com
+                  refund-triage: run stripe__create_refund  amount_usd: 240
+                  reason: wrong charge — ch_9001 is the original
+```
 
 ## The files
 
 | file | versioned | what it holds |
 |---|---|---|
 | `agents/<name>/v<N>.yaml` | **yes** | objective, inputs, tools, what counts as done |
-| `agents/<name>/runtime.yaml` | no | per-task limits — spend, drafts, questions, tool failures |
+| `agents/<name>/runtime.yaml` | no | per-task budget and limits |
 | `agents/<name>/lifecycle.yaml` | no | pause / cool down / roll back rules |
 | `worker.yaml` | no | which agents a process runs, where approvals go, pricing |
 
-Only the first is required. One `v1.yaml` and a couple of environment variables is
-a working agent; the rest are things you add when you want them.
+Only the first is required. One `v1.yaml` and a couple of environment variables is a
+working agent; the rest are things you add when you want them.
 
 ## Running it
 
 ```bash
-charter validate .                    # parse and cross-check every file
-charter apply .                       # create/update agents, policies, pricing
-charter worker .                      # the process that runs them
+charter validate .               # parse and cross-check every file
+charter diff .                   # is what's running what you declared?
+charter apply .                  # create or update agents and policy
+charter worker .                 # the process that runs them
 
-charter run <agent> [--flags]         # start a task
-charter tasks <agent>                 # what it's been doing
-charter status <task-id>              # result, cost, tools called, approvals
-charter approve <id> --agent <name> --reason "..."
-charter answer <id> "..." --agent <name>
+charter run <agent> [--flags]    # start a task
+charter agents                   # what every agent is doing
+charter describe <agent>         # limits, rules, what's waiting
+charter tasks <agent> [--failed] # history
+charter status <task-id>         # result, cost, actions taken
+charter pending <agent>          # the open gate
+charter resume <agent>           # release one a rule paused
 ```
-
-Operating an agent needs only its name and your credentials — no repo checkout. The
-person approving a refund at 2am got a webhook, not a git clone.
 
 ## Architecture
 
 Charter is a compiler and a worker, not a service. `charter apply` turns your YAML
-into workflows and policies on a [BoundFlow](https://github.com/boundflow/boundflow)
-control plane; the worker executes them. Charter stores nothing itself — no
-database, no new failure domain, and if Charter vanished your agents would keep
-running.
+into workflows and policy on a [BoundFlow](https://github.com/boundflow/boundflow)
+control plane; the worker runs them in your environment. Charter stores nothing
+itself — no database, no new failure domain, and if Charter vanished your agents
+would keep running.
 
 Inference is bring-your-own. Your model key lives in your environment, and the
 control plane never sees it or your traffic.
@@ -170,12 +227,11 @@ decision, and [examples/](examples/) for complete working files.
 ## Development
 
 ```bash
-python -m venv .venv && .venv/bin/pip install -e '.[dev]'
+python -m venv .venv
+.venv/bin/pip install -e ../convergeplane/sdk/python   # unreleased SDK, for now
+.venv/bin/pip install -e '.[dev]'
 .venv/bin/pytest
 ```
-
-The MCP tests spawn a real server process. The fakes alone once passed happily while
-a field rename made every tool failure look like a success.
 
 End-to-end tests need a control plane and are excluded by default:
 
@@ -185,6 +241,6 @@ export BOUNDFLOW_API_KEY=<from: ... -mode=provision -name=me>
 pytest tests/e2e
 ```
 
-Real control plane, real MCP subprocess, real gates; only the model is faked, so
-they're deterministic and free. Every bug this project has hit came from a
-boundary a fake didn't model, which is what these exist to cover.
+Real control plane, real MCP subprocess, real gates — only the model is faked, so
+they stay deterministic and free. Every bug this project has hit came from a
+boundary a fake didn't model, which is what those exist to cover.
