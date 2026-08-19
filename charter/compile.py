@@ -17,6 +17,8 @@ from boundflow import (
     Cooldown,
     InvokeMode,
     Pause,
+    CapabilityCallLimit,
+    FileRule,
     RuntimePolicy,
     SetVersion,
     ToolCallLimit,
@@ -70,17 +72,22 @@ def compile_workflow_config(cfg: AgentConfig, runtime: RuntimePolicyFile) -> Wor
     )
 
 
-def compile_runtime_policy(runtime: RuntimePolicyFile) -> RuntimePolicy:
-    """Charter's per-run budget becomes BoundFlow's per-invocation cap, verbatim.
+def compile_runtime_policy(cfg: AgentConfig, runtime: RuntimePolicyFile) -> RuntimePolicy:
+    """Everything the worker enforces, from both files, in one policy.
 
-    Not a translation error — it's deliberate double enforcement. Charter also
-    accumulates the real total across loop iterations, so BoundFlow's copy acts as a
-    hard in-worker backstop: a single runaway iteration can't exceed the run budget
-    on its own, and Charter's accumulator catches the sum. Both defend the same
-    declared number.
+    Two sources on purpose. Spend and counts are quantitative and live in
+    `runtime.yaml`, which is re-applied every time and never rolls back. What the
+    agent may *reach* — the capability allowlist and the file rules — is versioned
+    config, so a `set_version` restores the authority that version ran with.
+    They arrive together because the worker needs one object.
 
-    `model` is left unset. The model lives in the versioned config and is passed on
-    AgentDefinition; setting it here would be a second source of truth for it.
+    Charter's per-run budget also becomes BoundFlow's per-invocation cap verbatim.
+    Not a translation error: a gate ends the operation and the next one gets a
+    fresh policy, so Charter passes what's left as a `Budget` while this stands as
+    the in-worker backstop. Both defend the same declared number.
+
+    `model` is left unset. The model lives in the versioned config and is handed to
+    the harness directly; setting it here would be a second source of truth.
     """
     per_run = runtime.per_run
     return RuntimePolicy(
@@ -92,10 +99,24 @@ def compile_runtime_policy(runtime: RuntimePolicyFile) -> RuntimePolicy:
             ToolCallLimit(tool=l.tool, max_calls=l.max_calls)
             for l in per_run.tool_call_limits
         ],
+        # Declared here, enforced by the harness — which is the point. These are the
+        # rules an engineer would otherwise hard-code where the agent is built;
+        # policy arrives with the operation instead, and rolls back with it.
+        capability_call_limits=[
+            CapabilityCallLimit(capability=l.capability, max_calls=l.max_calls)
+            for l in per_run.capability_call_limits
+        ],
+        file_rules=[
+            FileRule(operations=list(r.operations), paths=list(r.paths), mode=r.mode)
+            for r in cfg.file_rules
+        ],
+        allowed_capabilities=list(cfg.allowed_capabilities),
+        # Declared MCP tools are always permitted, so the allowlist only ever has to
+        # name what the *harness* brings. Empty means no allowlist, not "nothing".
+        allowed_tools=cfg.all_tools() if cfg.allowed_capabilities else [],
     )
-    # NOTE: max_drafts / max_questions / max_tool_failures have no BoundFlow
-    # equivalent — the control plane has no view of the loop. The worker enforces
-    # them from task context.
+    # NOTE: max_tool_failures has no BoundFlow equivalent — it becomes a
+    # tool_failure_limits Budget at the call itself, from task context.
 
 
 def compile_workflow_rules(lifecycle: LifecyclePolicyFile | None) -> list[WorkflowRule]:
@@ -133,6 +154,6 @@ def compile_agent(bundle: AgentBundle, version: int | None = None) -> CompiledAg
         name=cfg.name,
         version=cfg.version,
         workflow_config=compile_workflow_config(cfg, bundle.runtime),
-        runtime_policy=compile_runtime_policy(bundle.runtime),
+        runtime_policy=compile_runtime_policy(cfg, bundle.runtime),
         workflow_rules=compile_workflow_rules(bundle.lifecycle),
     )

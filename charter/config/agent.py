@@ -216,6 +216,46 @@ class FieldSpec(Base):
     description: str | None = None
 
 
+# The harness's own vocabulary, deliberately. deepagents groups its filesystem
+# tools into `read` and `write`; `execute` and `spawn` are the two it ships
+# without classifying, so we name those. Matching it exactly means a capability
+# cap and a file rule can't drift into disagreeing about what `write` covers.
+Capability = Literal["read", "write", "execute", "spawn"]
+
+# A file rule only ever concerns the two the filesystem has.
+FileOperation = Literal["read", "write"]
+
+
+class FileRule(Base):
+    """Which files the agent may touch, and whether a human is asked first.
+
+    Versioned, not runtime policy: this changes what the agent can *reach*, so it
+    has to roll back with the agent that reached it.
+
+    The fields mirror the harness's own permission rules one-for-one — same
+    operations, same glob semantics, same first-match-wins ordering — because the
+    harness is what enforces them. Charter's contribution is that they're written
+    down and versioned rather than living in whatever code built the agent.
+    """
+
+    operations: list[FileOperation] = Field(min_length=1)
+    paths: list[str] = Field(min_length=1, description=(
+        "Globs, absolute. Anchor the literal prefix (`/secrets/**`) — a fully "
+        "unanchored pattern makes bulk tools like grep fire conservatively."))
+    mode: Literal["allow", "deny", "interrupt"] = Field(default="allow", description=(
+        "allow: proceeds. deny: the tool returns permission denied. interrupt: "
+        "stops for human approval, durably."))
+
+    @model_validator(mode="after")
+    def _check(self) -> FileRule:
+        for path in self.paths:
+            if not path.startswith("/"):
+                raise ValueError(f"file_rules: path {path!r} must start with '/'")
+            if ".." in PurePosixPath(path).parts:
+                raise ValueError(f"file_rules: path {path!r} must not contain '..'")
+        return self
+
+
 class Gate(Base):
     """How long a human has, and what happens if nobody answers.
 
@@ -341,6 +381,12 @@ class AgentConfig(Base):
     def all_tools(self) -> list[str]:
         """Every declared tool, namespaced."""
         return [t for s in self.mcp for t in s.tool_names]
+
+    @property
+    def file_rules_interrupt(self) -> bool:
+        """Whether any file rule stops for a human. Same question as `gated_tools`
+        asks of MCP tools, and it needs the same notification route."""
+        return any(r.mode == "interrupt" for r in self.file_rules)
 
     @property
     def gated_tools(self) -> list[str]:

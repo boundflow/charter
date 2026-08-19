@@ -76,10 +76,10 @@ class AgentBundle:
     lifecycle: LifecyclePolicyFile | None
     # True when no runtime.yaml was present and defaults were substituted.
     runtime_defaulted: bool = False
-    # version -> the composed text of that version's instruction files. Read here
-    # rather than by the worker so a missing document fails at `charter validate`
-    # instead of a round into the first task.
-    instructions: dict[int, str] = field(default_factory=dict)
+    # version -> that version's skills directory, when it has one. Charter ships
+    # the directory as-is and the harness's own loader reads it, so there is no
+    # manifest here that could drift from what's on disk.
+    skills: dict[int, Path] = field(default_factory=dict)
 
     @property
     def latest(self) -> AgentConfig:
@@ -141,53 +141,48 @@ def load_agent(path: Path) -> AgentBundle:
     if problems:
         raise ConfigError(problems)
 
-    instructions = {}
-    for n, cfg in versions.items():
-        text = _read_instructions(path, n, cfg, problems)
-        if text:
-            instructions[n] = text
+    skills = {}
+    for n in versions:
+        directory = _skills_dir(path, n, problems)
+        if directory is not None:
+            skills[n] = directory
     if problems:
         raise ConfigError(problems)
 
     bundle = AgentBundle(path.name, path, versions, runtime, lifecycle,
                          runtime_defaulted=not runtime_path.exists(),
-                         instructions=instructions)
+                         skills=skills)
     _check_agent(bundle, problems)
     if problems:
         raise ConfigError(problems)
     return bundle
 
 
-def _read_instructions(path: Path, version: int, cfg: AgentConfig,
-                       problems: list[str]) -> str:
-    """Compose a version's instruction files into one block.
+def _skills_dir(path: Path, version: int, problems: list[str]) -> Path | None:
+    """This version's skills, if it has any.
 
-    They live in `v<N>/` beside `v<N>.yaml`, which makes them versioned by the same
-    rule the config is: you don't edit a version, you make a new one. Without that,
-    editing a document in place would leave `set_version` restoring an agent that
+    They live in `v<N>/skills/` beside `v<N>.yaml`, which makes them versioned by
+    the same rule the config is: you don't edit a version, you make a new one.
+    Editing a skill in place would leave `set_version` restoring an agent that
     behaves differently from the one it rolled back to, silently.
 
-    Each file is headed by its own name so the model can tell the documents apart.
+    The layout is the harness's, not ours — one directory per skill, each holding
+    a SKILL.md. An author's existing skills work unchanged, and Charter never
+    parses them; it ships them and lets the harness's own loader read them.
     """
-    if not cfg.instructions:
-        return ""
-
-    directory = path / f"v{version}"
-    parts: list[str] = []
-    for name in cfg.instructions:
-        file = directory / name
-        if not file.is_file():
+    directory = path / f"v{version}" / "skills"
+    if not directory.is_dir():
+        return None
+    named = [d for d in sorted(directory.iterdir()) if d.is_dir()]
+    if not named:
+        problems.append(f"v{version}/skills/ exists but holds no skill directories")
+        return None
+    for skill in named:
+        if not (skill / "SKILL.md").is_file():
             problems.append(
-                f"v{version}.yaml: instructions references {name!r}, "
-                f"but {directory.name}/{name} does not exist")
-            continue
-        text = file.read_text().strip()
-        for ref in template_refs(text):
-            if not ref.startswith("inputs.") or ref.split(".", 1)[1] not in cfg.inputs:
-                problems.append(
-                    f"v{version}/{name}: {{{{ {ref} }}}} is not a declared input")
-        parts.append(f"# {name}\n\n{text}")
-    return "\n\n".join(parts)
+                f"v{version}/skills/{skill.name}/ has no SKILL.md — the harness "
+                "identifies a skill by that file")
+    return directory
 
 
 def _check_agent(b: AgentBundle, problems: list[str]) -> None:

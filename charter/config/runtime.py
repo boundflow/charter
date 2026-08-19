@@ -14,20 +14,13 @@ from typing import Literal
 
 from pydantic import Field, model_validator
 
-from .agent import AGENT_NAME, Base
+from .agent import AGENT_NAME, Base, Capability
 
 
 class ToolCallLimit(Base):
     # Namespaced <server>.<tool>; checked against the agent config by the loader.
     tool: str
     max_calls: int = Field(gt=0)
-
-
-# The harness's own vocabulary, deliberately. deepagents groups its filesystem tools
-# into `read` and `write`; `execute` and `spawn` are the two it ships without
-# classifying, so BoundFlow names those. Matching them exactly means a cap and a
-# file rule can't drift into disagreeing about what `write` covers.
-Capability = Literal["read", "write", "execute", "spawn"]
 
 
 class CapabilityLimit(Base):

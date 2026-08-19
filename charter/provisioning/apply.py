@@ -124,18 +124,15 @@ def _warnings(bundle: AgentBundle, notifications: Notifications | None) -> list[
     if bundle.runtime_defaulted:
         per_run = bundle.runtime.per_run
         out.append(
-            f"no runtime.yaml — using defaults (max_cost_usd={per_run.max_cost_usd}, "
-            f"max_drafts={per_run.max_drafts})")
+            f"no runtime.yaml — using defaults "
+            f"(max_cost_usd={per_run.max_cost_usd}, "
+            f"max_tool_failures={per_run.max_tool_failures})")
 
-    if cfg.gated_tools or cfg.outcome.deliverable_approval == "always":
+    if cfg.gated_tools or cfg.file_rules_interrupt:
         if notifications is None or notifications.resolve(agent, "approval_requested") is None:
             out.append(
                 "gates on approval but no notification route resolves — an approval "
                 "nobody is told about is just a slow timeout")
-
-    if cfg.outcome.ask_human is not None:
-        if notifications is None or notifications.resolve(agent, "input_requested") is None:
-            out.append("can ask a human but no notification route resolves for input_requested")
 
     # A server we connect to but barely use still puts every declared tool's schema
     # in the prompt on every call.

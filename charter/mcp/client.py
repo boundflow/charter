@@ -1,265 +1,204 @@
-"""Connecting to MCP servers and turning their tools into BoundFlow tools.
+"""MCP servers, loaded by the ecosystem adapter and bounded by our config.
 
-One MCP server is one process or endpoint exposing many tools. Charter connects,
-calls `tools/list`, and keeps only what the agent config declares — the config is a
-filter, not a description. Tools the server exposes but the config omits are never
-shown to the model, so a server shipping a new tool in an upgrade cannot silently
-widen an agent's authority.
+Charter used to speak MCP itself — open a session, `tools/list`, dispatch calls,
+unwrap content blocks. All of that is `langchain-mcp-adapters`' job now, and it
+produces exactly the LangChain tools the harness and `ctx.agent_tools()` want.
+Writing it ourselves cost us two bugs a fake couldn't catch: dotted tool names
+that Anthropic rejects, and reading `isError` from an SDK that had renamed it
+`is_error`, which recorded every tool failure as a success.
 
-The load-bearing detail is `_result_text`: MCP reports most tool errors as a
-*successful* JSON-RPC response carrying `isError: true`. Returning that as a value
-would make BoundFlow count a failure as a success — silently disabling
-`on_failure`, `tool_failures` rules, and every failure metric at once. So it raises.
+Two things stay ours, because nothing upstream does them:
+
+**The declaration.** A version names the servers and the tools it uses. Tools the
+server offers but the config didn't declare are never handed to the model, and a
+declared tool the server doesn't expose quarantines the agent rather than failing
+mid-task.
+
+**The ratchet.** `ToolAnnotations` are hints, and the spec is explicit that a
+client shouldn't make trust decisions from them on an untrusted server. But the
+risk is one-directional: a server newly marking something destructive should gate
+it immediately, while a server marking something read-only must not *remove* a
+gate — that's a decision belonging in a file with an author. So annotations may
+only ever tighten.
 """
 
 from __future__ import annotations
 
 import logging
 import os
-from contextlib import AsyncExitStack
 from dataclasses import dataclass, field
 from typing import Any
 
-from boundflow import Tool
-from mcp import ClientSession, StdioServerParameters
-from mcp.client.stdio import stdio_client
-
-from ..config.agent import AgentConfig, McpServer, ToolSpec, split_qualified
+from ..config.agent import AgentConfig, McpServer
 
 log = logging.getLogger(__name__)
 
 
 class McpError(Exception):
-    """A tool call failed. Raised so BoundFlow counts it as a tool failure."""
+    """A tool call failed — the server said so, or the transport did."""
 
 
 class QuarantineError(Exception):
-    """This agent can't run: a declared tool isn't there, or a server won't connect.
+    """This agent version can't be served: a server is unreachable, or doesn't
+    expose something the config declared."""
 
-    Not fatal to the worker — one agent's broken server must not take down the
-    others a worker serves. The agent is marked unhealthy and its tasks fail fast
-    with this reason, which increments num_failures and lets the lifecycle rules
-    pause it automatically.
+
+def approval_for(annotations: Any) -> tuple[str, str]:
+    """What a tool's annotations suggest, and why, in one word each.
+
+    The defaults fall the right way round in the spec: `read_only_hint` defaults
+    to false, and `destructive_hint` defaults to **true** when a tool isn't
+    read-only. A server that says nothing is treated as dangerous.
+
+    Accepts the adapter's metadata dict (camelCase, as MCP puts it on the wire) or
+    anything with the snake_case attributes, since `charter import` and the loader
+    reach this from different directions.
     """
+    def hint(camel: str, snake: str) -> Any:
+        if isinstance(annotations, dict):
+            return annotations.get(camel)
+        return getattr(annotations, snake, None)
+
+    if annotations is None:
+        return "always", "unannotated"
+    if hint("readOnlyHint", "read_only_hint"):
+        return "never", "read_only"
+    if hint("destructiveHint", "destructive_hint") is False:
+        return "always", "non_destructive"
+    return "always", "destructive"
 
 
-def _attr(obj: Any, *names: str, default: Any = None) -> Any:
-    """First present attribute. MCP 2.0 renamed fields to snake_case (`is_error`,
-    `input_schema`); 1.x used camelCase. Reading both keeps us honest across a
-    version bump rather than silently seeing None — which for `is_error` would mean
-    treating every failure as a success."""
-    for name in names:
-        value = getattr(obj, name, None)
-        if value is not None:
-            return value
-    return default
+def _connection(spec: McpServer) -> dict:
+    """One server in the adapter's connection vocabulary.
 
-
-def _result_text(result: Any, qualified: str) -> str:
-    """A CallToolResult as text, raising on the two ways MCP reports failure."""
-    if _attr(result, "is_error", "isError", default=False):
-        raise McpError(f"{qualified}: {_content_text(result) or 'tool reported an error'}")
-    return _content_text(result)
-
-
-def _content_text(result: Any) -> str:
-    parts: list[str] = []
-    for block in getattr(result, "content", None) or []:
-        text = getattr(block, "text", None)
-        if text is not None:
-            parts.append(text)
-        else:
-            # Non-text content (images, embedded resources) — keep the type so the
-            # model knows something came back rather than seeing an empty string.
-            parts.append(f"[{getattr(block, 'type', 'content')}]")
-    return "\n".join(parts)
+    `env` names variables to pass through rather than carrying values, so a config
+    file never holds a credential. A name that isn't set is dropped rather than
+    passed as empty, which fails at the server with a clearer message than an
+    empty key would.
+    """
+    if spec.command:
+        env = {name: os.environ[name] for name in spec.env if name in os.environ}
+        return {"transport": "stdio", "command": spec.command,
+                "args": list(spec.args), **({"env": env} if env else {})}
+    return {"transport": "streamable_http", "url": spec.url}
 
 
 @dataclass
-class Connection:
-    """One connected MCP server."""
+class Server:
+    """One declared server, once its tools are loaded."""
 
     spec: McpServer
-    session: ClientSession
-    available: dict[str, Any] = field(default_factory=dict)  # tool name -> MCP Tool
-
+    tools: dict[str, Any] = field(default_factory=dict)   # bare name -> LangChain tool
     # Tools the server's annotations gated beyond what the config asked for.
     tightened: dict[str, str] = field(default_factory=dict)
-
-    async def discover(self) -> None:
-        listed = await self.session.list_tools()
-        self.available = {t.name: t for t in listed.tools}
-        self._apply_annotations()
-
-        declared = {t.tool for t in self.spec.tools}
-        missing = sorted(declared - self.available.keys())
-        if missing:
-            raise QuarantineError(
-                f"mcp server {self.spec.name!r} does not expose declared tool(s): "
-                f"{', '.join(missing)}")
-
-        extra = len(self.available) - len(declared)
-        if extra > 0:
-            # Not an error: being strict here would break every agent whenever an
-            # upstream server ships a release. They're simply never shown to the model.
-            log.info("mcp %s: %d tools available, %d declared (%d ignored)",
-                     self.spec.name, len(self.available), len(declared), extra)
-
-    def _apply_annotations(self) -> None:
-        """Resolve each declared tool's approval, honouring the server's hints.
-
-        A ratchet: annotations may only ever *add* a gate. If a server marks
-        something destructive, that applies at the next boot with no deploy — which
-        is what you want. If it marks something read-only, nothing happens, because
-        removing a gate is a decision that belongs in a file with an author.
-        """
-        rules = self.spec.approval
-        for declared in self.spec.tools:
-            if declared.approval is not None:
-                continue                      # explicit config always wins
-            if rules is None:
-                continue                      # no rules: the `never` default stands
-            tool = self.available.get(declared.tool)
-            suggested, why = approval_for(tool) if tool is not None else ("always", "unknown")
-            wanted = rules.read_only if suggested == "never" else rules.default
-            if wanted == "always":
-                self.tightened[declared.tool] = why
-                log.info("mcp %s: %s gated by policy (%s)",
-                         self.spec.name, declared.tool, why)
 
     def gated(self, tool: str) -> bool:
         declared = next(t for t in self.spec.tools if t.tool == tool)
         return declared.gated or tool in self.tightened
 
-    async def call(self, tool: str, args: dict | None) -> str:
-        qualified = self.spec.qualified(tool)
-        try:
-            result = await self.session.call_tool(tool, args or {})
-        except Exception as e:  # transport/protocol failure, as opposed to isError
-            raise McpError(f"{qualified}: {type(e).__name__}: {e}") from e
-        return _result_text(result, qualified)
-
-    def properties(self, tool: str) -> dict:
-        """The tool's argument schema in the shape BoundFlow's Tool wants — its
-        `input_schema` is the properties map, which the SDK wraps as
-        {"type": "object", "properties": ...}.
-
-        `required` has nowhere to go in that shape, so it's folded into each
-        argument's description instead of being dropped.
-        """
-        schema = _attr(self.available[tool], "input_schema", "inputSchema", default={})
-        props = dict(schema.get("properties") or {})
-        for name in schema.get("required") or []:
-            if name in props:
-                prop = dict(props[name])
-                desc = prop.get("description", "")
-                prop["description"] = f"{desc} (required)".strip()
-                props[name] = prop
-        return props
-
-    def description(self, tool: str) -> str:
-        return getattr(self.available[tool], "description", None) or tool
-
-
-async def probe(*, command: str = "", args: list[str] | None = None,
-                url: str = "", env: list[str] | None = None) -> list[Any]:
-    """Connect to a server and return its tools, without a config to filter by.
-
-    `charter import` needs this before an agent exists — the ToolSet path validates
-    declared tools against what the server offers, which is exactly the list you're
-    trying to obtain.
-    """
-    spec = McpServer(name="probe", command=command or None, args=args or [],
-                     url=url or None, env=env or [],
-                     tools=[ToolSpec(tool="placeholder")])
-    ts = ToolSet()
-    try:
-        session = await ts._open(spec)
-        listed = await session.list_tools()
-        return list(listed.tools)
-    finally:
-        await ts.aclose()
-
-
-def approval_for(tool: Any) -> tuple[str, str]:
-    """What a server's annotations suggest for a tool, and why.
-
-    Hints, not guarantees — the MCP spec is explicit that a client shouldn't make
-    tool-use decisions from them on an untrusted server. Good enough to draft a
-    config a human then reviews; the committed file stays the authority.
-
-    The defaults fall the safe way: read_only_hint defaults false, and
-    destructive_hint defaults true when a tool isn't read-only, so a server that
-    says nothing is treated as dangerous.
-    """
-    ann = getattr(tool, "annotations", None)
-    if ann is None:
-        return "always", "unannotated"
-    if getattr(ann, "read_only_hint", None) is True:
-        return "never", "read_only_hint"
-    if getattr(ann, "destructive_hint", None) is False:
-        return "always", "additive but not read-only"
-    return "always", "destructive_hint"
-
 
 class ToolSet:
-    """Every MCP server one agent version needs, connected.
+    """Every MCP tool one agent version may use, loaded once at boot.
 
-    Splits the declared tools two ways, which is where `approval` stops being a
-    config value and becomes structure:
-
-    - `inline` are handed to the model as BoundFlow tools and called inside the loop.
-    - `gated` are NOT — the model never receives them and can only name one in a
-      proposal. They're invoked from `execute_act`, after a human approves.
+    The adapter manages sessions per call, so there's no connection to hold open
+    or lose — at the cost of a stdio server being spawned per call. Worth knowing
+    before pointing an agent at a slow-starting local server; an HTTP server has
+    no such cost.
     """
 
     def __init__(self) -> None:
-        self._stack = AsyncExitStack()
-        self._connections: dict[str, Connection] = {}
+        self.servers: dict[str, Server] = {}
+        self._client: Any = None
 
     async def connect(self, cfg: AgentConfig) -> None:
-        """Connect every server the config declares. Raises QuarantineError if any
-        server won't start or is missing a declared tool."""
+        """Load every declared server's tools, or quarantine the agent."""
+        if not cfg.mcp:
+            return
+        from langchain_mcp_adapters.client import MultiServerMCPClient
+
+        # Never `tool_name_prefix=True`: the adapter joins with a single underscore,
+        # so a server named `desk_get` with a tool `ticket` collides with `desk` and
+        # `get_ticket`. Charter's `__` is unambiguous, and it's already baked into
+        # tool_call_limits and lifecycle rules.
+        self._client = MultiServerMCPClient(
+            {s.name: _connection(s) for s in cfg.mcp})
+
+        # Asked per server rather than all at once: get_tools() flattens every
+        # server's tools into one list of bare names, and we need to know which
+        # server offered what to namespace it and to check the declaration.
+        by_server = await self._by_server(cfg)
+
+        for spec in cfg.mcp:
+            available = by_server[spec.name]
+            declared = {t.tool for t in spec.tools}
+            if missing := sorted(declared - available.keys()):
+                raise QuarantineError(
+                    f"mcp server {spec.name!r} does not expose declared tool(s): "
+                    f"{', '.join(missing)}")
+
+            if extra := len(available) - len(declared):
+                # Not an error: being strict would break every agent whenever an
+                # upstream server ships a release. They're simply never declared,
+                # so the model never sees them.
+                log.info("mcp %s: %d available, %d declared (%d ignored)",
+                         spec.name, len(available), len(declared), extra)
+
+            server = Server(spec=spec, tools={n: t for n, t in available.items()
+                                              if n in declared})
+            self._ratchet(server, available)
+            self.servers[spec.name] = server
+
+    async def _by_server(self, cfg: AgentConfig) -> dict[str, dict[str, Any]]:
+        """Tools grouped by the server that offers them."""
+        out: dict[str, dict[str, Any]] = {}
         for spec in cfg.mcp:
             try:
-                session = await self._open(spec)
-            except QuarantineError:
-                raise
-            except Exception as e:  # noqa: BLE001
-                raise QuarantineError(
-                    f"mcp server {spec.name!r} failed to connect: {type(e).__name__}: {e}"
-                ) from e
-            conn = Connection(spec, session)
-            await conn.discover()
-            self._connections[spec.name] = conn
+                tools = await self._client.get_tools(server_name=spec.name)
+            except Exception as e:
+                raise QuarantineError(f"mcp server {spec.name!r}: {e}") from e
+            out[spec.name] = {t.name: t for t in tools}
+        return out
 
-    async def _open(self, spec: McpServer) -> ClientSession:
-        if spec.command:
-            missing = [n for n in spec.env if n not in os.environ]
-            if missing:
-                raise QuarantineError(
-                    f"mcp server {spec.name!r} needs {', '.join(missing)} in the "
-                    f"worker's environment")
-            params = StdioServerParameters(
-                command=spec.command,
-                args=list(spec.args),
-                # Only the declared variables are passed through — a server gets the
-                # credentials it was given, not the worker's whole environment.
-                env={n: os.environ[n] for n in spec.env} or None,
-            )
-            read, write = await self._stack.enter_async_context(stdio_client(params))
-        else:
-            from mcp.client.streamable_http import streamablehttp_client
+    def _ratchet(self, server: Server, available: dict[str, Any]) -> None:
+        """Resolve each declared tool's approval, honouring the server's hints —
+        upward only. Explicit config always wins; a server can make an agent safer
+        without a deploy, but never less safe."""
+        rules = server.spec.approval
+        for declared in server.spec.tools:
+            if declared.approval is not None or rules is None:
+                continue
+            tool = available.get(declared.tool)
+            suggested, why = approval_for(getattr(tool, "metadata", None))
+            wanted = rules.read_only if suggested == "never" else rules.default
+            if wanted == "always":
+                server.tightened[declared.tool] = why
+                log.info("mcp %s: %s gated by policy (%s)",
+                         server.spec.name, declared.tool, why)
 
-            read, write, _ = await self._stack.enter_async_context(
-                streamablehttp_client(spec.url))
+    def langchain_tools(self) -> list:
+        """Every declared tool, renamed to `server__tool` and ready for the harness.
 
-        session = await self._stack.enter_async_context(ClientSession(read, write))
-        await session.initialize()
-        return session
+        Renaming rather than wrapping: the harness, the governor's per-tool caps,
+        and lifecycle rules all key on the name the model sees, so there must be
+        exactly one spelling of it.
+        """
+        out = []
+        for server in self.servers.values():
+            for name, tool in server.tools.items():
+                tool.name = server.spec.qualified(name)
+                out.append(tool)
+        return out
+
+    def gated_tools(self) -> list[str]:
+        """Declared tools whose call stops for a human, namespaced.
+
+        Resolved from config *and* the ratchet, so it includes tools a server's
+        annotations gated after the config was written."""
+        return [s.spec.qualified(t) for s in self.servers.values()
+                for t in s.tools if s.gated(t)]
 
     async def aclose(self) -> None:
-        await self._stack.aclose()
+        self._client = None
 
     async def __aenter__(self) -> ToolSet:
         return self
@@ -267,48 +206,21 @@ class ToolSet:
     async def __aexit__(self, *exc) -> None:
         await self.aclose()
 
-    # ── What the worker builds an agent from ────────────────────────────────
 
-    def inline_tools(self, cfg: AgentConfig) -> list[Tool]:
-        """BoundFlow tools for everything the model is allowed to call itself."""
-        tools: list[Tool] = []
-        for spec in cfg.mcp:
-            conn = self._connections[spec.name]
-            for declared in spec.tools:
-                if conn.gated(declared.tool):
-                    continue  # proposal-only; never handed to the model
-                tools.append(self._as_tool(conn, declared.tool))
-        return tools
+async def probe(*, command: str = "", args: list[str] | None = None,
+                url: str = "", env: list[str] | None = None) -> list:
+    """Every tool a server offers, for `charter import`. No config needed — this
+    runs before there is one."""
+    from langchain_mcp_adapters.client import MultiServerMCPClient
 
-    def gated_tools(self, cfg: AgentConfig) -> list[str]:
-        """Qualified names the model may propose but never call — config plus
-        anything the servers' annotations tightened at boot."""
-        return [spec.qualified(t.tool) for spec in cfg.mcp
-                for t in spec.tools if self._connections[spec.name].gated(t.tool)]
+    if command:
+        passthrough = {n: os.environ[n] for n in (env or []) if n in os.environ}
+        conn = {"transport": "stdio", "command": command, "args": list(args or []),
+                **({"env": passthrough} if passthrough else {})}
+    else:
+        conn = {"transport": "streamable_http", "url": url}
 
-    def _as_tool(self, conn: Connection, tool: str) -> Tool:
-        qualified = conn.spec.qualified(tool)
-
-        async def handler(args: dict) -> str:
-            return await conn.call(tool, args)
-
-        return Tool(
-            name=qualified,
-            description=conn.description(tool),
-            handler=handler,
-            input_schema=conn.properties(tool),
-        )
-
-    async def call_gated(self, qualified: str, args: dict | None) -> str:
-        """Invoke an approval-gated tool. Called from `execute_act` only, after a
-        human has approved — never from inside the agent loop."""
-        server, tool = split_qualified(qualified)
-        conn = self._connections.get(server)
-        if conn is None:
-            raise McpError(f"{qualified}: no such server")
-        declared = next((t for t in conn.spec.tools if t.tool == tool), None)
-        if declared is None:
-            raise McpError(f"{qualified}: not declared by this agent")
-        if not conn.gated(tool):
-            raise McpError(f"{qualified}: not an approval-gated tool")
-        return await conn.call(tool, args)
+    try:
+        return await MultiServerMCPClient({"probe": conn}).get_tools()
+    except Exception as e:
+        raise QuarantineError(f"mcp: {e}") from e
