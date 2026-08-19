@@ -1,37 +1,34 @@
 apiVersion: charter/v1
 kind: Worker
-
 name: playground
-
 control_plane:
   endpoint: ${BOUNDFLOW_SERVER_ADDRESS}
   api_key: ${BOUNDFLOW_API_KEY}
   tenant: default
-
 llm:
   provider: anthropic
   api_key: ${ANTHROPIC_API_KEY}
-
-# The agent's conversation and files between rounds. Yours, not the control
-# plane's — what lands here is prompts and whatever the agent touched.
 store:
   url: ${CHARTER_STORE_URL}
-
 agents_dir: ./
-
 serves:
-  - agent: refund-demo
-    versions: [1]
-  - agent: ticket-sweeper
-    versions: [1]
-
+- agent: refund-demo
+  versions:
+  - 1
+- agent: ticket-sweeper
+  versions:
+  - 1
+- agent: delegator
+  versions:
+  - 1
 model_pricing:
-  claude-haiku-4-5: { input: 0.80, output: 4.00 }
-
+  claude-haiku-4-5:
+    input: 0.8
+    output: 4.0
 notifications:
   channels:
-    - name: terminal
-      kind: webhook
-      url: http://localhost:8899
+  - name: terminal
+    kind: webhook
+    url: http://localhost:8899
   routes:
-    - channel: terminal
+  - channel: terminal

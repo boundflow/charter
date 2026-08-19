@@ -1,0 +1,33 @@
+apiVersion: charter/v1
+kind: AgentConfig
+
+name: delegator
+version: 1
+description: Spawns subagents, so their governance can be watched.
+
+model: claude-haiku-4-5
+
+objective: |
+  Summarise every open ticket.
+
+  Do it by delegating: call the `task` tool once per ticket, giving each subagent
+  the ticket id and asking it to fetch that ticket and describe it in one line.
+  Do not fetch the tickets yourself — the point of this agent is the delegation.
+
+  When the subagents come back, collect their answers into one summary.
+
+mcp:
+  - name: desk
+    command: python
+    args: ["mcp_server.py"]
+    tools:
+      - tool: list_open_tickets
+      - tool: get_ticket
+
+response_format:
+  summary:
+    type: string
+    description: One line per ticket.
+  delegated_to:
+    type: integer
+    description: How many subagents you used.

@@ -1,0 +1,16 @@
+apiVersion: charter/v1
+kind: RuntimePolicy
+
+agent: delegator
+
+per_run:
+  max_cost_usd: 0.50
+  max_llm_calls: 40
+  # Generous for the first run: the question is whether a subagent runs and gets
+  # metered at all, not whether it can be stopped.
+  max_total_subagents: 3
+  max_parallel_subagents: 3
+
+limits:
+  max_tokens_per_call: 2048
+  max_call_seconds: 90
