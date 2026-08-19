@@ -23,23 +23,44 @@ class ToolCallLimit(Base):
     max_calls: int = Field(gt=0)
 
 
+# The harness's own vocabulary, deliberately. deepagents groups its filesystem tools
+# into `read` and `write`; `execute` and `spawn` are the two it ships without
+# classifying, so BoundFlow names those. Matching them exactly means a cap and a
+# file rule can't drift into disagreeing about what `write` covers.
+Capability = Literal["read", "write", "execute", "spawn"]
+
+
+class CapabilityLimit(Base):
+    """A cap on how many times the agent may do a *kind* of thing.
+
+    Capping a tool doesn't hold when the harness ships three ways to do the same
+    thing: cap `write_file` and the agent reaches for `edit_file`. `write` covers
+    both, plus `delete`, and keeps covering whatever the next release adds.
+
+    This is the only harness limit that lives here, because it's the only one that's
+    purely quantitative. What the agent may *reach* — file rules, the capability
+    allowlist — is versioned config, so it rolls back with the agent.
+    """
+
+    capability: Capability = Field(description=(
+        "read (ls, read_file, glob, grep) | write (write_file, edit_file, delete) | "
+        "execute (shell) | spawn (subagents)"))
+    max_calls: int = Field(gt=0, description="Calls of this kind allowed in one task.")
+
+
 class PerRun(Base):
-    """Limits on one task — one `charter run`, however much back-and-forth it takes.
+    """Limits on one task — one `charter run`, however long the agent takes and
+    however many times it stops for a human.
 
-    Two kinds. `max_cost_usd` and `max_llm_calls` are *spend*: Charter passes what's
-    left to each agent step as a `Budget`, so BoundFlow's per-step cap can't reset
-    its way past the declared total.
+    Spend is the reason this file exists. Nothing in the harness knows what a dollar
+    is, so `max_cost_usd` and `max_llm_calls` are the caps only Charter can enforce,
+    and they bound the whole task rather than one step of it.
 
-    The rest bound *not converging*, and each names a distinct cause, so the failure
-    an operator reads says which one happened:
-
-      max_drafts         you kept rejecting  -> the agent or the objective is wrong
-      max_questions      it kept asking      -> it lacks the context to do this
-      max_tool_failures  a tool kept failing -> the integration is broken
-
-    There is deliberately no user-facing round or iteration count. "It went round six
-    times" is an implementation detail that diagnoses nothing; these three each point
-    at something you can act on.
+    The rest are declared here and enforced by the harness's own mechanisms, so they
+    are versioned policy rather than something hard-coded wherever the agent was
+    built. `max_tool_failures` is the exception that stays ours: a repeatedly failing
+    integration has no harness equivalent, and it should trip its own breaker rather
+    than quietly burning the budget.
     """
 
     max_cost_usd: float = Field(default=0.0, ge=0.0, description=(
@@ -47,17 +68,8 @@ class PerRun(Base):
     max_llm_calls: int = Field(default=0, ge=0, description=(
         "Total model calls for one task. One round makes several."))
     tool_call_limits: list[ToolCallLimit] = Field(default_factory=list)
+    capability_call_limits: list[CapabilityLimit] = Field(default_factory=list)
 
-    # Submissions a human may reject before the task is given up on. An approved
-    # act does not count — you accepted that one; the agent is drafting the next.
-    max_drafts: int = Field(default=3, gt=0, description=(
-        "Submissions a human may reject before the task gives up. An approved "
-        "act does not count — you accepted that one."))
-    # Questions the agent may ask before it must show you something. Resets after
-    # each draft, so a rejection earns it a fresh allowance rather than a dead end.
-    max_questions: int = Field(default=2, gt=0, description=(
-        "Questions the agent may ask before it must show you something. Resets "
-        "after each draft."))
     # Failures of any ONE tool before the task gives up — a circuit breaker, per
     # tool rather than in aggregate, so the failure message names the broken thing.
     max_tool_failures: int = Field(default=3, gt=0, description=(
@@ -77,6 +89,9 @@ class PerRun(Base):
         seen = {l.tool for l in self.tool_call_limits}
         if len(seen) != len(self.tool_call_limits):
             raise ValueError("duplicate tool in tool_call_limits")
+        caps = {l.capability for l in self.capability_call_limits}
+        if len(caps) != len(self.capability_call_limits):
+            raise ValueError("duplicate capability in capability_call_limits")
         return self
 
 

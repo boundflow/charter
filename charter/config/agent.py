@@ -12,14 +12,15 @@ in the loader — see `charter.config.loader`.
 from __future__ import annotations
 
 import re
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 # Charter injects these branches into the agent's output schema; an author's own
-# deliverable fields must not collide with them.
-RESERVED_OUTPUT_FIELDS = frozenset({"propose", "ask_human"})
+# Charter no longer injects fields of its own into the model's output, so there is
+# nothing for a response_format field to collide with.
+RESERVED_OUTPUT_FIELDS: frozenset[str] = frozenset()
 
 # The only templating Charter supports: {{ inputs.<name> }}, no expressions.
 TEMPLATE_REF = re.compile(r"\{\{\s*([a-zA-Z0-9_.]+)\s*\}\}")
@@ -215,80 +216,22 @@ class FieldSpec(Base):
     description: str | None = None
 
 
-class ApprovalSpec(Base):
-    """How an approval gate behaves. Not what it says — the approver is always shown
-    the proposed tool, its arguments, and the agent's own justification, and that
-    rendering is Charter's. Only `note` is authored, so a gate cannot be written
-    with the amount left out."""
+class Gate(Base):
+    """How long a human has, and what happens if nobody answers.
 
-    timeout_seconds: int = Field(default=1800, gt=0)
-    on_timeout: Literal["reject", "fail"] = "reject"
-    note: str | None = None
-
-
-# How eager the agent should be to ask, as prompt language rather than a number.
-# Charter owns the wording so it's consistent and testable, and so an author can't
-# accidentally write something weaker than they meant.
-ASK_POSTURE = {
-    "rarely": (
-        "Only ask a human when you are genuinely blocked — when you cannot make "
-        "progress at all without an answer. Prefer investigating with your tools "
-        "first. An unnecessary question wastes someone's time."),
-    "balanced": (
-        "Ask a human when something material is ambiguous and you cannot resolve it "
-        "with your tools. Do not ask about things you can look up, and do not guess "
-        "about things you cannot."),
-    "eagerly": (
-        "When in doubt, ask. Being wrong here is more costly than asking an extra "
-        "question, so raise anything you are unsure about rather than deciding it "
-        "yourself."),
-}
-
-
-class AskHumanSpec(Base):
-    """The reasoning escape hatch: the agent is stuck, so it asks a person rather
-    than guessing, folds the answer into history, and tries again.
-
-    There is deliberately no `prompt` — the question comes from the agent at
-    runtime, because you can't know in advance what it will get stuck on.
-
-    `when` shapes a tendency through prompt language. There is no self-reported
-    confidence score anywhere: a model's opinion of its own certainty is poorly
-    calibrated — a confidently wrong answer reports high — so it isn't wired to
-    anything. How many questions it may ask is a limit, and lives in runtime.yaml.
+    Charter no longer decides *when* to stop — the harness does, via a tool's
+    `approval` or a `file_rules` interrupt. What Charter supplies is the waiting:
+    the harness raises an in-process interrupt that dies with the worker, and we
+    turn it into a durable gate that survives one.
     """
 
-    timeout_seconds: int = Field(default=240, gt=0)
-    on_timeout: Literal["continue", "fail"] = "continue"
-    # Prompt guidance. A tendency, not a guarantee. How MANY questions it may ask
-    # is `per_run.max_questions` in runtime.yaml — a limit, not a behaviour, so it
-    # belongs with the other limits.
-    when: Literal["rarely", "balanced", "eagerly"] = "balanced"
+    timeout_seconds: int = Field(default=1800, gt=0, description=(
+        "How long a human has before the action is refused on their behalf."))
 
-    @property
-    def guidance(self) -> str:
-        return ASK_POSTURE[self.when]
-
-
-class AuditMemory(Base):
-    """Memory derived from the governance audit log — no store, no embeddings, no
-    extraction pass. Every row is a human judgment about this specific agent, which
-    is higher-signal than summarized conversation history and, unlike an embedding
-    index, exactly inspectable: `charter memory <agent>` prints the text verbatim.
-
-    Only covers memory of human judgments about the agent. Memory of the *world*
-    (documents, customer history, semantic recall) is an MCP server with a read tool
-    and a write tool, governed like any other.
-    """
-
-    # Recent rejected proposals and the reason given. Requires something to gate.
-    rejections: int = Field(default=0, ge=0, le=50)
-    # Recent answers a human gave to the agent's own questions. Requires ask_human.
-    answers: int = Field(default=0, ge=0, le=50)
-
-
-class Memory(Base):
-    from_audit: AuditMemory | None = None
+    # No `on_timeout`: `AwaitApproval` has approve and reject branches and nothing
+    # else, so an unanswered gate is a rejection. Saying otherwise in config would
+    # promise a behaviour the control plane can't express — and a silent rejection
+    # is the safe direction for a gate to fail in anyway.
 
 
 class Schedule(Base):
@@ -321,29 +264,6 @@ class Schedule(Base):
         return self
 
 
-class Outcome(Base):
-    """The three ways a task can leave the agent loop.
-
-    Only a deliverable ends a task. An approved act is a step: the tool runs, its
-    result folds into history, and the loop re-enters — so the agent can act again
-    and always gets to report what it did.
-    """
-
-    deliverable: dict[str, FieldSpec] = Field(min_length=1)
-    deliverable_approval: Literal["never", "always"] = "never"
-    approval: ApprovalSpec | None = None
-    ask_human: AskHumanSpec | None = None
-
-    @model_validator(mode="after")
-    def _check(self) -> Outcome:
-        collisions = RESERVED_OUTPUT_FIELDS & self.deliverable.keys()
-        if collisions:
-            raise ValueError(
-                f"deliverable fields {sorted(collisions)} are reserved — Charter "
-                "injects them into the agent's output schema")
-        return self
-
-
 class AgentConfig(Base):
     apiVersion: Literal["charter/v1"]
     kind: Literal["AgentConfig"]
@@ -360,36 +280,35 @@ class AgentConfig(Base):
         "prompt. Supports {{ inputs.<name> }} and nothing else."))
 
     inputs: dict[str, InputSpec] = Field(default_factory=dict)
-    # Markdown the agent works from — a refund policy, an escalation matrix, worked
-    # examples. Resolved from `v<N>/` beside this file, so instructions are
-    # versioned with the agent that reads them: `set_version: 1` restores the exact
-    # prompt v1 ran with, and editing a version's document in place is the same
-    # mistake as editing its yaml.
-    instructions: list[str] = Field(default_factory=list)
     schedule: Schedule | None = None
     mcp: list[McpServer] = Field(default_factory=list)
-    outcome: Outcome
-    memory: Memory | None = None
+    # Structured output, handed to the harness as its response format. Omit and the
+    # agent answers in prose, which is what most agents want.
+    response_format: dict[str, FieldSpec] | None = None
+    gate: Gate = Field(default_factory=Gate)
+
+    # What the agent may do beyond the tools it declared. The harness ships its own
+    # filesystem, so these bound it. Empty `allowed_capabilities` means no allowlist
+    # rather than "nothing allowed" — a field that silently forbade everything the
+    # moment someone added it would be a bad default.
+    allowed_capabilities: list[Capability] = Field(default_factory=list, description=(
+        "Default-deny allowlist over the harness's own tools. read | write | "
+        "execute | spawn. Empty means unrestricted; declared MCP tools are always "
+        "permitted."))
+    file_rules: list[FileRule] = Field(default_factory=list)
+
+    # Skills are not declared here. Anything under `v<N>/skills/` is shipped to the
+    # agent's store and handed to the harness's own loader, so an author's existing
+    # SKILL.md directories work unchanged and the config stays free of a manifest
+    # that could drift from what's on disk. Versioning comes from `v<N>/` being
+    # immutable, same as the yaml.
 
     @model_validator(mode="after")
     def _check(self) -> AgentConfig:
         self._check_servers_unique()
         self._check_templates()
-        self._check_gates()
-        self._check_memory()
-        self._check_instructions()
         self._check_schedule()
         return self
-
-    def _check_instructions(self) -> None:
-        for name in self.instructions:
-            if name.startswith("/") or ".." in Path(name).parts:
-                raise ValueError(
-                    f"instructions: {name!r} must be a plain filename under v{self.version}/")
-            if not name.endswith(".md"):
-                raise ValueError(f"instructions: {name!r} should be a .md file")
-        if len(set(self.instructions)) != len(self.instructions):
-            raise ValueError("instructions: duplicate file")
 
     def _check_schedule(self) -> None:
         if self.schedule and self.inputs:
@@ -409,9 +328,6 @@ class AgentConfig(Base):
         """Only {{ inputs.<name> }}, and only for inputs that exist. An undeclared
         reference is a mistake we can catch now instead of at task time."""
         sources = [("objective", self.objective)]
-        if self.outcome.approval and self.outcome.approval.note:
-            sources.append(("outcome.approval.note", self.outcome.approval.note))
-
         for where, text in sources:
             for ref in template_refs(text):
                 if not ref.startswith("inputs."):
@@ -422,52 +338,14 @@ class AgentConfig(Base):
                 if key not in self.inputs:
                     raise ValueError(f"{where}: {{{{ {ref} }}}} is not a declared input")
 
-    def _check_gates(self) -> None:
-        """An `approval` block is required exactly when something can gate, and
-        forbidden otherwise — a mutating tool with no gate configured would be a
-        silent hole, and a gate configured for an agent that never gates is dead
-        config that reads as protection."""
-        gates = bool(self.gated_tools) or self.outcome.deliverable_approval == "always"
-        if gates and self.outcome.approval is None:
-            raise ValueError(
-                "outcome.approval is required: "
-                + ("tools with `approval: always`" if self.gated_tools else "")
-                + (" and " if self.gated_tools and self.outcome.deliverable_approval == "always" else "")
-                + ("`deliverable_approval: always`" if self.outcome.deliverable_approval == "always" else "")
-                + " need a gate to be configured")
-        if not gates and self.outcome.approval is not None:
-            raise ValueError(
-                "outcome.approval is set but nothing gates — no tool declares "
-                "`approval: always` and `deliverable_approval` is `never`")
-
-    def _check_memory(self) -> None:
-        """Audit memory can only recall what the audit log holds. An agent with no
-        gates never accrues rejections; one that can't ask never accrues answers.
-        Configuring either would read as memory the agent doesn't have."""
-        audit = self.memory.from_audit if self.memory else None
-        if audit is None:
-            return
-        gates = bool(self.gated_tools) or self.outcome.deliverable_approval == "always"
-        if audit.rejections and not gates:
-            raise ValueError(
-                "memory.from_audit.rejections needs something to gate — no tool "
-                "declares `approval: always` and `deliverable_approval` is `never`, "
-                "so this agent is never rejected")
-        if audit.answers and self.outcome.ask_human is None:
-            raise ValueError(
-                "memory.from_audit.answers needs `outcome.ask_human` — this agent "
-                "cannot ask, so no answers are ever recorded")
-
-    # ── Derived views the compiler and worker read ──────────────────────────
-
-    @property
     def all_tools(self) -> list[str]:
         """Every declared tool, namespaced."""
         return [t for s in self.mcp for t in s.tool_names]
 
     @property
     def gated_tools(self) -> list[str]:
-        """Tools the model never receives and can only propose."""
+        """Tools whose call stops for a human. They are still handed to the model —
+        the harness interrupts at the call rather than hiding the capability."""
         return [s.qualified(t.tool) for s in self.mcp for t in s.tools if t.gated]
 
     @property

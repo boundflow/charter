@@ -10,3 +10,4 @@ dist/
 .mypy_cache/
 .DS_Store
 .env
+*.bak

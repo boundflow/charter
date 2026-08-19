@@ -25,10 +25,9 @@ from boundflow.anthropic_client import AnthropicLlmClient
 from . import ui
 from .config.loader import AgentBundle, Project
 from .config.worker import Channel, WorkerManifest
-from .memory import AuditMemory
 from .mcp.client import QuarantineError, ToolSet
 from .notify import Notifier
-from .workflows.loop import OP_EXECUTE_ACT, Loop
+from .workflows.loop import Loop
 
 log = logging.getLogger(__name__)
 
@@ -100,7 +99,7 @@ class CharterWorker:
         rows = []
         for (agent, version), served in sorted(self.served.items()):
             cfg = served.bundle.versions[version]
-            rows.append((agent, version, len(cfg.all_tools), len(cfg.gated_tools),
+            rows.append((agent, version, len(cfg.all_tools()), len(cfg.gated_tools),
                          served.quarantined or "ready"))
         ui.worker_banner(self.project.manifest.name or "worker",
                          self.project.manifest.control_plane.tenant, rows)
@@ -116,13 +115,10 @@ class CharterWorker:
                 key = (spec.agent, version)
                 cfg = bundle.versions[version]
                 tools = ToolSet()
-                # Memory is built per task from the operation's own workflow_id, so
-                # the worker never has to look a workflow up by name.
-                memory = AuditMemory(cp) if cfg.memory else None
-
                 served = Served(bundle, version, tools,
-                                Loop(cfg, bundle.runtime, tools, memory,
-                                     bundle.instructions.get(version, "")))
+                                Loop(cfg, bundle.runtime, tools.langchain_tools(),
+                                     self._chat_model,
+                                     self.project.manifest.store.url))
                 try:
                     await tools.connect(cfg)
                     for conn in tools._connections.values():
@@ -137,11 +133,12 @@ class CharterWorker:
     # ── registration ────────────────────────────────────────────────────────
 
     def _register(self, worker: BoundFlowWorker, notifier: Notifier) -> None:
-        """Two handlers per (agent, version). No per-agent code — the difference
-        between two Charter agents is entirely their config."""
+        """One handler per (agent, version). No per-agent code — the difference
+        between two Charter agents is entirely their config, and the difference
+        between a fresh task and a resumed one is entirely in the harness's
+        checkpoint."""
         for (agent, version), served in self.served.items():
             worker.workflow(agent, version=version)(self._entry(served))
-            worker.operation(agent, OP_EXECUTE_ACT)(self._execute_act(served))
 
         @worker.on_approval_requested
         async def _approval(request):
@@ -163,12 +160,6 @@ class CharterWorker:
             return await served.loop.entry(ctx)
 
         return entry
-
-    def _execute_act(self, served: Served):
-        async def execute_act(ctx):
-            return await served.loop.execute_act(ctx)
-
-        return execute_act
 
     async def _recheck(self, served: Served) -> str | None:
         """Retry a quarantined agent's connections in the background of a task
