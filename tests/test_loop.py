@@ -15,7 +15,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 import pytest
-from boundflow import ENTRY_OPERATION, AwaitApproval, Complete, Next
+from boundflow import ENTRY_OPERATION, AwaitApproval, AwaitInput, Complete, Next
 from boundflow.llm import AgentPolicyLimitExceeded
 
 from charter.config.loader import load_agent
@@ -24,7 +24,9 @@ from charter.workflows.loop import (
     K_DECISION,
     K_GATES,
     K_LLM_CALLS,
+    ASK_TOOL,
     Loop,
+    ask_tool,
     interrupt_on,
     render,
     response_schema,
@@ -54,6 +56,13 @@ class FakeCtx:
     def approval_reason(self):
         r, self._approval_reason = self._approval_reason, None
         return r
+
+    _answer = None
+
+    @property
+    def input_answer(self):
+        a, self._answer = self._answer, None
+        return a
 
     def mark_failed(self):
         self.failed = True
@@ -294,3 +303,70 @@ def test_a_gate_says_what_is_about_to_happen():
     assert "desk__create_refund" in out.justification
     assert "ch_9002" in out.justification
     assert "Tool execution requires" not in out.justification
+
+
+class TestAskHuman:
+    """The harness only ever stops at a tool call, so asking has to be a tool.
+    Declaring `ask_human:` adds one; omitting the block is the only way to say
+    never, so there aren't two ways to say it."""
+
+    def _cfg(self, when=None):
+        cfg = load_agent(EXAMPLES / "refund-triage").latest
+        if when is not None:
+            from charter.config.agent import AskHuman
+            cfg.ask_human = AskHuman(when=when)
+        return cfg
+
+    def test_no_block_means_no_tool(self):
+        cfg = self._cfg()
+        assert ask_tool(cfg) is None
+        assert ASK_TOOL not in interrupt_on(cfg)
+
+    def test_declaring_it_adds_a_gated_tool(self):
+        cfg = self._cfg("eagerly")
+        assert ask_tool(cfg).name == ASK_TOOL
+        # The only sensible decision on a question is an answer.
+        assert interrupt_on(cfg)[ASK_TOOL]["allowed_decisions"] == ["response"]
+
+    def test_posture_reaches_the_prompt_and_is_not_a_number(self):
+        """A model's confidence in itself isn't calibrated, so a threshold would
+        read as precision that isn't there."""
+        _, loop = loop_for()
+        loop.cfg = self._cfg("eagerly")
+        prompt = loop._prompt(FakeCtx())
+        assert loop.cfg.objective.split("\n")[0] in prompt
+        assert "When in doubt, ask" in prompt
+
+    def test_a_question_parks_for_an_answer_not_a_verdict(self):
+        _, loop = loop_for()
+        loop.cfg = self._cfg("balanced")
+        interrupt = {"__interrupt__": [type("I", (), {
+            "value": {"action_requests": [
+                {"name": ASK_TOOL, "args": {"question": "Which charge?"},
+                 "description": "Tool execution requires approval"}]},
+            "id": "i"})()]}
+
+        out = run(loop.entry(FakeCtx(results=[FakeResult(interrupt)])))
+        assert isinstance(out, AwaitInput)
+        assert "Which charge?" in out.prompt
+        assert out.timeout == loop.cfg.ask_human.timeout_seconds
+
+    def test_an_unanswered_question_tells_the_agent_rather_than_failing(self, _stub_harness):
+        """AwaitInput has a real timeout branch, unlike approval — so silence means
+        carry on with what you have, not that the task dies."""
+        _, loop = loop_for()
+        loop.cfg = self._cfg("balanced")
+        run(loop.entry(FakeCtx(context={K_DECISION: "unanswered"},
+                               results=[FakeResult({"resolution": "guessed"})])))
+        msg = _stub_harness.resume["decisions"][0]
+        assert msg["type"] == "response"
+        assert "Nobody answered" in msg["message"]
+
+    def test_an_answer_reaches_the_model(self, _stub_harness):
+        _, loop = loop_for()
+        loop.cfg = self._cfg("balanced")
+        ctx = FakeCtx(context={K_DECISION: "answer"},
+                      results=[FakeResult({"resolution": "done"})])
+        ctx._answer = "refund ch_9002"
+        run(loop.entry(ctx))
+        assert _stub_harness.resume["decisions"][0]["message"] == "refund ch_9002"

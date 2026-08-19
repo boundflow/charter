@@ -25,12 +25,13 @@ from typing import Any
 from boundflow import (
     ENTRY_OPERATION,
     AwaitApproval,
+    AwaitInput,
     Budget,
     Complete,
     Next,
 )
 from boundflow.harness import durable_harness, task_context
-from boundflow.harness_gates import approve, pending_action, reject
+from boundflow.harness_gates import approve, pending_action, reject, respond
 from boundflow.llm import AgentPolicyLimitExceeded
 
 from ..config.agent import AgentConfig
@@ -55,6 +56,38 @@ def render(template: str, inputs: dict) -> str:
     return out
 
 
+ASK_TOOL = "ask_human"
+
+
+def ask_tool(cfg: AgentConfig):
+    """A tool whose only job is to stop and ask you something, or None.
+
+    The harness has no built-in way for an agent to ask — `interrupt()` is only
+    ever raised from the tool-approval path — so asking has to *be* a tool. Gated
+    like any other, except the only decision offered is a written answer.
+
+    It never runs: calling it parks the operation, and the answer comes back as the
+    tool's result on the next turn. The body exists because a StructuredTool needs
+    one.
+    """
+    if cfg.ask_human is None:
+        return None
+    from langchain_core.tools import StructuredTool
+
+    async def _ask(question: str) -> str:
+        return "waiting for a human"
+
+    return StructuredTool.from_function(
+        coroutine=_ask,
+        name=ASK_TOOL,
+        description=("Ask the human a question and wait for their answer. Use this "
+                     "when proceeding would mean guessing at something they know."),
+        args_schema={"type": "object",
+                     "properties": {"question": {"type": "string"}},
+                     "required": ["question"]},
+    )
+
+
 def interrupt_on(cfg: AgentConfig) -> dict[str, Any]:
     """Which tools stop for a human, in the harness's own vocabulary.
 
@@ -62,8 +95,12 @@ def interrupt_on(cfg: AgentConfig) -> dict[str, Any]:
     amount is a better outcome than rejecting and hoping the next draft is right,
     and it costs nothing to permit — a decision still has to be made either way.
     """
-    return {tool: {"allowed_decisions": ["approve", "edit", "reject"]}
-            for tool in cfg.gated_tools}
+    gates = {tool: {"allowed_decisions": ["approve", "edit", "reject"]}
+             for tool in cfg.gated_tools}
+    if cfg.ask_human is not None:
+        # The only sensible decision on a question is an answer.
+        gates[ASK_TOOL] = {"allowed_decisions": ["response"]}
+    return gates
 
 
 def response_schema(cfg: AgentConfig) -> dict | None:
@@ -183,11 +220,18 @@ class Loop:
             decision = approve()
         elif verdict == "reject":
             decision = reject(ctx.approval_reason or "no reason given")
+        elif verdict == "answer":
+            decision = respond(ctx.input_answer or "")
+        elif verdict == "unanswered":
+            # Told, not failed: a question nobody answered shouldn't end the task
+            # when the agent may well be able to proceed on what it has.
+            decision = respond("Nobody answered in time — proceed with what you "
+                               "have and say what you assumed.")
 
         try:
             async with durable_harness(ctx, self.cfg.name, self.store_url,
                                        resume=decision) as h:
-                prompt = render(self.cfg.objective, ctx.context)
+                prompt = self._prompt(ctx)
                 result = await ctx.run_governed(
                     self.cfg.name,
                     lambda model, tools: create_deep_agent(
@@ -200,7 +244,7 @@ class Loop:
                     ).ainvoke(h.first({"messages": [{"role": "user", "content": prompt}]}),
                               h.config),
                     chat_model=self.chat_model(self.cfg.model),
-                    tools=self.tools.langchain_tools(),
+                    tools=self._tools(),
                     output_schema=response_schema(self.cfg),
                     budget=self._remaining(ctx),
                 )
@@ -214,6 +258,25 @@ class Loop:
         if (action := pending_action(result)) is not None:
             return self._gate(ctx, action)
         return Complete(result=result.output)
+
+    def _tools(self) -> list:
+        """Declared MCP tools, plus the ask tool when this agent may ask."""
+        tools = self.tools.langchain_tools()
+        if (ask := ask_tool(self.cfg)) is not None:
+            tools.append(ask)
+        return tools
+
+    def _prompt(self, ctx) -> str:
+        """The objective, plus how readily this agent should interrupt you.
+
+        Charter owns the wording so it's consistent and testable rather than each
+        author writing a weaker version. Rendered with the objective so a document
+        can't become a second, quieter set of rules.
+        """
+        parts = [self.cfg.objective]
+        if self.cfg.ask_human is not None:
+            parts.append(self.cfg.ask_human.guidance)
+        return render("\n\n".join(parts), ctx.context)
 
     def _gate(self, ctx, action: dict):
         """Park for a human on the action the harness stopped at.
@@ -231,6 +294,9 @@ class Loop:
                         context=task_context(ctx, {**c, K_DECISION: verdict}),
                         timeout=self._operation_timeout())
 
+        if action.get("name") == ASK_TOOL:
+            return self._question(ctx, action, resume)
+
         log.info("gate: agent=%s tool=%s", self.cfg.name, action.get("name", "?"))
         return AwaitApproval(
             on_approve=resume("approve"),
@@ -238,6 +304,24 @@ class Loop:
             timeout=gate.timeout_seconds,
             justification=self._justify(action),
             metadata={"tool": action.get("name", ""), "args": action.get("args", {})},
+        )
+
+    def _question(self, ctx, action: dict, resume):
+        """The agent asked something, so park for an answer rather than a verdict.
+
+        `AwaitInput` rather than `AwaitApproval` because there's nothing to approve
+        — and unlike approval, it has a real timeout branch, so nobody answering
+        means the agent is told and carries on instead of the task dying.
+        """
+        asked = (action.get("args") or {}).get("question", "")
+        log.info("question: agent=%s", self.cfg.name)
+        ask = self.cfg.ask_human
+        return AwaitInput(
+            on_answer=resume("answer"),
+            on_timeout=resume("unanswered"),
+            timeout=ask.timeout_seconds,
+            prompt=f"{self.cfg.name} asks: {asked}" if asked else f"{self.cfg.name} has a question",
+            metadata={"question": asked},
         )
 
     def _justify(self, action: dict) -> str:

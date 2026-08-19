@@ -256,6 +256,46 @@ class FileRule(Base):
         return self
 
 
+# Charter owns this wording rather than leaving each author to write a weaker
+# version of it. A posture, deliberately, not a confidence threshold: a model's
+# self-reported confidence isn't calibrated, so a number reads as precision that
+# isn't there. Authorization is a decision a human makes in advance and writes
+# down; confidence only decides whether the agent asks for help.
+ASK_POSTURE = {
+    "rarely": ("Ask only when you cannot proceed at all. Prefer making a "
+               "reasonable choice and saying what you assumed."),
+    "balanced": ("Ask when a wrong guess would be costly or hard to undo. "
+                 "Otherwise decide, and say what you assumed."),
+    "eagerly": ("When in doubt, ask. A question costs a few minutes; a wrong "
+                "action can cost far more."),
+}
+
+
+class AskHuman(Base):
+    """Let the agent stop and ask you something.
+
+    The harness has no built-in way to do this — it only ever stops at a tool
+    call — so asking *is* a tool, which is how Claude Code does it too. Declaring
+    this adds one, gated so that calling it parks the run and hands back your
+    answer.
+
+    Off unless declared — omit the block and no ask tool exists, which is the only
+    way to say "never" so there aren't two.
+    """
+
+    when: Literal["rarely", "balanced", "eagerly"] = Field(
+        default="balanced", description=(
+            "How readily it should interrupt you. A posture, not a threshold: a "
+            "model's confidence in itself isn't calibrated enough to be a number."))
+    timeout_seconds: int = Field(default=240, gt=0, description=(
+        "How long you have before the agent is told nobody answered and carries "
+        "on with what it has."))
+
+    @property
+    def guidance(self) -> str:
+        return ASK_POSTURE.get(self.when, "")
+
+
 class Gate(Base):
     """How long a human has, and what happens if nobody answers.
 
@@ -326,6 +366,7 @@ class AgentConfig(Base):
     # agent answers in prose, which is what most agents want.
     response_format: dict[str, FieldSpec] | None = None
     gate: Gate = Field(default_factory=Gate)
+    ask_human: AskHuman | None = None
 
     # What the agent may do beyond the tools it declared. The harness ships its own
     # filesystem, so these bound it. Empty `allowed_capabilities` means no allowlist
