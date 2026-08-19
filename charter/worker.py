@@ -99,7 +99,7 @@ class CharterWorker:
         rows = []
         for (agent, version), served in sorted(self.served.items()):
             cfg = served.bundle.versions[version]
-            rows.append((agent, version, len(cfg.all_tools()), len(cfg.gated_tools),
+            rows.append((agent, version, len(cfg.all_tools), len(cfg.gated_tools),
                          served.quarantined or "ready"))
         ui.worker_banner(self.project.manifest.name or "worker",
                          self.project.manifest.control_plane.tenant, rows)

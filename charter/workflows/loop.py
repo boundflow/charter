@@ -133,7 +133,7 @@ class Loop:
         # trip its own breaker.
         if per_run.max_tool_failures:
             fields["tool_failure_limits"] = {
-                tool: per_run.max_tool_failures for tool in self.cfg.all_tools()}
+                tool: per_run.max_tool_failures for tool in self.cfg.all_tools}
 
         return Budget(**fields) if fields else None
 

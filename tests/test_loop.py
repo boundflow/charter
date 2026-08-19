@@ -1,357 +1,271 @@
-"""The feedback loop, against a fake OperationContext.
+"""The one operation, against a fake OperationContext.
 
-Covers the branches that decide what an agent is allowed to do: what the model is
-handed, what it can only propose, what happens when the budget runs out mid-task,
-and what a human is shown at a gate.
+There is much less to test than there used to be, which is the point: the loop
+Charter drove is gone, and what's left is the part the harness can't do. So this
+covers the seam — what the harness is handed, what happens when it asks for a
+human, and what stops the task when the budget runs out.
+
+`durable_harness` is stubbed rather than run. It opens a real Postgres store and
+checkpointer, and a test that needed a database to check which branch we return
+would be testing LangGraph, not us.
 """
 
 import asyncio
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import pytest
-from boundflow import AwaitApproval, AwaitInput, Complete, Next
+from boundflow import ENTRY_OPERATION, AwaitApproval, Complete, Next
 from boundflow.llm import AgentPolicyLimitExceeded
 
 from charter.config.loader import load_agent
-from charter.mcp.client import McpError
-from boundflow import ENTRY_OPERATION
-
-from charter.workflows.loop import K_ACTS, K_COST, K_FINAL, K_ITERATION, Loop
+from charter.workflows.loop import (
+    K_COST,
+    K_DECISION,
+    K_GATES,
+    K_LLM_CALLS,
+    Loop,
+    interrupt_on,
+    render,
+    response_schema,
+)
 
 EXAMPLES = Path(__file__).parent.parent / "examples"
 
 
 class FakeResult:
-    def __init__(self, output, cost=0.01, calls=2, failures=None, tool_calls=None):
+    def __init__(self, output, cost=0.01, calls=2):
         self.output = output
         self.cost_usd = cost
         self.llm_calls_used = calls
-        self.tool_failure_counts = failures or {}
-        self.calls_per_tool = tool_calls or {}
 
 
 class FakeCtx:
     """Just enough OperationContext for the loop."""
 
-    def __init__(self, context=None, results=None, approval_reason=None, answer=None):
+    def __init__(self, context=None, results=None, approval_reason=None):
         self.context = context if context is not None else {}
         self._results = list(results or [])
         self.budgets = []
-        self.staged = []
         self.failed = False
-        self.agent_state_updates = {}
         self._approval_reason = approval_reason
-        self._answer = answer
 
     @property
     def approval_reason(self):
         r, self._approval_reason = self._approval_reason, None
         return r
 
-    @property
-    def input_answer(self):
-        a, self._answer = self._answer, None
-        return a
-
-    def add_context(self, label, payload):
-        self.staged.append((label, payload))
-
     def mark_failed(self):
         self.failed = True
 
-    async def run_agent(self, agent, *, budget=None):
+    async def run_governed(self, name, invoke, *, chat_model, tools,
+                           output_schema=None, budget=None):
         self.budgets.append(budget)
-        out = self._results.pop(0)
-        if isinstance(out, Exception):
-            raise out
-        return out
+        nxt = self._results.pop(0)
+        if isinstance(nxt, Exception):
+            raise nxt
+        return nxt
 
 
-class FakeTools:
-    def __init__(self, result="done", error=None):
-        self.result, self.error, self.calls = result, error, []
-
-    def inline_tools(self, cfg):
-        return []
-
-    def gated_tools(self, cfg):
-        # The real ToolSet resolves this at boot from config plus annotations; the
-        # config's own list is the floor and enough for these tests.
-        return cfg.gated_tools
-
-    async def call_gated(self, tool, args):
-        self.calls.append((tool, args))
-        if self.error:
-            raise self.error
-        return self.result
+def loop_for(agent="refund-triage", monkeypatch=None):
+    bundle = load_agent(EXAMPLES / agent)
+    cfg = bundle.latest
+    loop = Loop(cfg, bundle.runtime, tools=[], chat_model=lambda m: object(),
+                store_url="postgresql://unused")
+    return cfg, loop
 
 
-def loop(tools=None, **runtime_overrides):
-    bundle = load_agent(EXAMPLES / "refund-triage")
-    for k, v in runtime_overrides.items():
-        setattr(bundle.runtime.per_run, k, v)
-    return Loop(bundle.latest, bundle.runtime, tools or FakeTools())
+@pytest.fixture(autouse=True)
+def _stub_harness(monkeypatch):
+    """No database, and no deepagents graph — the branch under test is ours."""
+    class Wiring:
+        thread_id = "task-1"
+        wiring: dict = {}
+        config: dict = {}
+
+        def first(self, payload):
+            return payload
+
+    @asynccontextmanager
+    async def fake(ctx, agent_name, store_url, *, resume=None):
+        fake.resume = resume
+        yield Wiring()
+
+    monkeypatch.setattr("boundflow.harness.durable_harness", fake)
+    monkeypatch.setattr("charter.workflows.loop.durable_harness", fake)
+    monkeypatch.setattr("charter.workflows.loop.task_context",
+                        lambda ctx, extra=None: {**(extra or {})})
+    monkeypatch.setattr("deepagents.create_deep_agent",
+                        lambda **kw: type("G", (), {"ainvoke": lambda s, *a, **k: None})())
+    return fake
 
 
 def run(coro):
     return asyncio.run(coro)
 
 
-DELIVERABLE = {"resolution": "refunded in full", "refunded_usd": 240}
-PROPOSAL = {"propose": {"tool": "stripe__create_refund",
-                        "args": {"amount": 240}, "why": "duplicate charge"}}
+# ── what the harness is handed ───────────────────────────────────────────────
 
 
-class TestBudget:
-    def test_remaining_is_passed_to_run_agent(self):
-        """BoundFlow's policy caps one step and resets each round, so without this a
-        six-round task could spend six times its budget."""
-        lp = loop()
-        ctx = FakeCtx({K_COST: 0.10, "_llm_calls": 12}, [FakeResult(DELIVERABLE)])
-        run(lp.entry(ctx))
-        budget = ctx.budgets[0]
-        assert budget.max_cost_usd == pytest.approx(0.30 - 0.10)
-        assert budget.max_llm_calls == 40 - 12
-
-    def test_exhausted_budget_fails_without_retrying(self):
-        """Running out of budget is not transient — a second attempt would spend
-        more to fail identically."""
-        lp = loop()
-        ctx = FakeCtx({}, [AgentPolicyLimitExceeded("no max_cost_usd budget left")])
-        result = run(lp.entry(ctx))
-        assert isinstance(result, Complete)
-        assert ctx.failed and "budget exhausted" in result.result["reason"]
-
-    def test_transient_error_is_retried(self):
-        lp = loop()
-        ctx = FakeCtx({}, [ConnectionError("blip"), FakeResult(DELIVERABLE)])
-        run(lp.entry(ctx))
-        assert len(ctx.budgets) == 2  # retried in place, not failed
-
-    def test_out_of_drafts_fails_with_a_diagnosis(self):
-        """Not "it went round a lot" — the reason names what an operator should
-        look at."""
-        lp = loop(max_drafts=2)
-        ctx = FakeCtx({"_drafts": 2}, [FakeResult(DELIVERABLE)])
-        result = run(lp.entry(ctx))
-        assert ctx.failed
-        assert "rejected 2 drafts" in result.result["reason"]
-        assert "objective or the agent is wrong" in result.result["reason"]
-
-    def test_repeated_tool_failure_fails_naming_the_tool(self):
-        lp = loop(max_tool_failures=3)
-        ctx = FakeCtx({"_tool_fails": {"stripe__create_refund": 3}}, [FakeResult(DELIVERABLE)])
-        result = run(lp.entry(ctx))
-        assert ctx.failed
-        assert "stripe__create_refund failed 3 times" in result.result["reason"]
-        assert "integration looks broken" in result.result["reason"]
+def test_gated_tools_become_interrupts_not_omissions():
+    """The claim changed with the harness: a gated tool is still given to the model,
+    and the call is stopped. `edit` is offered so an approver can correct an amount
+    rather than reject and hope the next attempt is right."""
+    cfg = load_agent(EXAMPLES / "refund-triage").latest
+    gates = interrupt_on(cfg)
+    assert set(gates) == {"stripe__create_refund"}
+    assert gates["stripe__create_refund"]["allowed_decisions"] == [
+        "approve", "edit", "reject"]
 
 
-    def test_per_tool_call_limits_are_per_task_not_per_round(self):
-        """BoundFlow's own per-tool caps reset every step, so `max_calls: 5` on a
-        six-round task used to mean thirty calls."""
-        lp = loop()
-        ctx = FakeCtx({"_tool_calls": {"stripe__get_charge": 4}}, [FakeResult(DELIVERABLE)])
-        run(lp.entry(ctx))
-        assert ctx.budgets[0].tool_call_limits["stripe__get_charge"] == 5 - 4
-
-    def test_per_tool_failure_allowance_is_passed_down(self):
-        lp = loop()
-        ctx = FakeCtx({"_tool_fails": {"stripe__create_refund": 2}}, [FakeResult(DELIVERABLE)])
-        run(lp.entry(ctx))
-        limits = ctx.budgets[0].tool_failure_limits
-        assert limits["stripe__create_refund"] == 3 - 2
-        assert limits["zendesk__get_ticket"] == 3  # untouched tools keep the full allowance
-
-    def test_tool_failure_limit_is_not_retried(self):
-        """ToolFailureLimitExceeded subclasses AgentPolicyLimitExceeded — retrying a
-        broken tool would double its failures before propagating."""
-        from boundflow.llm import ToolFailureLimitExceeded
-        lp = loop()
-        ctx = FakeCtx({}, [ToolFailureLimitExceeded("stripe__create_refund", 3, 3)])
-        result = run(lp.entry(ctx))
-        assert len(ctx.budgets) == 1  # not retried
-        assert ctx.failed and "stripe__create_refund" in result.result["reason"]
-
-    def test_spending_the_last_of_the_budget_marks_the_round_final(self):
-        lp = loop()
-        ctx = FakeCtx({K_COST: 0.29}, [FakeResult(DELIVERABLE, cost=0.05)])
-        run(lp.entry(ctx))
-        assert ctx.context[K_FINAL] is True
+def test_an_agent_with_nothing_gated_asks_for_no_interrupts():
+    cfg = load_agent(EXAMPLES / "ticket-summarizer").latest
+    assert interrupt_on(cfg) == {}
 
 
-class TestOutcomes:
-    def test_deliverable_completes(self):
-        lp = loop()
-        lp.cfg.outcome.deliverable_approval = "never"
-        ctx = FakeCtx({}, [FakeResult(DELIVERABLE)])
-        result = run(lp.entry(ctx))
-        assert isinstance(result, Complete)
-        assert result.result["resolution"] == "refunded in full"
+def test_response_format_becomes_a_schema_and_is_optional():
+    cfg = load_agent(EXAMPLES / "refund-triage").latest
+    schema = response_schema(cfg)
+    assert set(schema["properties"]) == {"resolution", "refunded_usd"}
+    assert schema["additionalProperties"] is False
 
-    def test_deliverable_approval_gates_instead_of_completing(self):
-        lp = loop()  # example config sets deliverable_approval: always
-        ctx = FakeCtx({}, [FakeResult(DELIVERABLE)])
-        result = run(lp.entry(ctx))
-        assert isinstance(result, AwaitApproval)
-        assert "refunded in full" in result.justification
-
-    def test_proposal_parks_for_approval(self):
-        lp = loop()
-        ctx = FakeCtx({}, [FakeResult(PROPOSAL)])
-        result = run(lp.entry(ctx))
-        assert isinstance(result, AwaitApproval)
-        # The approver is shown the tool, its arguments, and the agent's reasoning —
-        # Charter renders all three, so a gate can't be authored with the amount left out.
-        assert "stripe__create_refund" in result.justification
-        assert "240" in result.justification
-        assert "duplicate charge" in result.justification
-
-    def test_proposing_an_ungated_tool_is_refused(self):
-        """execute_act must not become a way to run anything the model names."""
-        lp = loop()
-        ctx = FakeCtx({}, [FakeResult({"propose": {"tool": "stripe__get_charge", "args": {}}})])
-        result = run(lp.entry(ctx))
-        assert isinstance(result, Next)
-        assert "not a tool you may propose" in ctx.context["_history"][-1]
-
-    def test_ask_human_parks_for_input(self):
-        lp = loop()
-        ctx = FakeCtx({}, [FakeResult({"ask_human": "Is this the right charge?"})])
-        result = run(lp.entry(ctx))
-        assert isinstance(result, AwaitInput)
-        assert result.prompt == "Is this the right charge?"
-
-    def test_questions_are_allowed_up_to_the_limit(self):
-        lp = loop(max_questions=2)
-        ctx = FakeCtx({"_questions": 1}, [FakeResult({"ask_human": "Which charge?"})])
-        assert isinstance(run(lp.entry(ctx)), AwaitInput)
-        assert ctx.context["_questions"] == 2
-
-    def test_running_out_of_questions_forces_a_draft_rather_than_failing(self):
-        """Out of questions means "stop asking and show me something", not "give up"."""
-        lp = loop(max_questions=2)
-        ctx = FakeCtx({"_questions": 2}, [FakeResult({"ask_human": "Which charge?"})])
-        result = run(lp.entry(ctx))
-        assert not isinstance(result, AwaitInput)
-        assert any("Submit your best draft" in line for line in ctx.context["_history"])
-
-    def test_a_rejection_consumes_a_draft_and_refreshes_questions(self):
-        """Having been told what was wrong, asking again is reasonable in a way
-        that asking twice before any draft is not."""
-        lp = loop()
-        ctx = FakeCtx({"_drafts": 0, "_questions": 2, "_rejected": {"what": "your answer"}},
-                      [FakeResult(DELIVERABLE)], approval_reason="wrong charge")
-        run(lp.entry(ctx))
-        assert ctx.context["_drafts"] == 1
-        assert ctx.context["_questions"] == 0
+    cfg.response_format = None
+    assert response_schema(cfg) is None, "prose is a valid answer"
 
 
-class TestTruncation:
-    def test_final_round_labels_the_gate(self):
-        """A human approving a refund must know the agent was cut off — that's the
-        difference between an informed rejection and a rubber stamp."""
-        lp = loop()
-        ctx = FakeCtx({K_COST: 0.29}, [FakeResult(PROPOSAL, cost=0.05)])
-        result = run(lp.entry(ctx))
-        assert isinstance(result, AwaitApproval)
-        assert "ran out of budget" in result.justification
-
-    def test_final_round_marks_the_result(self):
-        lp = loop()
-        lp.cfg.outcome.deliverable_approval = "never"
-        ctx = FakeCtx({K_COST: 0.29}, [FakeResult(DELIVERABLE, cost=0.05)])
-        assert run(lp.entry(ctx)).result["truncated"] is True
-
-    def test_final_round_with_nothing_usable_fails_instead_of_looping(self):
-        lp = loop()
-        ctx = FakeCtx({K_COST: 0.29}, [FakeResult({}, cost=0.05)])
-        result = run(lp.entry(ctx))
-        assert isinstance(result, Complete) and ctx.failed
+def test_only_declared_inputs_render():
+    assert render("ticket {{ inputs.id }}", {"id": 7}) == "ticket 7"
+    assert render("{{ inputs.nope }}", {"id": 7}) == "{{ inputs.nope }}"
 
 
-class TestResumption:
-    def test_rejection_with_a_reason_teaches_the_agent(self):
-        """The only reason a rejection is worth anything to the next round."""
-        lp = loop()
-        ctx = FakeCtx({"_rejected": {"what": "your proposal to call stripe__create_refund"}},
-                      [FakeResult(DELIVERABLE)], approval_reason="wrong charge")
-        run(lp.entry(ctx))
-        note = ctx.context["_history"][0]
-        assert "REJECTED" in note and "wrong charge" in note
-
-    def test_rejection_without_a_reason_still_records(self):
-        lp = loop()
-        ctx = FakeCtx({"_rejected": {"what": "your answer"}}, [FakeResult(DELIVERABLE)])
-        run(lp.entry(ctx))
-        assert "no reason given" in ctx.context["_history"][0]
-
-    def test_answer_folds_into_history(self):
-        lp = loop()
-        ctx = FakeCtx({"_question": "Which charge?"}, [FakeResult(DELIVERABLE)],
-                      answer={"text": "the March one"})
-        run(lp.entry(ctx))
-        assert "the March one" in ctx.context["_history"][0]
+# ── the gate, which is the whole reason this operation exists ────────────────
 
 
-class TestExecuteAct:
-    def test_approved_tool_runs_and_loops_back(self):
-        tools = FakeTools(result="refund re_123 created")
-        lp = loop(tools=tools)
-        ctx = FakeCtx({"_proposal": {"tool": "stripe__create_refund", "args": {"amount": 240}}})
-        result = run(lp.execute_act(ctx))
-        assert tools.calls == [("stripe__create_refund", {"amount": 240})]
-        # Not terminal: the agent sees the result and can act again or finish.
-        assert isinstance(result, Next) and result.operation == ENTRY_OPERATION
-        assert "refund re_123 created" in ctx.context["_history"][-1]
+def test_a_pending_action_parks_the_task():
+    cfg, loop = loop_for()
+    interrupt = {"__interrupt__": [type("I", (), {
+        "value": {"action_requests": [
+            {"name": "stripe__create_refund", "args": {"amount": 40},
+             "description": "Refund $40 to the customer"}]},
+        "id": "int-1"})()]}
+    ctx = FakeCtx(results=[FakeResult(interrupt)])
 
-    def test_performed_acts_are_recorded(self):
-        """A failed task is not an untouched one — an operator needs to know whether
-        money moved before anything else."""
-        lp = loop()
-        ctx = FakeCtx({"_proposal": {"tool": "stripe__create_refund", "args": {"amount": 240}}})
-        run(lp.execute_act(ctx))
-        assert ctx.context[K_ACTS] == [{"tool": "stripe__create_refund", "args": {"amount": 240}}]
-
-    def test_failure_of_a_fail_fast_tool_fails_the_task(self):
-        lp = loop(tools=FakeTools(error=McpError("card declined")))
-        ctx = FakeCtx({"_proposal": {"tool": "stripe__create_refund", "args": {}}})
-        result = run(lp.execute_act(ctx))
-        assert isinstance(result, Complete) and ctx.failed
-        assert "card declined" in result.result["reason"]
-
-    def test_tool_failure_is_recorded_for_lifecycle_rules(self):
-        """No orchestrator here to count for us — without this hand-written
-        snapshot, an approved tool failing every time is invisible to the
-        tool_failures rule meant to catch it."""
-        lp = loop(tools=FakeTools(error=McpError("boom")))
-        ctx = FakeCtx({"_proposal": {"tool": "stripe__create_refund", "args": {}}})
-        run(lp.execute_act(ctx))
-        snap = ctx.agent_state_updates["refund-triage"]
-        assert snap["tool_failure_counts"] == {"stripe__create_refund": 1}
+    out = run(loop.entry(ctx))
+    assert isinstance(out, AwaitApproval)
+    assert out.justification == "Refund $40 to the customer"
+    assert out.metadata["tool"] == "stripe__create_refund"
+    assert out.timeout == cfg.gate.timeout_seconds
+    assert ctx.context[K_GATES] == 1
 
 
-class TestInstructionsInThePrompt:
-    """The loader composes the documents; this is the half that proves they reach
-    the model, and that a document is rendered like the objective rather than being
-    a second, quieter set of rules."""
+def test_both_branches_return_to_the_one_operation():
+    """There is no second operation any more — a resume is the same handler with a
+    decision in context."""
+    _, loop = loop_for()
+    interrupt = {"__interrupt__": [type("I", (), {
+        "value": {"action_requests": [{"name": "t", "args": {}, "description": "d"}]},
+        "id": "i"})()]}
+    out = run(loop.entry(FakeCtx(results=[FakeResult(interrupt)])))
 
-    def _agent(self, instructions=""):
-        from charter.workflows.loop import build_agent
-        bundle = load_agent(EXAMPLES / "refund-triage")
-        return build_agent(bundle.latest, FakeTools(),
-                           {"ticket_id": "4821", "max_refund_usd": 500}, instructions)
+    for branch in (out.on_approve, out.on_reject):
+        assert isinstance(branch, Next)
+        assert branch.operation == ENTRY_OPERATION
+    assert out.on_approve.context[K_DECISION] == "approve"
+    assert out.on_reject.context[K_DECISION] == "reject"
 
-    def test_documents_are_appended_to_the_system_prompt(self):
-        agent = self._agent("# policy.md\n\nRefund duplicates only.")
-        assert "Refund duplicates only." in agent.system_prompt
-        # After the objective, so the task comes first.
-        assert agent.system_prompt.index("Resolve the refund") < \
-               agent.system_prompt.index("Refund duplicates only.")
 
-    def test_a_document_gets_the_same_templating_as_the_objective(self):
-        agent = self._agent("Never exceed {{ inputs.max_refund_usd }} dollars.")
-        assert "Never exceed 500 dollars." in agent.system_prompt
+def test_the_approvers_reason_reaches_the_model(_stub_harness):
+    """Resolved on resume, not when the gate was raised — at that point no human had
+    spoken yet. A rejection the agent can't read the reason for is useless."""
+    _, loop = loop_for()
+    ctx = FakeCtx(context={K_DECISION: "reject"},
+                  approval_reason="too much for a first-time customer",
+                  results=[FakeResult({"resolution": "dropped it"})])
 
-    def test_no_documents_changes_nothing(self):
-        assert "# " not in self._agent().system_prompt.split("Resolve")[0]
+    run(loop.entry(ctx))
+    resumed = _stub_harness.resume
+    assert resumed["decisions"][0]["type"] == "reject"
+    assert "first-time customer" in resumed["decisions"][0]["message"]
+
+
+def test_a_timeout_arrives_as_a_rejection_without_a_reason(_stub_harness):
+    """AwaitApproval has approve and reject branches and nothing else, and the
+    control plane rejects gates whose timeout passed — so an unanswered gate lands
+    here with no decider."""
+    _, loop = loop_for()
+    ctx = FakeCtx(context={K_DECISION: "reject"}, approval_reason=None,
+                  results=[FakeResult({"resolution": "dropped it"})])
+
+    run(loop.entry(ctx))
+    assert _stub_harness.resume["decisions"][0]["message"] == "no reason given"
+
+
+def test_an_approval_resumes_without_a_message(_stub_harness):
+    _, loop = loop_for()
+    run(loop.entry(FakeCtx(context={K_DECISION: "approve"},
+                           results=[FakeResult({"resolution": "refunded"})])))
+    assert _stub_harness.resume == {"decisions": [{"type": "approve"}]}
+
+
+def test_a_fresh_task_resumes_nothing(_stub_harness):
+    _, loop = loop_for()
+    run(loop.entry(FakeCtx(results=[FakeResult({"resolution": "done"})])))
+    assert _stub_harness.resume is None
+
+
+# ── the budget, which the harness can't see ──────────────────────────────────
+
+
+def test_spend_accumulates_across_gates():
+    """A gate ends the operation and the next one gets a fresh runtime policy, so
+    without this a task that stopped four times could spend its budget five times."""
+    _, loop = loop_for()
+    ctx = FakeCtx(results=[FakeResult({"resolution": "done"}, cost=0.05, calls=7)])
+    run(loop.entry(ctx))
+    assert ctx.context[K_COST] == pytest.approx(0.05)
+    assert ctx.context[K_LLM_CALLS] == 7
+
+
+def test_the_budget_handed_over_is_what_is_left():
+    _, loop = loop_for()
+    ctx = FakeCtx(context={K_COST: 0.20, K_LLM_CALLS: 30},
+                  results=[FakeResult({"resolution": "done"})])
+    run(loop.entry(ctx))
+
+    budget = ctx.budgets[0]
+    assert budget.max_cost_usd == pytest.approx(0.10)   # 0.30 declared
+    assert budget.max_llm_calls == 10                   # 40 declared
+
+
+def test_every_declared_tool_gets_a_failure_allowance():
+    """No harness equivalent exists, so a broken integration would otherwise burn
+    the budget instead of tripping its own breaker."""
+    cfg, loop = loop_for()
+    ctx = FakeCtx(results=[FakeResult({"resolution": "done"})])
+    run(loop.entry(ctx))
+    assert set(ctx.budgets[0].tool_failure_limits) == set(cfg.all_tools)
+
+
+def test_a_spent_budget_fails_the_task_with_a_readable_reason():
+    """mark_failed trips num_failures for the lifecycle rules while the run still
+    completes, so the payload an operator reads says how far it got."""
+    _, loop = loop_for()
+    ctx = FakeCtx(context={K_GATES: 2},
+                  results=[AgentPolicyLimitExceeded("reached max_cost_usd=0.3")])
+
+    out = run(loop.entry(ctx))
+    assert isinstance(out, Complete)
+    assert ctx.failed
+    assert out.result["failed"] is True
+    assert "max_cost_usd" in out.result["reason"]
+    assert out.result["gates"] == 2
+
+
+def test_finishing_returns_the_agents_own_answer():
+    """Charter injects no fields of its own now, so what comes back is the result,
+    not a wrapper to unpick."""
+    _, loop = loop_for()
+    out = run(loop.entry(FakeCtx(results=[
+        FakeResult({"resolution": "refunded $40", "refunded_usd": 40})])))
+    assert isinstance(out, Complete)
+    assert out.result == {"resolution": "refunded $40", "refunded_usd": 40}

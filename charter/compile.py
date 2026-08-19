@@ -113,7 +113,7 @@ def compile_runtime_policy(cfg: AgentConfig, runtime: RuntimePolicyFile) -> Runt
         allowed_capabilities=list(cfg.allowed_capabilities),
         # Declared MCP tools are always permitted, so the allowlist only ever has to
         # name what the *harness* brings. Empty means no allowlist, not "nothing".
-        allowed_tools=cfg.all_tools() if cfg.allowed_capabilities else [],
+        allowed_tools=cfg.all_tools if cfg.allowed_capabilities else [],
     )
     # NOTE: max_tool_failures has no BoundFlow equivalent — it becomes a
     # tool_failure_limits Budget at the call itself, from task context.

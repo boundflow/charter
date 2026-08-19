@@ -4,8 +4,6 @@ kind: RuntimePolicy
 agent: refund-triage
 
 per_run:
-  max_drafts: 3
-  max_questions: 2
   max_tool_failures: 3
   max_cost_usd: 0.30
   max_llm_calls: 40
@@ -14,6 +12,11 @@ per_run:
       max_calls: 5
     - tool: zendesk__search_tickets
       max_calls: 10
+  # Covers every way the harness can read a file, so the cap survives it shipping
+  # a fourth one. Capping `read_file` alone would not.
+  capability_call_limits:
+    - capability: read
+      max_calls: 30
 
 limits:
   max_tokens_per_call: 1024

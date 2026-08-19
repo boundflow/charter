@@ -10,9 +10,12 @@ model: claude-haiku-4-5
 objective: |
   Resolve the refund request on ticket {{ inputs.ticket_id }}.
 
-  Look up the ticket and the underlying charge before proposing anything. Never
-  propose a refund above ${{ inputs.max_refund_usd }}. If the customer's reason
-  is unclear, or the charge doesn't match what they describe, ask — do not guess.
+  Look up the ticket and the underlying charge before you act. Never refund more
+  than ${{ inputs.max_refund_usd }}. If the customer's reason is unclear, or the
+  charge doesn't match what they describe, ask — do not guess.
+
+  Refunds stop for a human before they go through, so say plainly what you are
+  about to do and why: that sentence is what the approver reads.
 
 inputs:
   ticket_id:
@@ -41,7 +44,7 @@ mcp:
       - tool: close_ticket
 
   - name: stripe
-    url: https://mcp.stripe__com
+    url: https://mcp.stripe.com
     env: [STRIPE_API_KEY]
     tools:
       - tool: get_charge
@@ -50,28 +53,19 @@ mcp:
         approval: always
         on_failure: fail
 
-outcome:
-  deliverable:
-    resolution:
-      type: string
-      description: What was done and why, in two sentences.
-    refunded_usd:
-      type: number
-      description: Amount refunded, or 0 if none.
+response_format:
+  resolution:
+    type: string
+    description: What was done and why, in two sentences.
+  refunded_usd:
+    type: number
+    description: Amount refunded, or 0 if none.
 
-  deliverable_approval: always
+# How long an approver has. An unanswered gate is a rejection — the agent is told
+# and carries on without that action, rather than the task dying.
+gate:
+  timeout_seconds: 1800
 
-  approval:
-    timeout_seconds: 1800
-    on_timeout: reject
-    note: Ticket {{ inputs.ticket_id }}, priority {{ inputs.priority }}.
-
-  ask_human:
-    timeout_seconds: 240
-    on_timeout: continue
-    when: eagerly
-
-memory:
-  from_audit:
-    rejections: 10
-    answers: 10
+# The harness brings its own filesystem. This agent has no business writing to it,
+# so it gets read only; declared MCP tools are always permitted regardless.
+allowed_capabilities: [read]

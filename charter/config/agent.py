@@ -378,6 +378,7 @@ class AgentConfig(Base):
                 if key not in self.inputs:
                     raise ValueError(f"{where}: {{{{ {ref} }}}} is not a declared input")
 
+    @property
     def all_tools(self) -> list[str]:
         """Every declared tool, namespaced."""
         return [t for s in self.mcp for t in s.tool_names]

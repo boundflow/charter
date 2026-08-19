@@ -38,7 +38,6 @@ def test_invoke_mode_is_derived():
     raw = load()
     raw["inputs"] = {}
     raw["objective"] = "Look for anything that needs attention."
-    raw["outcome"]["approval"]["note"] = "no refs"
     assert AgentConfig.model_validate(raw).invoke_mode == "coalesce"
 
 
@@ -59,51 +58,6 @@ class TestTemplating:
         raw = load(objective="Approve {{ propose.tool }}?")
         with pytest.raises(ValidationError, match="only .* inputs"):
             AgentConfig.model_validate(raw)
-
-    def test_note_is_checked_too(self):
-        raw = load()
-        raw["outcome"]["approval"]["note"] = "Ticket {{ inputs.nope }}"
-        with pytest.raises(ValidationError, match="not a declared input"):
-            AgentConfig.model_validate(raw)
-
-
-class TestGates:
-    def test_gated_tool_without_approval_block_rejected(self):
-        """A mutating tool with no gate configured is a silent hole."""
-        raw = load()
-        raw["outcome"].pop("approval")
-        raw["outcome"]["deliverable_approval"] = "never"
-        with pytest.raises(ValidationError, match="outcome.approval is required"):
-            AgentConfig.model_validate(raw)
-
-    def test_approval_block_with_nothing_gating_rejected(self):
-        """Dead config that reads as protection is worse than no config."""
-        raw = load()
-        raw["outcome"]["deliverable_approval"] = "never"
-        for server in raw["mcp"]:
-            for tool in server["tools"]:
-                tool.pop("approval", None)
-        with pytest.raises(ValidationError, match="nothing gates"):
-            AgentConfig.model_validate(raw)
-
-    def test_deliverable_approval_alone_requires_block(self):
-        raw = load()
-        for server in raw["mcp"]:
-            for tool in server["tools"]:
-                tool.pop("approval", None)
-        raw["outcome"]["deliverable_approval"] = "always"
-        cfg = AgentConfig.model_validate(raw)
-        assert cfg.gated_tools == []
-
-
-class TestReservedFields:
-    @pytest.mark.parametrize("name", ["propose", "ask_human"])
-    def test_reserved_deliverable_field_rejected(self, name):
-        raw = load()
-        raw["outcome"]["deliverable"][name] = {"type": "string"}
-        with pytest.raises(ValidationError, match="reserved"):
-            AgentConfig.model_validate(raw)
-
 
 class TestMcpServer:
     def test_command_and_url_together_rejected(self):
@@ -166,73 +120,11 @@ class TestInputSpec:
             AgentConfig.model_validate(raw)
 
 
-class TestAskHuman:
-    def test_posture_becomes_prompt_guidance(self):
-        """A posture, not a threshold — 'how cautious to be' carries the reason,
-        which a float cannot."""
-        cfg = AgentConfig.model_validate(load())
-        assert cfg.outcome.ask_human.when == "eagerly"
-        assert "When in doubt, ask" in cfg.outcome.ask_human.guidance
-
-    def test_how_many_questions_is_a_limit_not_a_behaviour(self):
-        """`when` shapes a tendency and lives with the agent; how many questions it
-        may ask is a limit and lives in runtime.yaml with the other limits."""
-        raw = load()
-        raw["outcome"]["ask_human"]["after_iterations"] = 4
-        with pytest.raises(ValidationError, match="Extra inputs"):
-            AgentConfig.model_validate(raw)
-
-    def test_default_posture_is_balanced(self):
-        raw = load()
-        del raw["outcome"]["ask_human"]["when"]
-        cfg = AgentConfig.model_validate(raw)
-        assert cfg.outcome.ask_human.when == "balanced"
-
-    def test_confidence_is_not_a_knob(self):
-        """Self-reported confidence is poorly calibrated — a confidently wrong
-        answer reports high — so it is wired to nothing."""
-        raw = load()
-        raw["outcome"]["ask_human"]["below_confidence"] = 0.7
-        with pytest.raises(ValidationError, match="Extra inputs"):
-            AgentConfig.model_validate(raw)
-
-
-class TestMemory:
-    def test_example_declares_audit_memory(self):
-        cfg = AgentConfig.model_validate(load())
-        assert cfg.memory.from_audit.rejections == 10
-
-    def test_rejections_without_gates_rejected(self):
-        """An agent nothing gates is never rejected, so recalling rejections would
-        read as memory it doesn't have."""
-        raw = load()
-        raw["outcome"]["deliverable_approval"] = "never"
-        raw["outcome"].pop("approval")
-        for server in raw["mcp"]:
-            for tool in server["tools"]:
-                tool.pop("approval", None)
-        raw["memory"]["from_audit"]["answers"] = 0
-        with pytest.raises(ValidationError, match="never rejected"):
-            AgentConfig.model_validate(raw)
-
-    def test_answers_without_ask_human_rejected(self):
-        raw = load()
-        raw["outcome"].pop("ask_human")
-        with pytest.raises(ValidationError, match="cannot ask"):
-            AgentConfig.model_validate(raw)
-
-    def test_memory_is_optional(self):
-        raw = load()
-        raw.pop("memory")
-        assert AgentConfig.model_validate(raw).memory is None
-
-
 class TestSchedule:
     def test_periodic_agent(self):
         raw = load()
         raw.pop("inputs")
         raw["objective"] = "Look for anything that needs attention."
-        raw["outcome"]["approval"]["note"] = "no refs"
         raw["schedule"] = {"every": "15m"}
         cfg = AgentConfig.model_validate(raw)
         assert cfg.schedule.every_seconds == 900
@@ -244,7 +136,6 @@ class TestSchedule:
         raw = load()
         raw.pop("inputs")
         raw["objective"] = "Look."
-        raw["outcome"]["approval"]["note"] = "no refs"
         raw["schedule"] = {"every": spec}
         assert AgentConfig.model_validate(raw).schedule.every_seconds == seconds
 
@@ -252,7 +143,6 @@ class TestSchedule:
         raw = load()
         raw.pop("inputs")
         raw["objective"] = "Look."
-        raw["outcome"]["approval"]["note"] = "no refs"
         raw["schedule"] = {"every": "every 15 minutes"}
         with pytest.raises(ValidationError, match="use 30s, 15m, 1h, 7d"):
             AgentConfig.model_validate(raw)
@@ -280,3 +170,49 @@ class TestWireToolNames:
         raw["mcp"][0]["name"] = "a" * 130
         with pytest.raises(ValidationError):
             AgentConfig.model_validate(raw)
+
+
+class TestFileRules:
+    """The harness ships a filesystem, so these bound it. Versioned rather than
+    runtime policy, because they change what the agent can reach."""
+
+    def test_paths_must_be_absolute(self):
+        with pytest.raises(ValidationError, match="must start with"):
+            AgentConfig.model_validate(load(file_rules=[
+                {"operations": ["write"], "paths": ["secrets/**"], "mode": "deny"}]))
+
+    def test_traversal_rejected(self):
+        with pytest.raises(ValidationError, match=r"must not contain"):
+            AgentConfig.model_validate(load(file_rules=[
+                {"operations": ["write"], "paths": ["/data/../etc"], "mode": "deny"}]))
+
+    def test_an_interrupt_rule_needs_an_approval_route(self):
+        """Same question `gated_tools` asks, so it wants the same warning."""
+        cfg = AgentConfig.model_validate(load(file_rules=[
+            {"operations": ["write"], "paths": ["/prod/**"], "mode": "interrupt"}]))
+        assert cfg.file_rules_interrupt
+
+    def test_allow_is_the_default(self):
+        cfg = AgentConfig.model_validate(load(file_rules=[
+            {"operations": ["read"], "paths": ["/data/**"]}]))
+        assert cfg.file_rules[0].mode == "allow"
+        assert not cfg.file_rules_interrupt
+
+
+class TestCapabilities:
+    def test_allowlist_is_optional(self):
+        """Empty means no allowlist, not "nothing allowed" — a field that silently
+        forbade everything the moment someone added it would be a bad default."""
+        cfg = AgentConfig.model_validate(load(allowed_capabilities=[]))
+        assert cfg.allowed_capabilities == []
+
+    def test_vocabulary_is_closed(self):
+        with pytest.raises(ValidationError):
+            AgentConfig.model_validate(load(allowed_capabilities=["network"]))
+
+    def test_matches_the_harness_vocabulary(self):
+        """Ours must equal deepagents' filesystem operations plus the two it ships
+        without classifying, or a cap and a file rule could disagree about `write`."""
+        cfg = AgentConfig.model_validate(
+            load(allowed_capabilities=["read", "write", "execute", "spawn"]))
+        assert cfg.allowed_capabilities == ["read", "write", "execute", "spawn"]

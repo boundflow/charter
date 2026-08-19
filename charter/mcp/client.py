@@ -59,13 +59,15 @@ def approval_for(annotations: Any) -> tuple[str, str]:
             return annotations.get(camel)
         return getattr(annotations, snake, None)
 
+    # The reason is the annotation's own name, so "why is this gated" is greppable
+    # against the MCP spec rather than against a word we invented.
     if annotations is None:
         return "always", "unannotated"
     if hint("readOnlyHint", "read_only_hint"):
-        return "never", "read_only"
+        return "never", "read_only_hint"
     if hint("destructiveHint", "destructive_hint") is False:
-        return "always", "non_destructive"
-    return "always", "destructive"
+        return "always", "not_destructive_hint"
+    return "always", "destructive_hint"
 
 
 def _connection(spec: McpServer) -> dict:

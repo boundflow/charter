@@ -185,7 +185,9 @@ def import_(
             raise typer.Exit(1)
 
     tools = asyncio.run(go())
-    graded = sorted(((t.name, *approval_for(t)) for t in tools),
+    # Annotations ride on the LangChain tool's `metadata` once the adapter has
+    # loaded it — camelCase, as MCP puts them on the wire.
+    graded = sorted(((t.name, *approval_for(getattr(t, "metadata", None))) for t in tools),
                     key=lambda g: (g[1] == "always", g[0]))
 
     typer.echo(f"mcp:\n  - name: {name}")

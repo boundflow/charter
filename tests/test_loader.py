@@ -103,9 +103,6 @@ name: minimal
 version: 1
 model: claude-haiku-4-5
 objective: Say something useful.
-outcome:
-  deliverable:
-    answer: { type: string }
 """)
         bundle = load_agent(d)
         assert bundle.runtime_defaulted and bundle.lifecycle is None
@@ -178,9 +175,6 @@ name: my-agent
 version: 1
 model: claude-haiku-4-5
 objective: Do the thing.
-outcome:
-  deliverable:
-    answer: { type: string }
 """)
         monkeypatch.chdir(d)
         bundle = load_agent(Path("."))
@@ -233,7 +227,7 @@ class TestInstructions:
     the same rule the config is — `set_version: 1` restores the exact prompt v1 ran
     with, and editing one in place is the same mistake as editing its yaml."""
 
-    def _agent(self, root, *, version=1, files=None, refs=None):
+    def _agent(self, root, *, version=1, skills=None):
         d = root / "policy-agent"
         d.mkdir(exist_ok=True)
         (d / f"v{version}.yaml").write_text(f"""
@@ -243,60 +237,44 @@ name: policy-agent
 version: {version}
 model: claude-haiku-4-5
 objective: Decide something.
-instructions: {refs if refs is not None else list((files or {}).keys())}
-outcome:
-  deliverable:
-    answer: {{ type: string }}
 """)
-        if files:
-            vdir = d / f"v{version}"
-            vdir.mkdir(exist_ok=True)
-            for name, text in files.items():
-                (vdir / name).write_text(text)
+        for name, text in (skills or {}).items():
+            skill = d / f"v{version}" / "skills" / name
+            skill.mkdir(parents=True, exist_ok=True)
+            (skill / "SKILL.md").write_text(text)
         return d
 
-    def test_documents_are_composed_with_their_filenames(self, tmp_path):
-        d = self._agent(tmp_path, files={"policy.md": "Refund duplicates only.",
-                                         "escalation.md": "Page finance over $1000."})
+    def test_a_skills_directory_is_found_without_being_declared(self, tmp_path):
+        """No manifest: what is on disk is what ships, so nothing can drift."""
+        d = self._agent(tmp_path, skills={"refund-policy": "Refund duplicates only."})
         bundle = load_agent(d)
-        text = bundle.instructions[1]
-        assert "# policy.md" in text and "Refund duplicates only." in text
-        assert "# escalation.md" in text and "Page finance over $1000." in text
+        assert bundle.skills[1] == d / "v1" / "skills"
 
-    def test_each_version_reads_its_own_directory(self, tmp_path):
-        """The point of the layout: v1 keeps the document it shipped with."""
-        d = self._agent(tmp_path, version=1, files={"policy.md": "the old rule"})
-        self._agent(tmp_path, version=2, files={"policy.md": "the new rule"})
+    def test_each_version_keeps_its_own_skills(self, tmp_path):
+        """The point of the layout: v1 keeps what it shipped with, so a rollback
+        restores an agent that still exists."""
+        d = self._agent(tmp_path, version=1, skills={"policy": "the old rule"})
+        self._agent(tmp_path, version=2, skills={"policy": "the new rule"})
         bundle = load_agent(d)
-        assert "the old rule" in bundle.instructions[1]
-        assert "the new rule" in bundle.instructions[2]
+        assert (bundle.skills[1] / "policy" / "SKILL.md").read_text() == "the old rule"
+        assert (bundle.skills[2] / "policy" / "SKILL.md").read_text() == "the new rule"
 
-    def test_a_missing_document_fails_at_validate(self, tmp_path):
-        d = self._agent(tmp_path, refs=["nope.md"])
-        with pytest.raises(ConfigError, match="does not exist"):
+    def test_an_agent_without_skills_is_fine(self, tmp_path):
+        assert load_agent(self._agent(tmp_path)).skills == {}
+
+    def test_a_skill_without_skill_md_is_caught_at_validate(self, tmp_path):
+        """SKILL.md is what identifies a skill to the harness — a directory without
+        one is silently ignored at runtime, which is worse than failing here."""
+        d = self._agent(tmp_path, skills={"policy": "fine"})
+        (d / "v1" / "skills" / "empty").mkdir()
+        with pytest.raises(ConfigError, match="no SKILL.md"):
             load_agent(d)
 
-    def test_a_document_may_reference_declared_inputs(self, tmp_path):
-        """Rendered with the objective, so a document isn't a second quieter set of
-        rules with different capabilities."""
-        d = self._agent(tmp_path, files={"policy.md": "Never exceed {{ inputs.cap }}."})
-        raw = (d / "v1.yaml").read_text().replace(
-            "objective: Decide something.",
-            "objective: Decide something.\ninputs:\n  cap: { type: number, default: 5 }")
-        (d / "v1.yaml").write_text(raw)
-        assert "{{ inputs.cap }}" in load_agent(d).instructions[1]
-
-    def test_an_undeclared_reference_in_a_document_is_caught(self, tmp_path):
-        d = self._agent(tmp_path, files={"policy.md": "Never exceed {{ inputs.nope }}."})
-        with pytest.raises(ConfigError, match="not a declared input"):
+    def test_an_empty_skills_directory_is_a_mistake(self, tmp_path):
+        d = self._agent(tmp_path)
+        (d / "v1" / "skills").mkdir(parents=True)
+        with pytest.raises(ConfigError, match="holds no skill directories"):
             load_agent(d)
-
-    @pytest.mark.parametrize("bad", ["/etc/passwd", "../secrets.md", "policy.txt"])
-    def test_paths_are_constrained(self, tmp_path, bad):
-        d = self._agent(tmp_path, refs=[bad])
-        with pytest.raises(ConfigError):
-            load_agent(d)
-
 
 class TestChannelKinds:
     """Three body shapes, one signed POST. Chat products reject arbitrary JSON, so

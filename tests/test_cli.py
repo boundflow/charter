@@ -306,8 +306,7 @@ class TestSchema:
         runner.invoke(cli.app, ["schema", "-o", str(tmp_path)])
         run = json.loads((tmp_path / "runtime.schema.json").read_text())
         props = run["$defs"]["PerRun"]["properties"]
-        for field in ("max_cost_usd", "max_llm_calls", "max_drafts",
-                      "max_questions", "max_tool_failures"):
+        for field in ("max_cost_usd", "max_llm_calls", "max_tool_failures"):
             assert props[field].get("description"), f"{field} has no hover text"
 
     def test_single_kind_to_stdout(self):
