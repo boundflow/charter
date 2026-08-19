@@ -11,7 +11,12 @@ import yaml
 from boundflow import LifecycleState
 
 from charter.config.loader import load_project
-from charter.provisioning.apply import apply_project
+from charter.compile import compile_agent
+from charter.provisioning.apply import (
+    AmbiguousInstance,
+    apply_project,
+    create_instance,
+)
 
 EXAMPLES = Path(__file__).parent.parent / "examples"
 
@@ -43,8 +48,11 @@ class FakeControlPlane:
         return list(self.workflows)
 
     async def create_workflow(self, workflow_type, tenant_id, config=None):
-        # The server creates a workflow paused; activate is what starts it.
-        wf = FakeWorkflow(f"wf_{workflow_type}", workflow_type, tenant_id=tenant_id,
+        # The server creates a workflow paused; activate is what starts it. Ids are
+        # unique per workflow — several can share a type, as instances of one agent.
+        n = sum(1 for w in self.workflows if w.workflow_type == workflow_type)
+        suffix = f"_{n}" if n else ""
+        wf = FakeWorkflow(f"wf_{workflow_type}{suffix}", workflow_type, tenant_id=tenant_id,
                           workflow_state="paused")
         self.workflows.append(wf)
         self.calls.append(("create_workflow", workflow_type, tenant_id, config))
@@ -87,20 +95,36 @@ def run(coro):
     return asyncio.run(coro)
 
 
-def test_creates_both_agents(project):
+def instance(cp, project, agent="refund-triage"):
+    """One live instance to configure. `apply` never makes these itself."""
+    return run(create_instance(cp, compile_agent(project.agents[agent]), "tenant-1"))
+
+
+def test_apply_never_creates(project):
+    """An instance is an entity with its own state, so it comes into existence
+    when someone decides that, not as a side effect of a config run in CI."""
     cp = FakeControlPlane()
     results = run(apply_project(cp, project))
-    assert [(r.agent, r.version, r.created) for r in results] == [
-        ("refund-triage", 1, True),
-        ("ticket-summarizer", 2, True),
-    ]
+    assert results == []
+    assert "create_workflow" not in cp.names()
 
 
-def test_call_sequence_per_agent(project):
+def test_apply_configures_the_instances_that_exist(project):
     cp = FakeControlPlane()
-    run(apply_project(cp, project, only="refund-triage"))
+    instance(cp, project)
+    cp.calls.clear()
+
+    results = run(apply_project(cp, project, only="refund-triage"))
+    assert [(r.agent, r.version) for r in results] == [("refund-triage", 1)]
+    assert "create_workflow" not in cp.names()
+    assert "set_workflow_config" in cp.names()
+    assert len(cp.workflows) == 1
+
+
+def test_creating_an_instance_configures_and_activates_it(project):
+    cp = FakeControlPlane()
+    instance(cp, project)
     assert cp.names() == [
-        "set_model_pricing", "set_model_pricing",
         "create_workflow",
         "set_agent_runtime_policy",
         "set_workflow_lifecycle_policy",
@@ -108,30 +132,36 @@ def test_call_sequence_per_agent(project):
     ]
 
 
-def test_reapply_reuses_the_workflow(project):
-    """A fresh workflow has no run history, which would reset every lifecycle
-    window and discard the metrics an operator is judging the agent by."""
+def test_several_instances_without_a_choice_is_refused(project):
+    """Each has its own state, so configuring whichever came back first is the
+    quiet kind of wrong this is meant to prevent."""
     cp = FakeControlPlane()
-    run(apply_project(cp, project, only="refund-triage"))
-    cp.calls.clear()
+    instance(cp, project)
+    instance(cp, project)
 
-    results = run(apply_project(cp, project, only="refund-triage"))
-    assert results[0].created is False
-    assert results[0].workflow_id == "wf_refund-triage"
-    assert "create_workflow" not in cp.names()
-    assert "set_workflow_config" in cp.names()
-    assert len(cp.workflows) == 1
+    with pytest.raises(AmbiguousInstance) as e:
+        run(apply_project(cp, project, only="refund-triage"))
+    assert len(e.value.ids) == 2
 
 
-def test_deleted_workflow_is_not_reused(project):
+def test_all_configures_every_instance(project):
+    cp = FakeControlPlane()
+    instance(cp, project)
+    instance(cp, project)
+
+    results = run(apply_project(cp, project, only="refund-triage", all_=True))
+    assert len(results) == 2
+    assert len({r.workflow_id for r in results}) == 2
+
+
+def test_deleted_instances_are_not_configured(project):
     cp = FakeControlPlane([FakeWorkflow("wf_old", "refund-triage", LifecycleState.DELETED)])
-    results = run(apply_project(cp, project, only="refund-triage"))
-    assert results[0].created is True
-    assert results[0].workflow_id == "wf_refund-triage"
+    assert run(apply_project(cp, project, only="refund-triage")) == []
 
 
 def test_policy_is_keyed_by_agent_name(project):
     cp = FakeControlPlane()
+    instance(cp, project)
     run(apply_project(cp, project, only="refund-triage"))
     call = next(c for c in cp.calls if c[0] == "set_agent_runtime_policy")
     assert call[2] == "refund-triage"
@@ -149,8 +179,9 @@ def test_applies_the_newest_served_version_not_the_newest_on_disk(tmp_path):
     (dst / "worker.yaml").write_text(yaml.safe_dump(raw))
 
     cp = FakeControlPlane()
-    results = run(apply_project(
-        cp, load_project(dst / "worker.yaml"), only="ticket-summarizer"))
+    reloaded = load_project(dst / "worker.yaml")
+    instance(cp, reloaded, "ticket-summarizer")
+    results = run(apply_project(cp, reloaded, only="ticket-summarizer"))
     assert results[0].version == 1
 
 
@@ -163,13 +194,15 @@ def test_warns_when_a_gated_agent_has_no_notification_route(tmp_path):
     (dst / "worker.yaml").write_text(yaml.safe_dump(raw))
 
     cp = FakeControlPlane()
-    results = run(apply_project(
-        cp, load_project(dst / "worker.yaml"), only="refund-triage"))
+    reloaded = load_project(dst / "worker.yaml")
+    instance(cp, reloaded, "refund-triage")
+    results = run(apply_project(cp, reloaded, only="refund-triage"))
     assert any("slow timeout" in w for w in results[0].warnings)
 
 
 def test_no_warning_when_routed(project):
     cp = FakeControlPlane()
+    instance(cp, project)
     results = run(apply_project(cp, project, only="refund-triage"))
     assert not any("slow timeout" in w for w in results[0].warnings)
 
@@ -180,9 +213,9 @@ def test_the_same_agent_name_in_another_tenant_is_a_different_agent(project):
     reconfigure another's agent."""
     cp = FakeControlPlane([FakeWorkflow("wf_other", "refund-triage",
                                         tenant_id="some-other-tenant")])
+    mine = instance(cp, project)
     results = run(apply_project(cp, project, only="refund-triage"))
-    assert results[0].created is True
-    assert results[0].workflow_id == "wf_refund-triage"
+    assert [r.workflow_id for r in results] == [mine.id]
     assert len(cp.workflows) == 2
 
 
@@ -190,6 +223,7 @@ def test_reapply_does_not_activate_an_already_active_workflow(project):
     """A workflow is created paused and activate only accepts paused/cooldown, so
     calling it unconditionally made the second apply fail."""
     cp = FakeControlPlane()
+    instance(cp, project)
     run(apply_project(cp, project, only="refund-triage"))
     cp.calls.clear()
     run(apply_project(cp, project, only="refund-triage"))

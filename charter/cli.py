@@ -11,6 +11,7 @@ approve, pending, memory, worker) lands with the worker.
 from __future__ import annotations
 
 import asyncio
+import time
 import json
 import logging
 import os
@@ -240,9 +241,20 @@ def validate(
 def apply(
     path: Path = typer.Argument(Path("."), help="worker.yaml or a project dir"),
     only: str = typer.Option(None, "--agent", help="Apply just this agent"),
+    instance: str = typer.Option(None, "--instance", help="Configure one instance"),
+    all_: bool = typer.Option(False, "--all", help="Configure every instance"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Validate and print, don't call"),
 ) -> None:
-    """Validate, then create or update workflows, policies, and pricing. Idempotent."""
+    """Validate, then update config, policies, and pricing on existing instances.
+
+    Never creates or destroys one: an instance is an entity with state of its own,
+    and bringing one into existence shouldn't be a side effect of re-running config
+    in CI. See `charter agent create`.
+
+    With more than one instance you must say which — `--instance <id>` or `--all` —
+    because each has its own state and quietly configuring the wrong one is the
+    failure this refuses to allow.
+    """
     try:
         project = _load(path)
     except ConfigError as e:
@@ -281,9 +293,15 @@ def apply(
 
     async def run() -> None:
         async with ControlPlaneClient(endpoint, api_key) as cp:
-            for r in await apply_project(cp, project, only=only):
-                ui.ok(f"{ui.ref('agent', r.agent)} v{r.version} "
-                      f"{'created' if r.created else 'configured'}")
+            results = await apply_project(cp, project, only=only,
+                                          instance=instance, all_=all_)
+            if not results:
+                ui.warn("nothing to configure — no instances exist yet")
+                ui.detail("charter agent create <agent>")
+                return
+            for r in results:
+                where = f" {short(r.workflow_id)}" if r.workflow_id else ""
+                ui.ok(f"{ui.ref('agent', r.agent)}{where} v{r.version} configured")
                 for w in r.warnings:
                     ui.warn(f"  warning: {w}")
 
@@ -291,9 +309,17 @@ def apply(
 
 
 def _run_apply(run) -> None:
-    from .provisioning.apply import NoSuchTenant
+    from .provisioning.apply import AmbiguousInstance, NoSuchTenant
     try:
         asyncio.run(run())
+    except AmbiguousInstance as e:
+        ui.err(f"{e.agent!r} has {len(e.ids)} instances — say which")
+        for wid in e.ids:
+            ui.detail(short(wid))
+        typer.echo()
+        ui.detail("--instance <id>   configure one")
+        ui.detail("--all             configure every instance")
+        raise typer.Exit(1)
     except NoSuchTenant as e:
         _err(f"no tenant named {e.name!r}")
         _err(f"  existing: {', '.join(e.existing) or '(none)'}")
@@ -374,23 +400,92 @@ def _tenant_name(explicit: str | None) -> str:
     return name
 
 
-async def _workflow_for(cp, agent: str, tenant: str | None = None):
-    """Resolve agent name -> workflow within one tenant. Matching on name alone
-    would let a staging command act on the production agent."""
+def short(workflow_id: str) -> str:
+    """The first 8 characters of a workflow id.
+
+    An instance is identified by the id BoundFlow assigned it — there is nowhere
+    else to put a name, and Charter deliberately keeps no store to map one. An
+    ordinal would be worse than ugly: delete instance 2 and either 3 becomes 2,
+    silently repointing anything that referred to it, or you keep gaps and the
+    numbers stop being ordinals. A short id is derived from the real one, so it
+    never moves.
+    """
+    return workflow_id[:8]
+
+
+async def _tenant_id(cp, tenant: str | None):
     from .provisioning.apply import NoSuchTenant, resolve_tenant
 
     name = _tenant_name(tenant)
     try:
-        tenant_id = await resolve_tenant(cp, name)
+        return await resolve_tenant(cp, name)
     except NoSuchTenant as e:
         ui.err(f"no tenant named {e.name!r}")
         ui.detail(f"existing: {', '.join(e.existing) or '(none)'}")
         raise typer.Exit(1)
 
-    for w in await cp.list_workflows():
-        if w.workflow_type == agent and w.tenant_id == tenant_id:
-            return w
-    return None
+
+async def _instances(cp, agent: str, tenant: str | None = None) -> list:
+    """Every live instance of an agent, in creation order.
+
+    Scoped by tenant, because identity is (tenant, name) and a workflow's tenant is
+    fixed at creation. Matching on name alone would let a staging command act on
+    production.
+    """
+    tid = await _tenant_id(cp, tenant)
+    return [w for w in await cp.list_workflows()
+            if w.workflow_type == agent and w.tenant_id == tid]
+
+
+async def _select(cp, agent: str, *, instance: str | None, all_: bool,
+                  tenant: str | None = None, verb: str = "act on") -> list:
+    """Which instances a command should touch, refusing to guess.
+
+    An agent can have several instances, and each is a distinct entity with its own
+    state. Picking one for someone would silently send work to the wrong entity's
+    memory, so with more than one and no choice made, this stops.
+    """
+    found = await _instances(cp, agent, tenant)
+    if not found:
+        ui.err(f"no instances of {agent!r}")
+        ui.detail(f"charter agent create {agent}")
+        raise typer.Exit(1)
+
+    if instance:
+        matched = [w for w in found if w.id.startswith(instance)]
+        if not matched:
+            ui.err(f"no instance of {agent!r} starting {instance!r}")
+            ui.detail("known: " + ", ".join(short(w.id) for w in found))
+            raise typer.Exit(1)
+        if len(matched) > 1:
+            ui.err(f"{instance!r} matches {len(matched)} instances — use more characters")
+            ui.detail("  " + ", ".join(short(w.id) for w in matched))
+            raise typer.Exit(1)
+        return matched
+
+    if all_:
+        return found
+    if len(found) == 1:
+        return found
+
+    ui.err(f"{agent!r} has {len(found)} instances — say which")
+    for w in found:
+        ui.detail(f"{short(w.id)}  {_state_of(w)}")
+    typer.echo()
+    ui.detail(f"--instance <id>   {verb} one")
+    ui.detail(f"--all             {verb} every instance")
+    raise typer.Exit(1)
+
+
+def _state_of(w) -> str:
+    state = getattr(w, "workflow_state", None)
+    return getattr(state, "value", state) or "unknown"
+
+
+async def _workflow_for(cp, agent: str, tenant: str | None = None):
+    """One instance, for commands that have always assumed a single one."""
+    found = await _instances(cp, agent, tenant)
+    return found[0] if found else None
 
 
 def _show_inputs(cfg) -> None:
@@ -434,10 +529,17 @@ def run(
     ctx: typer.Context,
     agent: str = typer.Argument(..., help="Agent name (its directory)"),
     path: Path = typer.Option(Path("."), "--path", help="Where agents live"),
+    instance: str = typer.Option(None, "--instance", help="Which instance to run on"),
+    all_: bool = typer.Option(False, "--all", help="Start a task on every instance"),
     tenant: str = TENANT,
 ) -> None:
     """Start one task. Declared inputs become --flags, validated before the request
-    is created so a typo fails here instead of burning a run."""
+    is created so a typo fails here instead of burning a run.
+
+    An agent with several instances needs one naming: each has its own state, so
+    sending work to the wrong one isn't a scheduling detail, it's the wrong entity
+    doing the job.
+    """
     agent_dir = Path(path) / agent
     if not agent_dir.is_dir():
         agent_dir = Path(path)
@@ -487,13 +589,104 @@ def run(
 
     async def go():
         async with _cp() as cp:
-            wf = await _workflow_for(cp, agent, tenant)
-            if wf is None:
-                _err(f"{agent!r} has not been applied yet — run `charter apply` first")
-                raise typer.Exit(1)
-            request_id = await cp.invoke_workflow(wf.id, context=context)
-            ui.ok(f"{ui.ref('task', request_id)} started")
-            ui.detail(f"charter status {request_id}")
+            targets = await _select(cp, agent, instance=instance, all_=all_,
+                                    tenant=tenant, verb="run on")
+            for wf in targets:
+                request_id = await cp.invoke_workflow(wf.id, context=context)
+                where = f" on {short(wf.id)}" if len(targets) > 1 else ""
+                ui.ok(f"{ui.ref('task', request_id)} started{where}")
+                if len(targets) == 1:
+                    ui.detail(f"charter status {request_id}")
+
+    asyncio.run(go())
+
+
+agent_app = typer.Typer(help="Create and destroy instances of an agent.")
+app.add_typer(agent_app, name="agent")
+
+
+@agent_app.command("create")
+def agent_create(
+    agent: str = typer.Argument(..., help="Agent name (its directory)"),
+    path: Path = typer.Option(Path("."), "--path", help="Where agents live"),
+    tenant: str = TENANT,
+) -> None:
+    """Bring a new instance into existence.
+
+    Separate from `apply` on purpose. An instance is an entity with its own store,
+    its own budget and its own lifecycle state, so creating one is a decision
+    someone makes rather than something a config run does on their behalf.
+    """
+    from .compile import compile_agent
+    from .provisioning.apply import create_instance
+
+    try:
+        bundle = load_agent(Path(path) / agent)
+    except ConfigError as e:
+        _fail(e)
+
+    async def go():
+        async with _cp() as cp:
+            tid = await _tenant_id(cp, tenant)
+            existing = await _instances(cp, agent, tenant)
+            wf = await create_instance(cp, compile_agent(bundle), tid)
+            ui.ok(f"{ui.ref('agent', agent)} {short(wf.id)} created")
+            if existing:
+                ui.detail(f"{len(existing) + 1} instances — "
+                          f"`charter run {agent} --instance {short(wf.id)}`")
+
+    asyncio.run(go())
+
+
+@agent_app.command("delete")
+def agent_delete(
+    agent: str = typer.Argument(..., help="Agent name"),
+    instance: str = typer.Option(..., "--instance", help="Which instance to destroy"),
+    yes: bool = typer.Option(False, "--yes", help="Skip the confirmation"),
+    wait: bool = typer.Option(False, "--wait", help="Block until the delete completes"),
+    tenant: str = TENANT,
+) -> None:
+    """Destroy one instance, and everything it remembered.
+
+    Requires `--instance` even when there is only one: this is the operation that
+    loses state irrecoverably, so it should never be possible to run it against
+    whichever instance happened to come back first.
+    """
+    async def go():
+        async with _cp() as cp:
+            targets = await _select(cp, agent, instance=instance, all_=False,
+                                    tenant=tenant, verb="delete")
+            wf = targets[0]
+            if not yes:
+                ui.warn(f"deleting {agent} {short(wf.id)} — its memory and files go "
+                        f"with it, and nothing restores them")
+                typer.confirm("continue?", abort=True)
+            await cp.delete_workflow(wf.id)
+
+            # The control plane won't finish a delete while a run is in flight — it
+            # sits blocked until the task completes. That's the right behaviour, and
+            # worth saying out loud rather than leaving someone to find a workflow
+            # that didn't disappear.
+            after = await cp.get_workflow(wf.id)
+            if after.lifecycle_state.value == "deleted":
+                ui.ok(f"{ui.ref('agent', agent)} {short(wf.id)} deleted")
+                return
+
+            ui.ok(f"{ui.ref('agent', agent)} {short(wf.id)} delete queued")
+            ui.detail("a task is still running — it finishes first, then the "
+                      "instance goes")
+            if not wait:
+                return
+
+            deadline = time.monotonic() + 300
+            while time.monotonic() < deadline:
+                await asyncio.sleep(2)
+                if (await cp.get_workflow(wf.id)).lifecycle_state.value == "deleted":
+                    ui.ok(f"{short(wf.id)} deleted")
+                    return
+            # An abandoned job's lease expires and any worker serving this type
+            # picks it up — so this only persists when nothing serves it any more.
+            ui.warn("still running after 5m — is a worker still serving this agent?")
 
     asyncio.run(go())
 
@@ -525,32 +718,39 @@ def agents(tenant: str = TENANT) -> None:
                 ui.dim(f"no agents in {name} — charter apply .")
                 return
 
-            mine.sort(key=lambda w: w.workflow_type)
+            mine.sort(key=lambda w: (w.workflow_type, w.id))
+            # An agent can have several instances — same config, separate entities,
+            # each with its own state and its own budget. The name is printed once
+            # and the instance id identifies the row, because two rows reading
+            # `refund-demo v1 active` tell you nothing about which is stuck.
+            rows, seen = [], None
+            for w in mine:
+                rows.append([w.workflow_type if w.workflow_type != seen else "",
+                             short(w.id), f"v{w.version}",
+                             ui.state(w.workflow_state.value),
+                             ui.state(ui.activity(w.lifecycle_state.value))])
+                seen = w.workflow_type
             # No schedule column: list_workflows returns the lighter view with
             # config unset, and a fleet view that made an extra call per agent to
             # fill one column would be the wrong trade. `charter describe` has it.
-            ui.table(["agent", "ver", "status", "activity"],
-                     [[w.workflow_type, f"v{w.version}",
-                       ui.state(w.workflow_state.value),
-                       ui.state(ui.activity(w.lifecycle_state.value))]
-                      for w in mine])
+            ui.table(["agent", "instance", "ver", "status", "activity"], rows)
 
             # The two reasons an agent isn't working, and they need different acts.
-            waiting = [w.workflow_type for w in mine
+            waiting = [w for w in mine
                        if w.lifecycle_state.value in ("awaiting_approval", "awaiting_input")]
-            stopped = [w.workflow_type for w in mine if not ui.working(w.workflow_state.value)]
+            stopped = [w for w in mine if not ui.working(w.workflow_state.value)]
 
             if waiting:
                 typer.echo()
                 ui.warn(f"{len(waiting)} waiting on a human")
-                for a in waiting:
-                    ui.detail(f"charter pending {a}")
+                for w in waiting:
+                    ui.detail(f"charter pending {w.workflow_type} --instance {short(w.id)}")
             if stopped:
                 typer.echo()
                 ui.warn(f"{len(stopped)} stopped — no new tasks will start")
-                for a in stopped:
-                    ui.detail(f"charter audit {a}    # what fired")
-                    ui.detail(f"charter resume {a}   # release it")
+                for w in stopped:
+                    ui.detail(f"charter audit {w.workflow_type} --instance {short(w.id)}")
+                    ui.detail(f"charter resume {w.workflow_type} --instance {short(w.id)}")
 
     asyncio.run(go())
 

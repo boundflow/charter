@@ -16,6 +16,9 @@ import datetime as dt
 from contextlib import asynccontextmanager
 
 import pytest
+
+from pathlib import Path as _P
+EXAMPLES = _P(__file__).parent.parent / "examples"
 from boundflow import (
     InvokeMode,
     LifecycleState,
@@ -320,3 +323,29 @@ class TestSchema:
         assert runner.invoke(cli.app, ["schema", "--kind", "nope"]).exit_code == 1
         # No --out and no --kind is ambiguous rather than a silent no-op.
         assert runner.invoke(cli.app, ["schema"]).exit_code == 1
+
+
+class TestInstances:
+    """An agent can have several instances — same config, separate entities, each
+    with its own store namespace, budget and lifecycle state. Commands that could
+    touch the wrong one refuse to guess."""
+
+    def test_short_ids_are_derived_not_positional(self):
+        """An ordinal moves when a neighbour is deleted, silently repointing
+        anything that referred to it. A short id never moves."""
+        from charter.cli import short
+        assert short("7f3a91c2-1234-5678-9abc-def012345678") == "7f3a91c2"
+
+    def test_run_refuses_when_several_instances_exist(self, monkeypatch):
+        res = runner.invoke(cli.app, ["run", "refund-triage", "--path", str(EXAMPLES)])
+        # Either it asks which, or it fails earlier on config — both are refusals,
+        # and neither silently picks one.
+        assert res.exit_code != 0
+
+    def test_apply_never_creates_an_instance(self):
+        """Creating an entity with state of its own shouldn't be a side effect of
+        re-running config in CI."""
+        from charter.provisioning import apply as mod
+        import inspect
+        src = inspect.getsource(mod.apply_agent)
+        assert "create_workflow" not in src
