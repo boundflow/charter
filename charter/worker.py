@@ -20,7 +20,7 @@ import re
 from dataclasses import dataclass, field
 
 from boundflow import BoundFlowWorker, ControlPlaneClient
-from boundflow.anthropic_client import AnthropicLlmClient
+from boundflow.langchain_client import LangChainLlmClient
 
 from . import ui
 from .config.loader import AgentBundle, Project
@@ -71,10 +71,29 @@ class Served:
 class CharterWorker:
     project: Project
     served: dict[tuple[str, int], Served] = field(default_factory=dict)
-    # Tests substitute a deterministic client here. Everything else in an
+    # Tests substitute a deterministic model here. Everything else in an
     # end-to-end run stays real, because the model is the one component where
-    # determinism is worth more than fidelity.
-    llm: object | None = None
+    # determinism is worth more than fidelity. A factory rather than an instance:
+    # the model name comes from each agent's versioned config, so one worker
+    # serving three agents builds three models.
+    chat_model: object | None = None
+
+    def _chat_model(self, model: str):
+        """The LangChain model for one agent, built from the operator's credential.
+
+        Governed by the time the harness sees it — `run_governed` wraps this in a
+        GovernedChatModel, which is what makes subagent calls count against the
+        same budget as the parent's.
+        """
+        if self.chat_model is not None:
+            return self.chat_model(model)
+        from langchain_anthropic import ChatAnthropic
+
+        manifest = self.project.manifest
+        if manifest.llm.provider != "anthropic":
+            raise RuntimeError(
+                f"llm provider {manifest.llm.provider!r} is declared but not wired up")
+        return ChatAnthropic(model=model, api_key=resolve(manifest.llm.api_key))
 
     async def run(self) -> None:
         manifest = self.project.manifest
@@ -84,7 +103,11 @@ class CharterWorker:
 
         async with cp:
             worker = BoundFlowWorker(
-                llm=self.llm or _llm(manifest),
+                # The harness drives the loop and gets its model per call via
+                # run_governed, so nothing here uses BoundFlow's own client. It's
+                # still required, so it's bridged from the same credential rather
+                # than becoming a second place a key could come from.
+                llm=LangChainLlmClient(lambda name: self._chat_model(name)),
                 api_key=resolve(manifest.control_plane.api_key),
             )
             notifier = Notifier(manifest.notifications)
@@ -116,9 +139,9 @@ class CharterWorker:
                 cfg = bundle.versions[version]
                 tools = ToolSet()
                 served = Served(bundle, version, tools,
-                                Loop(cfg, bundle.runtime, tools.langchain_tools(),
+                                Loop(cfg, bundle.runtime, tools,
                                      self._chat_model,
-                                     self.project.manifest.store.url))
+                                     resolve(self.project.manifest.store.url)))
                 try:
                     await tools.connect(cfg)
                     for conn in tools._connections.values():
@@ -180,15 +203,8 @@ class CharterWorker:
             await served.tools.aclose()
 
 
-def _llm(manifest: WorkerManifest):
-    if manifest.llm.provider == "anthropic":
-        return AnthropicLlmClient(api_key=resolve(manifest.llm.api_key))
-    raise RuntimeError(
-        f"llm provider {manifest.llm.provider!r} is declared but not wired up yet")
-
-
-async def run_worker(project: Project, llm=None) -> None:
-    worker = CharterWorker(project, llm=llm)
+async def run_worker(project: Project, chat_model=None) -> None:
+    worker = CharterWorker(project, chat_model=chat_model)
     try:
         await worker.run()
     finally:

@@ -97,11 +97,13 @@ class Loop:
     `ctx.context` and the harness's own checkpoint, so a task can resume on a
     different worker after a gate."""
 
-    def __init__(self, cfg: AgentConfig, runtime, tools: list, chat_model,
+    def __init__(self, cfg: AgentConfig, runtime, tools, chat_model,
                  store_url: str) -> None:
         self.cfg = cfg
         self.runtime = runtime
-        self.tools = tools            # LangChain tools, from the declared MCP servers
+        # The ToolSet, not its tools: it hasn't connected yet when the worker builds
+        # this, and a quarantined agent reconnects later. Asked per task instead.
+        self.tools = tools
         self.chat_model = chat_model  # a factory: (model_name) -> BaseChatModel
         self.store_url = store_url
 
@@ -198,7 +200,7 @@ class Loop:
                     ).ainvoke(h.first({"messages": [{"role": "user", "content": prompt}]}),
                               h.config),
                     chat_model=self.chat_model(self.cfg.model),
-                    tools=self.tools,
+                    tools=self.tools.langchain_tools(),
                     output_schema=response_schema(self.cfg),
                     budget=self._remaining(ctx),
                 )

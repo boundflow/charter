@@ -70,7 +70,8 @@ class FakeCtx:
 def loop_for(agent="refund-triage", monkeypatch=None):
     bundle = load_agent(EXAMPLES / agent)
     cfg = bundle.latest
-    loop = Loop(cfg, bundle.runtime, tools=[], chat_model=lambda m: object(),
+    empty = type("NoTools", (), {"langchain_tools": lambda self: []})()
+    loop = Loop(cfg, bundle.runtime, tools=empty, chat_model=lambda m: object(),
                 store_url="postgresql://unused")
     return cfg, loop
 

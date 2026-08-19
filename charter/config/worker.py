@@ -34,10 +34,34 @@ class ControlPlane(Base):
 
 class Llm(Base):
     """Inference is bring-your-own: this key lives in the operator's environment,
-    and the control plane never sees it or the traffic."""
+    and the control plane never sees it or the traffic.
 
-    provider: Literal["anthropic", "langchain"]
+    The model *name* isn't here — it's in each agent's versioned config, so a model
+    change is a version bump you can roll back. This is only where the credential
+    comes from and which provider integration to build.
+    """
+
+    provider: Literal["anthropic"] = "anthropic"
     api_key: str = Field(min_length=1)
+
+
+class Store(Base):
+    """Where the harness keeps state between rounds.
+
+    The agent's conversation and its files have to outlive the operation, or every
+    gate would start the task over. Both live here — a checkpointer for the thread
+    and a store for the filesystem — and both are the harness's own Postgres
+    integrations, so Charter provisions the connection and nothing else.
+
+    It is deliberately the operator's database, not the control plane's. What
+    accumulates in it is prompts, reasoning, tool output and whatever customer data
+    the agent touched; a governance product has no business holding that. Pointing
+    it at the Postgres you already run for BoundFlow is one connection string and
+    no new infrastructure — but it stays yours.
+    """
+
+    url: str = Field(min_length=1, description=(
+        "postgresql://... — or $ENV_VAR, resolved at boot like every other secret."))
 
 
 class Served(Base):
@@ -150,6 +174,7 @@ class WorkerManifest(Base):
     name: str | None = None
     control_plane: ControlPlane
     llm: Llm
+    store: Store
     # The ONE reference between the two artifacts, and it points one way: worker ->
     # agent, by name. Agent configs never reference a worker.
     agents_dir: str = "./agents"

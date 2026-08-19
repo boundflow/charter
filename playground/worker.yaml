@@ -12,6 +12,11 @@ llm:
   provider: anthropic
   api_key: ${ANTHROPIC_API_KEY}
 
+# The agent's conversation and files between rounds. Yours, not the control
+# plane's — what lands here is prompts and whatever the agent touched.
+store:
+  url: ${CHARTER_STORE_URL}
+
 agents_dir: ./
 
 serves:
