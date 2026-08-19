@@ -63,6 +63,22 @@ class PerRun(Base):
     tool_call_limits: list[ToolCallLimit] = Field(default_factory=list)
     capability_call_limits: list[CapabilityLimit] = Field(default_factory=list)
 
+    # Subagents get their own fields rather than being a capability limit. The
+    # agent spawns one by calling a tool, but that's the harness's mechanism, and
+    # writing `capability: spawn, max_calls: 5` to say "at most five subagents"
+    # leaks it into the thing people read.
+    #
+    # Two numbers because they stop different things. The total is a budget: an
+    # agent looping on subagents runs out of money eventually, but failing at a
+    # stated ceiling says why. The parallel bound is a valve against a burst —
+    # fifty spawned in one turn are all in flight before any has recorded a cost,
+    # which no spend cap can catch in time.
+    max_total_subagents: int = Field(default=0, ge=0, description=(
+        "Subagents one task may spawn in total. 0 is unlimited."))
+    max_parallel_subagents: int = Field(default=0, ge=0, description=(
+        "Subagents that may be running at once. 0 is unlimited. Bounds only "
+        "subagents — ordinary parallel tool calls are untouched."))
+
     # Failures of any ONE tool before the task gives up — a circuit breaker, per
     # tool rather than in aggregate, so the failure message names the broken thing.
     max_tool_failures: int = Field(default=3, gt=0, description=(

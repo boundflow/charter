@@ -35,6 +35,7 @@ from boundflow.harness_gates import approve, pending_action, reject, respond
 from boundflow.llm import AgentPolicyLimitExceeded
 
 from ..config.agent import AgentConfig
+from .subagents import subagent_limits
 
 log = logging.getLogger(__name__)
 
@@ -240,7 +241,7 @@ class Loop:
                         system_prompt=prompt,
                         # Ours to declare, theirs to enforce, durable because of us.
                         interrupt_on=interrupt_on(self.cfg),
-                        **h.wiring,
+                        **self._wiring(h),
                     ).ainvoke(h.first({"messages": [{"role": "user", "content": prompt}]}),
                               h.config),
                     chat_model=self.chat_model(self.cfg.model),
@@ -258,6 +259,19 @@ class Loop:
         if (action := pending_action(result)) is not None:
             return self._gate(ctx, action)
         return Complete(result=result.output)
+
+    def _wiring(self, h) -> dict:
+        """The harness's wiring, plus our subagent bounds.
+
+        Appended rather than replacing: `h.wiring` carries the policy BoundFlow
+        already translated — permissions, capability caps — and this is the one
+        limit that has no harness equivalent, because to the harness `task` is
+        just a tool.
+        """
+        wiring = dict(h.wiring)
+        if extra := subagent_limits(self.runtime.per_run):
+            wiring["middleware"] = list(wiring.get("middleware") or []) + extra
+        return wiring
 
     def _tools(self) -> list:
         """Declared MCP tools, plus the ask tool when this agent may ask."""
