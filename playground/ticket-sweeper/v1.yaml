@@ -20,17 +20,16 @@ schedule:
 mcp:
   - name: desk
     command: python
-    args: ["playground/mcp_server.py"]
+    args: ["mcp_server.py"]
     tools:
       - tool: list_open_tickets
         on_failure: fail
       - tool: get_ticket
 
-outcome:
-  deliverable:
-    summary:
-      type: string
-      description: What needs attention, most urgent first.
-    needs_attention:
-      type: integer
-      description: How many tickets warrant a human look.
+response_format:
+  summary:
+    type: string
+    description: What needs attention, most urgent first.
+  needs_attention:
+    type: integer
+    description: How many tickets warrant a human look.

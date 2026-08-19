@@ -67,21 +67,21 @@ def interrupt_on(cfg: AgentConfig) -> dict[str, Any]:
 
 
 def response_schema(cfg: AgentConfig) -> dict | None:
-    """The agent's structured answer, or None to let it reply in prose.
+    """The agent's structured answer as a *properties map*, or None for prose.
 
-    Charter adds no fields of its own any more. What comes back is the agent's
-    result, not a wrapper we have to unpick.
+    A map, not a whole JSON Schema: the SDK builds the tool as
+    `{"type": "object", "properties": <this>}`, so handing it a full schema nests
+    `{"type": "object"}` where a field belongs and the provider rejects the tool —
+    a 400 on the first live call, and nothing before that notices.
+
+    Charter adds no fields of its own any more, so what comes back is the agent's
+    result rather than a wrapper to unpick.
     """
     if not cfg.response_format:
         return None
-    return {
-        "type": "object",
-        "properties": {name: {"type": spec.type,
-                              **({"description": spec.description} if spec.description else {})}
-                       for name, spec in cfg.response_format.items()},
-        "required": list(cfg.response_format),
-        "additionalProperties": False,
-    }
+    return {name: {"type": spec.type,
+                   **({"description": spec.description} if spec.description else {})}
+            for name, spec in cfg.response_format.items()}
 
 
 class Ended(Exception):
@@ -241,11 +241,24 @@ class Loop:
         )
 
     def _justify(self, action: dict) -> str:
-        """What the approver reads. The harness already writes a display string for
-        its own in-process prompt; we use it rather than composing a second one that
-        could describe the same action differently."""
-        return (action.get("description")
-                or f"{self.cfg.name} wants to call {action.get('name', 'a tool')}")
+        """What the approver reads, and what a notification carries.
+
+        The harness supplies a description, but it is generic — "Tool execution
+        requires approval" tells someone paged at 2am nothing, which is what the
+        first live gate actually sent. So the tool and its arguments lead, and the
+        harness's line is appended only when it says something we didn't.
+        """
+        name = action.get("name", "a tool")
+        args = action.get("args") or {}
+        detail = ", ".join(f"{k}={v!r}" for k, v in args.items())
+        line = f"{self.cfg.name} wants to call {name}"
+        if detail:
+            line += f" with {detail}"
+
+        described = (action.get("description") or "").strip()
+        if described and not described.lower().startswith("tool execution requires"):
+            return f"{line}\n\n{described}"
+        return line
 
 
 def operations(loop: Loop) -> dict:

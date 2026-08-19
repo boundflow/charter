@@ -124,11 +124,16 @@ def test_an_agent_with_nothing_gated_asks_for_no_interrupts():
     assert interrupt_on(cfg) == {}
 
 
-def test_response_format_becomes_a_schema_and_is_optional():
+def test_response_format_is_a_properties_map_not_a_schema():
+    """The SDK wraps this as `{"type": "object", "properties": <this>}`. Handing it
+    a full JSON Schema nests `{"type": "object"}` where a field belongs, and the
+    provider 400s on the first live call — which is exactly how this was found."""
     cfg = load_agent(EXAMPLES / "refund-triage").latest
-    schema = response_schema(cfg)
-    assert set(schema["properties"]) == {"resolution", "refunded_usd"}
-    assert schema["additionalProperties"] is False
+    fields = response_schema(cfg)
+    assert set(fields) == {"resolution", "refunded_usd"}
+    assert fields["refunded_usd"]["type"] == "number"
+    assert "type" not in fields or isinstance(fields.get("type"), dict), (
+        "a bare `type` key means a whole schema leaked in")
 
     cfg.response_format = None
     assert response_schema(cfg) is None, "prose is a valid answer"
@@ -153,7 +158,8 @@ def test_a_pending_action_parks_the_task():
 
     out = run(loop.entry(ctx))
     assert isinstance(out, AwaitApproval)
-    assert out.justification == "Refund $40 to the customer"
+    assert "stripe__create_refund" in out.justification
+    assert "Refund $40 to the customer" in out.justification
     assert out.metadata["tool"] == "stripe__create_refund"
     assert out.timeout == cfg.gate.timeout_seconds
     assert ctx.context[K_GATES] == 1
@@ -270,3 +276,21 @@ def test_finishing_returns_the_agents_own_answer():
         FakeResult({"resolution": "refunded $40", "refunded_usd": 40})])))
     assert isinstance(out, Complete)
     assert out.result == {"resolution": "refunded $40", "refunded_usd": 40}
+
+
+def test_a_gate_says_what_is_about_to_happen():
+    """The harness's own description is "Tool execution requires approval", which
+    tells someone paged at 2am nothing — and that is what the first live gate
+    actually sent. The tool and its arguments have to lead."""
+    _, loop = loop_for()
+    interrupt = {"__interrupt__": [type("I", (), {
+        "value": {"action_requests": [{
+            "name": "desk__create_refund",
+            "args": {"charge_id": "ch_9002", "amount_usd": 240},
+            "description": "Tool execution requires approval"}]},
+        "id": "i"})()]}
+
+    out = run(loop.entry(FakeCtx(results=[FakeResult(interrupt)])))
+    assert "desk__create_refund" in out.justification
+    assert "ch_9002" in out.justification
+    assert "Tool execution requires" not in out.justification

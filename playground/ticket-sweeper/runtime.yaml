@@ -6,5 +6,4 @@ agent: ticket-sweeper
 per_run:
   max_cost_usd: 0.10
   max_llm_calls: 12
-  max_drafts: 2
   max_tool_failures: 2

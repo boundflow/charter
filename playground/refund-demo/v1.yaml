@@ -14,10 +14,9 @@ objective: |
   A refund is warranted when the customer was charged twice for the same order on
   the same day. It is not warranted merely because they changed their mind.
 
-  Never propose a refund above ${{ inputs.max_refund_usd }}.
-
-instructions:
-  - refund-policy.md
+  Never refund more than ${{ inputs.max_refund_usd }}. A refund stops for a human
+  before it goes through, so say plainly what you are about to do and why — that
+  sentence is what the approver reads.
 
 inputs:
   ticket_id:
@@ -32,7 +31,7 @@ inputs:
 mcp:
   - name: desk
     command: python
-    args: ["playground/mcp_server.py"]
+    args: ["mcp_server.py"]
     tools:
       - tool: get_ticket
         on_failure: fail
@@ -41,16 +40,13 @@ mcp:
         approval: always
         on_failure: fail
 
-outcome:
-  deliverable:
-    resolution:
-      type: string
-      description: What you did and why, in two sentences.
-    refunded_usd:
-      type: number
-      description: Amount refunded, or 0 if none.
+response_format:
+  resolution:
+    type: string
+    description: What you did and why, in two sentences.
+  refunded_usd:
+    type: number
+    description: Amount refunded, or 0 if none.
 
-  approval:
-    timeout_seconds: 1800
-    on_timeout: reject
-    note: Ticket {{ inputs.ticket_id }}
+gate:
+  timeout_seconds: 1800

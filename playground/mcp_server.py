@@ -5,17 +5,18 @@ that mutates, and one that fails on demand — with nothing at stake.
 
     python playground/mcp_server.py     # the worker spawns this itself
 
-`create_refund` is the interesting one: Charter never hands it to the model, so
-the agent can only propose it and a human approves before it runs.
+`create_refund` is the interesting one: the agent is handed it and the call is
+stopped for a human, so you can watch a task park mid-flight and resume days
+later on a different worker.
 """
 
-from mcp.server.mcpserver import MCPServer
+from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 
-READ_ONLY = ToolAnnotations(read_only_hint=True)
-MUTATES = ToolAnnotations(read_only_hint=False, destructive_hint=True)
+READ_ONLY = ToolAnnotations(readOnlyHint=True)
+MUTATES = ToolAnnotations(readOnlyHint=False, destructiveHint=True)
 
-mcp = MCPServer("support-desk")
+mcp = FastMCP("support-desk")
 
 TICKETS = {
     "4821": {
@@ -89,4 +90,4 @@ def always_fails(why: str = "") -> str:
 
 
 if __name__ == "__main__":
-    mcp.run()
+    mcp.run(transport="stdio")
