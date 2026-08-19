@@ -384,6 +384,10 @@ def _cp():
 
 # An agent is identified by (tenant, name) — a workflow's tenant is fixed at
 # creation, so the same name in two tenants is two different agents.
+INSTANCE = typer.Option(
+    None, "--instance",
+    help="Which instance, when the agent has several")
+
 TENANT = typer.Option(None, "--tenant", "-t",
                       help="Tenant the agent belongs to [env: CHARTER_TENANT]")
 
@@ -438,7 +442,8 @@ async def _instances(cp, agent: str, tenant: str | None = None) -> list:
 
 
 async def _select(cp, agent: str, *, instance: str | None, all_: bool,
-                  tenant: str | None = None, verb: str = "act on") -> list:
+                  tenant: str | None = None, verb: str = "act on",
+                  fans_out: bool = True) -> list:
     """Which instances a command should touch, refusing to guess.
 
     An agent can have several instances, and each is a distinct entity with its own
@@ -470,10 +475,11 @@ async def _select(cp, agent: str, *, instance: str | None, all_: bool,
 
     ui.err(f"{agent!r} has {len(found)} instances — say which")
     for w in found:
-        ui.detail(f"{short(w.id)}  {_state_of(w)}")
+        ui.detail(f"{short(w.id)}  v{w.version}  {_state_of(w)}")
     typer.echo()
     ui.detail(f"--instance <id>   {verb} one")
-    ui.detail(f"--all             {verb} every instance")
+    if fans_out:
+        ui.detail(f"--all             {verb} every instance")
     raise typer.Exit(1)
 
 
@@ -482,10 +488,19 @@ def _state_of(w) -> str:
     return getattr(state, "value", state) or "unknown"
 
 
-async def _workflow_for(cp, agent: str, tenant: str | None = None):
-    """One instance, for commands that have always assumed a single one."""
+async def _workflow_for(cp, agent: str, tenant: str | None = None,
+                        instance: str | None = None, verb: str = "act on"):
+    """The one instance a command should act on.
+
+    Every read and every operator action needs this, and every one of them was
+    silently taking whichever instance came back first — which is fine until an
+    agent has two, at which point `charter resume` releases the wrong entity.
+    """
     found = await _instances(cp, agent, tenant)
-    return found[0] if found else None
+    if not found:
+        return None
+    return (await _select(cp, agent, instance=instance, all_=False,
+                          tenant=tenant, verb=verb, fans_out=False))[0]
 
 
 def _show_inputs(cfg) -> None:
@@ -756,7 +771,11 @@ def agents(tenant: str = TENANT) -> None:
 
 
 @app.command()
-def describe(agent: str = typer.Argument(...), tenant: str = TENANT) -> None:
+def describe(
+    agent: str = typer.Argument(...),
+    tenant: str = TENANT,
+    instance: str = INSTANCE,
+) -> None:
     """Everything about one agent, from the control plane alone.
 
     The screen you run when you get paged: what it is, what it's allowed to spend,
@@ -765,7 +784,7 @@ def describe(agent: str = typer.Argument(...), tenant: str = TENANT) -> None:
     """
     async def go():
         async with _cp() as cp:
-            wf = await _workflow_for(cp, agent, tenant)
+            wf = await _workflow_for(cp, agent, tenant, instance)
             if wf is None:
                 ui.err(f"no agent {agent!r} in tenant {_tenant_name(tenant)}")
                 ui.detail("charter agents  # what's there")
@@ -860,6 +879,7 @@ def tasks(agent: str = typer.Argument(...),
           status: str = typer.Option(None, "--status",
                                      help="successful | customer_marked_failure | operation_timeout | ..."),
           since: str = typer.Option(None, "--since", help="24h, 7d, 30m, or 2026-08-01"),
+          instance: str = INSTANCE,
           # `took` is wall clock and includes time parked at a gate.
           tenant: str = TENANT,
           path: Path = typer.Option(None, "--path",
@@ -874,7 +894,7 @@ def tasks(agent: str = typer.Argument(...),
 
     async def go():
         async with _cp() as cp:
-            wf = await _workflow_for(cp, agent, tenant)
+            wf = await _workflow_for(cp, agent, tenant, instance)
             if wf is None:
                 _err(f"{agent!r} has not been applied yet — run `charter apply` first")
                 raise typer.Exit(1)
@@ -1109,6 +1129,7 @@ def status(task_id: str = typer.Argument(..., help="The id `charter run` printed
 
 @app.command()
 def pending(agent: str = typer.Argument(..., help="Agent name"),
+    instance: str = INSTANCE,
             tenant: str = TENANT) -> None:
     """Show the open gate, if the agent is parked on one.
 
@@ -1118,7 +1139,7 @@ def pending(agent: str = typer.Argument(..., help="Agent name"),
     """
     async def go():
         async with _cp() as cp:
-            wf = await _workflow_for(cp, agent, tenant)
+            wf = await _workflow_for(cp, agent, tenant, instance)
             if wf is None:
                 _err(f"{agent!r} has not been applied yet")
                 raise typer.Exit(1)
@@ -1149,11 +1170,13 @@ def approve(
     agent: str = typer.Option(..., "--agent", "-a"),
     reason: str = typer.Option("", "--reason", "-r", help="Why — recorded in the audit log"),
     actor: str = typer.Option("", "--actor"),
+    instance: str = INSTANCE,
     tenant: str = TENANT,
 ) -> None:
     """Approve a parked gate. `--reason` is worth giving: it lands in the audit log
     and becomes memory the agent reads on its next task."""
-    _decide(agent, approval_id, reason, actor, approve=True, tenant=tenant)
+    _decide(agent, approval_id, reason, actor, approve=True, tenant=tenant,
+            instance=instance)
 
 
 @app.command()
@@ -1162,18 +1185,21 @@ def reject(
     agent: str = typer.Option(..., "--agent", "-a"),
     reason: str = typer.Option("", "--reason", "-r"),
     actor: str = typer.Option("", "--actor"),
+    instance: str = INSTANCE,
     tenant: str = TENANT,
 ) -> None:
     """Reject a parked gate. The reason goes straight back into the agent's next
     round, which is the only reason a rejection teaches it anything."""
-    _decide(agent, approval_id, reason, actor, approve=False, tenant=tenant)
+    _decide(agent, approval_id, reason, actor, approve=False, tenant=tenant,
+            instance=instance)
 
 
 def _decide(agent: str, approval_id: str, reason: str, actor: str, *,
-            approve: bool, tenant: str | None = None) -> None:
+            approve: bool, tenant: str | None = None,
+            instance: str | None = None) -> None:
     async def go():
         async with _cp() as cp:
-            wf = await _workflow_for(cp, agent, tenant)
+            wf = await _workflow_for(cp, agent, tenant, instance)
             if wf is None:
                 _err(f"{agent!r} has not been applied yet")
                 raise typer.Exit(1)
@@ -1196,7 +1222,7 @@ def answer(
     """Answer an agent's question."""
     async def go():
         async with _cp() as cp:
-            wf = await _workflow_for(cp, agent, tenant)
+            wf = await _workflow_for(cp, agent, tenant, instance)
             if wf is None:
                 _err(f"{agent!r} has not been applied yet")
                 raise typer.Exit(1)
@@ -1324,13 +1350,17 @@ def _diff_line(label: str, live, want) -> int:
 
 
 @app.command()
-def audit(agent: str = typer.Argument(...), limit: int = typer.Option(20, "--limit"),
-          tenant: str = TENANT) -> None:
+def audit(
+    agent: str = typer.Argument(...),
+    limit: int = typer.Option(20, "--limit"),
+    instance: str = INSTANCE,
+    tenant: str = TENANT,
+) -> None:
     """Every governance decision recorded for an agent — who approved what and why,
     and which rule paused it. This is the answer to "prove it did what you say"."""
     async def go():
         async with _cp() as cp:
-            wf = await _workflow_for(cp, agent, tenant)
+            wf = await _workflow_for(cp, agent, tenant, instance)
             if wf is None:
                 _err(f"{agent!r} has not been applied yet")
                 raise typer.Exit(1)
@@ -1359,12 +1389,16 @@ def audit(agent: str = typer.Argument(...), limit: int = typer.Option(20, "--lim
 
 
 @app.command()
-def resume(agent: str = typer.Argument(...), tenant: str = TENANT) -> None:
+def resume(
+    agent: str = typer.Argument(...),
+    tenant: str = TENANT,
+    instance: str = INSTANCE,
+) -> None:
     """Release an agent a lifecycle rule paused. Without this a `pause` rule is a
     one-way door."""
     async def go():
         async with _cp() as cp:
-            wf = await _workflow_for(cp, agent, tenant)
+            wf = await _workflow_for(cp, agent, tenant, instance)
             if wf is None:
                 _err(f"{agent!r} has not been applied yet")
                 raise typer.Exit(1)
@@ -1402,7 +1436,7 @@ def delete(
 
     async def go():
         async with _cp() as cp:
-            wf = await _workflow_for(cp, agent, tenant)
+            wf = await _workflow_for(cp, agent, tenant, instance)
             if wf is None:
                 _err(f"{agent!r} has not been applied yet")
                 raise typer.Exit(1)
