@@ -177,6 +177,20 @@ class Loop:
 
         return Budget(**fields) if fields else None
 
+    def _charge_from_governor(self, ctx) -> None:
+        """Fold in whatever the governor recorded before it stopped us.
+
+        `agent_governor` returns the same instance for the same agent within an
+        operation, so this is the running total rather than a fresh one.
+        """
+        try:
+            gov = ctx.agent_governor(self.cfg.name)
+        except Exception:  # noqa: BLE001 — reporting the failure matters more
+            return
+        c = ctx.context
+        c[K_COST] = c.get(K_COST, 0.0) + gov.cost_usd
+        c[K_LLM_CALLS] = c.get(K_LLM_CALLS, 0) + gov.llm_calls
+
     def _charge(self, ctx, result) -> None:
         c = ctx.context
         c[K_COST] = c.get(K_COST, 0.0) + result.cost_usd
@@ -191,6 +205,11 @@ class Loop:
         when a rule pauses the agent.
         """
         ctx.mark_failed()
+        # From the governor rather than context, because context is only written
+        # when the round completes — and a task that fails on a spent budget never
+        # gets there. It was reporting `llm_calls: 0` on a run that failed
+        # precisely because of what it spent.
+        self._charge_from_governor(ctx)
         log.warning("task failed: agent=%s reason=%s", self.cfg.name, reason)
         try:
             async with durable_harness(ctx, self.cfg.name, self.store_url) as h:
@@ -251,6 +270,12 @@ class Loop:
                     ).ainvoke(h.first({"messages": [{"role": "user", "content": prompt}]}),
                               h.config),
                     chat_model=self.chat_model(self.cfg.model),
+                    # Passed explicitly rather than sniffed off the chat model.
+                    # The versioned config is where the model id actually lives, and
+                    # `_derive_model_name` reads provider-specific attributes — so
+                    # an integration that doesn't expose one leaves BoundFlow unable
+                    # to price the call, which silently disables every cost cap.
+                    model=self.cfg.model,
                     tools=self._tools(),
                     output_schema=response_schema(self.cfg),
                     budget=self._remaining(ctx),
@@ -267,6 +292,14 @@ class Loop:
             return await self._fail(ctx, ended.reason)
 
         self._charge(ctx, result)
+
+        # `on_failure: fail` was declared and unenforced after the harness rewrite
+        # — the check went with the loop it lived in. A tool whose failure should
+        # end the task has to end it, or the field is a lie in the config.
+        if broken := self._fail_fast(result):
+            return await self._fail(
+                ctx, f"{broken} failed and is declared on_failure: fail — the task "
+                     f"stopped rather than working around it")
 
         if action is not None:
             return self._gate(ctx, action)
@@ -303,6 +336,20 @@ class Loop:
         if self.cfg.ask_human is not None:
             parts.append(self.cfg.ask_human.guidance)
         return render("\n\n".join(parts), ctx.context)
+
+    def _fail_fast(self, result) -> str | None:
+        """The first declared fail-fast tool that failed this round, if any.
+
+        Checked at the round boundary rather than at the call: the harness owns the
+        loop now, so there is no point inside it where we could stop the agent
+        mid-thought — and letting it finish the round means its own account of what
+        happened reaches the operator.
+        """
+        failed = getattr(result, "tool_failure_counts", None) or {}
+        for tool in self.cfg.fail_fast_tools:
+            if failed.get(tool):
+                return tool
+        return None
 
     def _gate(self, ctx, action: dict):
         """Park for a human on the action the harness stopped at.

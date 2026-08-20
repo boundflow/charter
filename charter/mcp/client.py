@@ -122,6 +122,22 @@ class ToolSet:
         # so a server named `desk_get` with a tool `ticket` collides with `desk` and
         # `get_ticket`. Charter's `__` is unambiguous, and it's already baked into
         # tool_call_limits and lifecycle rules.
+        # NOTE: `handle_tool_errors` is left at its default of True, and that
+        # currently costs us failure counting. The adapter turns a failing tool
+        # into a *returned* error string, and BoundFlow's wrapper counts a failure
+        # only when a call raises — so an MCP tool failure is recorded as a
+        # success. tool_failure_counts stays empty, max_tool_failures never trips,
+        # and `on_failure: fail` never fires. Same shape as reading `isError` under
+        # its 1.x name, which this file has already been bitten by once.
+        #
+        # Setting it False is worse, not better: the exception then propagates out
+        # of the whole invocation, so one failing tool kills the run instead of
+        # being reported to the model, and the agent loses the chance to work
+        # around it. Measured, not assumed.
+        #
+        # The real fix is to classify the returned error in the governed wrapper,
+        # the way a policy denial already is — count it *and* let the model read
+        # it. Tracked separately rather than bodged here.
         self._client = MultiServerMCPClient(
             {s.name: _connection(s) for s in cfg.mcp})
 

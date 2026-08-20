@@ -10,12 +10,17 @@ project has hit came from a boundary a fake didn't model:
   * MCP's is_error was read under its 1.x name, and only a real server caught it
 
 The model is faked because it's the one component where determinism is worth more
-than fidelity — and MockLlmClient still sees `request.tools`, so the central claim
-(a gated tool is never handed to the model) is checkable here rather than against
-a stubbed ToolSet.
+than fidelity — and a scripted chat model still records what it was *offered*, so
+what a config promises about the model's authority stays checkable from outside.
+See `harness.py`.
+
+Postgres is real too now, and not incidentally: the harness keeps its conversation
+and its files there, so a task resuming after a gate is only testable against a
+real store.
 
     docker compose -f ../convergeplane/docker-compose.dist.yml up -d
     export BOUNDFLOW_API_KEY=... BOUNDFLOW_SERVER_ADDRESS=http://localhost:50051
+    export CHARTER_STORE_URL=postgres://boundflow:boundflow@localhost:5433/boundflow
     pytest tests/e2e
 """
 from __future__ import annotations
@@ -30,6 +35,16 @@ import pytest_asyncio
 from boundflow import ControlPlaneClient
 
 SERVER_ADDRESS = os.environ.get("BOUNDFLOW_SERVER_ADDRESS", "http://localhost:50051")
+
+
+@pytest.fixture(scope="session")
+def store_url():
+    """Where the harness keeps state. Without it there is nothing to resume from,
+    so these tests would be checking a different system."""
+    url = os.environ.get("CHARTER_STORE_URL")
+    if not url:
+        pytest.skip("CHARTER_STORE_URL not set — the harness needs a store")
+    return url
 
 
 @pytest.fixture(scope="session")

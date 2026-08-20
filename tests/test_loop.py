@@ -36,10 +36,11 @@ EXAMPLES = Path(__file__).parent.parent / "examples"
 
 
 class FakeResult:
-    def __init__(self, output, cost=0.01, calls=2):
+    def __init__(self, output, cost=0.01, calls=2, tool_failures=None):
         self.output = output
         self.cost_usd = cost
         self.llm_calls_used = calls
+        self.tool_failure_counts = tool_failures or {}
 
 
 class FakeCtx:
@@ -67,7 +68,14 @@ class FakeCtx:
     def mark_failed(self):
         self.failed = True
 
-    async def run_governed(self, name, invoke, *, chat_model, tools,
+    _governor = None
+
+    def agent_governor(self, name):
+        if self._governor is None:
+            self._governor = type("Gov", (), {"cost_usd": 0.0, "llm_calls": 0})()
+        return self._governor
+
+    async def run_governed(self, name, invoke, *, chat_model, tools, model=None,
                            output_schema=None, budget=None):
         self.budgets.append(budget)
         nxt = self._results.pop(0)
@@ -379,3 +387,47 @@ class TestAskHuman:
         ctx._answer = "refund ch_9002"
         run(loop.entry(ctx))
         assert _stub_harness.resume["decisions"][0]["message"] == "refund ch_9002"
+
+
+def test_a_fail_fast_tool_ends_the_task():
+    """`on_failure: fail` went dead when the harness took over the loop — the check
+    lived in the loop that was deleted. A declared field that quietly does nothing
+    is worse than not having it."""
+    cfg, loop = loop_for()
+    assert "desk__create_refund" in cfg.fail_fast_tools or cfg.fail_fast_tools
+
+    tool = next(iter(cfg.fail_fast_tools))
+    out = run(loop.entry(FakeCtx(results=[
+        FakeResult({"resolution": "carried on regardless"},
+                   tool_failures={tool: 1})])))
+
+    assert isinstance(out, Complete)
+    assert out.result["failed"] is True
+    assert tool in out.result["reason"]
+    assert "on_failure" in out.result["reason"]
+
+
+def test_an_ordinary_tool_failure_does_not_end_the_task():
+    """Only tools that asked for it. Everything else is the model's problem to work
+    around, which is the whole reason `on_failure` is a choice."""
+    _, loop = loop_for()
+    out = run(loop.entry(FakeCtx(results=[
+        FakeResult({"resolution": "worked around it"},
+                   tool_failures={"desk__get_ticket": 2})])))
+
+    assert isinstance(out, Complete)
+    assert "failed" not in out.result
+
+
+def test_a_spent_budget_reports_what_it_spent():
+    """It was reporting llm_calls: 0 on a task that failed precisely because of
+    what it spent — `_charge` only runs when the round returns, and a spent cap
+    raises instead."""
+    _, loop = loop_for()
+    ctx = FakeCtx(results=[AgentPolicyLimitExceeded("reached max_llm_calls=2")])
+    gov = ctx.agent_governor("x")
+    gov.cost_usd, gov.llm_calls = 0.042, 2
+
+    out = run(loop.entry(ctx))
+    assert out.result["llm_calls"] == 2
+    assert out.result["cost_usd"] == pytest.approx(0.042)

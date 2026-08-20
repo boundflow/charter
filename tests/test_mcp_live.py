@@ -133,3 +133,21 @@ def test_an_explicit_never_outranks_a_destructive_hint():
 
     assert "close_ticket" not in ts.servers["tickets"].tightened
     assert ts.gated_tools() == []
+
+
+def test_a_failing_tool_reports_its_error_to_the_model():
+    """The adapter returns the failure rather than raising it, which is what keeps
+    one broken tool from killing a run — the model reads the error and can work
+    around it.
+
+    The cost is that BoundFlow's wrapper counts a failure only on a raise, so this
+    is currently invisible to tool_failure_counts. See the note in client.py; the
+    fix belongs in the wrapper, not here.
+    """
+    async def go():
+        ts = await _connected([ToolSpec(tool="get_ticket"),
+                               ToolSpec(tool="close_ticket")])
+        tool = next(t for t in ts.langchain_tools() if t.name.endswith("close_ticket"))
+        return str(await tool.ainvoke({"ticket_id": "7"}))
+
+    assert "already closed" in run(go())
