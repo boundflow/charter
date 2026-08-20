@@ -226,17 +226,17 @@ class Loop:
     def _record_acts(self, ctx, result) -> None:
         """Count the gated tools that actually ran.
 
-        The harness dispatches tools now, so a task result is otherwise only the
-        agent's account of itself. This comes from the governor's own metering
-        rather than the harness's message history — deliberately a different source
-        from the claim.
+        The harness dispatches tools now, so Charter no longer sees an action go by
+        — and without this the task result is only the agent's own account of
+        itself. "It says it refunded $240" and "a refund tool was called once" are
+        different claims, and the second is the one an operator can act on.
 
-        Gated tools only: those are the ones a human was asked about, so they are
-        what reconciles against the approval record.
+        Gated tools only: those are the ones a human was asked about, so those are
+        the ones worth reconciling against the approval record.
         """
         called = getattr(result, "calls_per_tool", None) or {}
-        gated = set(self.cfg.gated_tools) | set(self.cfg.gate.tools)
-        acts = dict(ctx.context.get(K_ACTS) or {})
+        gated = set(self.cfg.gated_tools)
+        acts = ctx.context.get(K_ACTS) or {}
         for tool, n in called.items():
             if tool in gated:
                 acts[tool] = acts.get(tool, 0) + n
@@ -298,7 +298,6 @@ class Loop:
             "llm_calls": ctx.context.get(K_LLM_CALLS, 0),
             "gates": ctx.context.get(K_GATES, 0),
             "seconds": round(ctx.context.get(K_SECONDS, 0.0), 1),
-            # A failure is when what already happened matters most.
             "acts": ctx.context.get(K_ACTS) or {},
         })
 
