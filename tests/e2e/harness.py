@@ -15,9 +15,13 @@ fake accepted unconditionally — so the fakes stop at the model and no further.
         submits(resolution="refunded", refunded_usd=240),
     )
 
-Each entry is one assistant turn. The last one repeats if the agent keeps going,
-so a script never runs out mid-test — a test that wanted a specific ending says
-so by ending on `submits`.
+Each entry is one assistant turn. Once the script runs out the model answers in
+prose, which ends any agent cleanly.
+
+It deliberately does *not* repeat the last turn. Subagents share this model
+instance, so a repeated tool call gets replayed by an agent that may not even have
+that tool — which loops until the operation times out rather than failing in a way
+anyone can read.
 """
 
 from __future__ import annotations
@@ -57,6 +61,8 @@ def scripted(*turns: dict) -> BaseChatModel:
     class Scripted(BaseChatModel):
         n: int = 0
         offered: list[list[str]] = []
+        received: list[Any] = []
+        is_subagent: bool = False
 
         @property
         def _llm_type(self) -> str:
@@ -65,13 +71,25 @@ def scripted(*turns: dict) -> BaseChatModel:
         def bind_tools(self, tools: list, **kw: Any):
             # Recorded here rather than in _generate because binding is where the
             # harness decides what this agent may see.
-            self.offered.append([getattr(t, "name", None) or t.get("name", "")
-                                 for t in tools])
+            names = [getattr(t, "name", None) or t.get("name", "") for t in tools]
+            self.offered.append(names)
+            # A subagent shares this instance, so without telling them apart it
+            # would eat turns written for the parent — and replay a tool call it
+            # may not even have. Only the parent is given `task`.
+            self.is_subagent = "task" not in names
             return self
 
         def _generate(self, messages, stop=None, run_manager=None, **kw) -> ChatResult:
-            turn = turns[min(self.n, len(turns) - 1)]
-            self.n += 1
+            # Accumulated, not replaced. Subagents share this model instance, so a
+            # subagent's own turn would otherwise overwrite the parent's history and
+            # a test would assert against whatever happened to run last.
+            self.received = list(self.received) + list(messages)
+            if self.is_subagent:
+                # Subagents answer and return, so the script belongs to the parent.
+                turn = {"text": "subagent done"}
+            else:
+                turn = turns[self.n] if self.n < len(turns) else {"text": "done"}
+                self.n += 1
             # Usage is not optional. BoundFlow refuses to run a model that reports
             # none — it cannot price the call, and a cost cap that silently doesn't
             # apply is worse than no cap. So the fake reports it, which is the same
@@ -91,7 +109,20 @@ def scripted(*turns: dict) -> BaseChatModel:
 
     model = Scripted()
     model.offered = []
+    model.received = []
     return model
+
+
+def texts(messages) -> str:
+    """Everything the model was told, flattened — content blocks included."""
+    out = []
+    for m in messages or []:
+        c = getattr(m, "content", m)
+        if isinstance(c, list):
+            out += [str(b.get("text", b)) if isinstance(b, dict) else str(b) for b in c]
+        else:
+            out.append(str(c))
+    return "\n".join(out)
 
 
 def factory(model: BaseChatModel):

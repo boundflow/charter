@@ -141,7 +141,8 @@ class CharterWorker:
                 served = Served(bundle, version, tools,
                                 Loop(cfg, bundle.runtime, tools,
                                      self._chat_model,
-                                     resolve(self.project.manifest.store.url)))
+                                     resolve(self.project.manifest.store.url),
+                                     skills=bundle.skills.get(version)))
                 try:
                     await tools.connect(cfg)
                     for server in tools.servers.values():

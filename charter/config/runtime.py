@@ -60,6 +60,16 @@ class PerRun(Base):
         "Total spend for one task, across every round and every retry."))
     max_llm_calls: int = Field(default=0, ge=0, description=(
         "Total model calls for one task. One round makes several."))
+    # Working time, not wall clock: a task parked two days waiting for a human has
+    # spent none of this. That is the useful reading — it bounds a runaway agent
+    # rather than punishing a slow approver, and an agent that stops for you is the
+    # behaviour we are trying to encourage.
+    #
+    # A deadline ("resolve this within the hour, human included") is a different
+    # feature and wants a different name; it isn't this.
+    max_seconds: float = Field(default=0.0, ge=0.0, description=(
+        "Total time the agent may spend working on one task, across every round. "
+        "0 is unlimited. Time parked waiting for a human doesn't count."))
     tool_call_limits: list[ToolCallLimit] = Field(default_factory=list)
     capability_call_limits: list[CapabilityLimit] = Field(default_factory=list)
 
@@ -138,6 +148,10 @@ class RuntimePolicyFile(Base):
         so this lives here rather than in either caller, where they could drift.
         """
         worst_case = (self.per_run.max_llm_calls or 20) * self.limits.max_call_seconds
+        if self.per_run.max_seconds:
+            # No round may outlast the whole task's allowance, or the ceiling would
+            # only ever be noticed after it had already been passed.
+            worst_case = min(worst_case, self.per_run.max_seconds)
         return int(min(max(worst_case, MIN_OPERATION_SECONDS), MAX_OPERATION_SECONDS))
 
 

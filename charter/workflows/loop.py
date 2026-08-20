@@ -34,6 +34,9 @@ from boundflow.harness import durable_harness, task_context
 from boundflow.harness_gates import approve, pending_action, reject, respond
 from boundflow.llm import AgentPolicyLimitExceeded
 
+import time
+from pathlib import Path
+
 from ..config.agent import AgentConfig
 from .subagents import subagent_limits
 
@@ -45,6 +48,7 @@ K_DECISION = "_decision"
 K_COST = "_cost"
 K_LLM_CALLS = "_llm_calls"
 K_GATES = "_gates"
+K_SECONDS = "_seconds"   # working time, excluding waits for a human
 
 
 def render(template: str, inputs: dict) -> str:
@@ -122,6 +126,24 @@ def response_schema(cfg: AgentConfig) -> dict | None:
             for name, spec in cfg.response_format.items()}
 
 
+def _answer_text(answer) -> str:
+    """A human's answer as something the model can read.
+
+    `submit_input` takes a dict, so what arrives is structured — but the harness's
+    `respond` decision carries a message. Prefer the obvious keys, and fall back to
+    the whole thing rather than dropping an answer someone took the trouble to
+    give.
+    """
+    if answer is None:
+        return ""
+    if isinstance(answer, dict):
+        for key in ("answer", "text", "message", "response"):
+            if key in answer:
+                return str(answer[key])
+        return str(answer)
+    return str(answer)
+
+
 class Ended(Exception):
     """A per-task budget is spent. Carries what to tell the operator."""
 
@@ -136,7 +158,7 @@ class Loop:
     different worker after a gate."""
 
     def __init__(self, cfg: AgentConfig, runtime, tools, chat_model,
-                 store_url: str) -> None:
+                 store_url: str, skills: Path | None = None) -> None:
         self.cfg = cfg
         self.runtime = runtime
         # The ToolSet, not its tools: it hasn't connected yet when the worker builds
@@ -144,6 +166,9 @@ class Loop:
         self.tools = tools
         self.chat_model = chat_model  # a factory: (model_name) -> BaseChatModel
         self.store_url = store_url
+        # This version's skills directory on disk, or None. Uploaded per task —
+        # see `_ship_skills`.
+        self.skills = skills
 
     # ── the budget the harness can't see ────────────────────────────────────
 
@@ -191,6 +216,29 @@ class Loop:
         c[K_COST] = c.get(K_COST, 0.0) + gov.cost_usd
         c[K_LLM_CALLS] = c.get(K_LLM_CALLS, 0) + gov.llm_calls
 
+    def _charge_seconds(self, ctx, started: float) -> None:
+        c = ctx.context
+        c[K_SECONDS] = c.get(K_SECONDS, 0.0) + (time.monotonic() - started)
+
+    def _out_of_time(self, ctx) -> str | None:
+        """Whether the task has used its whole allowance.
+
+        Checked at the round boundary, because the harness owns the loop and there
+        is no point inside it where we could stop the agent mid-thought. Within a
+        round, `operation_timeout_seconds` is the backstop — it's derived from this
+        number when one is set, so a single round can't outlast the whole task's
+        budget either.
+        """
+        cap = self.runtime.per_run.max_seconds
+        if not cap:
+            return None
+        spent = ctx.context.get(K_SECONDS, 0.0)
+        if spent < cap:
+            return None
+        return (f"spent {spent:.0f}s of working time (max_seconds={cap:.0f}) — "
+                f"time parked waiting for a human isn't counted, so this is the "
+                f"agent itself taking too long")
+
     def _charge(self, ctx, result) -> None:
         c = ctx.context
         c[K_COST] = c.get(K_COST, 0.0) + result.cost_usd
@@ -222,6 +270,7 @@ class Loop:
             "cost_usd": round(ctx.context.get(K_COST, 0.0), 6),
             "llm_calls": ctx.context.get(K_LLM_CALLS, 0),
             "gates": ctx.context.get(K_GATES, 0),
+            "seconds": round(ctx.context.get(K_SECONDS, 0.0), 1),
         })
 
     # ── the one operation ───────────────────────────────────────────────────
@@ -246,17 +295,21 @@ class Loop:
         elif verdict == "reject":
             decision = reject(ctx.approval_reason or "no reason given")
         elif verdict == "answer":
-            decision = respond(ctx.input_answer or "")
+            decision = respond(_answer_text(ctx.input_answer))
         elif verdict == "unanswered":
             # Told, not failed: a question nobody answered shouldn't end the task
             # when the agent may well be able to proceed on what it has.
             decision = respond("Nobody answered in time — proceed with what you "
                                "have and say what you assumed.")
 
+        # Working time only. The clock starts when the round starts, so whatever a
+        # human took to answer the last gate isn't charged to the agent.
+        started = time.monotonic()
         action = None
         try:
             async with durable_harness(ctx, self.cfg.name, self.store_url,
                                        resume=decision) as h:
+                skills = await self._ship_skills(h)
                 prompt = self._prompt(ctx)
                 result = await ctx.run_governed(
                     self.cfg.name,
@@ -266,6 +319,7 @@ class Loop:
                         system_prompt=prompt,
                         # Ours to declare, theirs to enforce, durable because of us.
                         interrupt_on=interrupt_on(self.cfg),
+                        skills=skills or None,
                         **self._wiring(h),
                     ).ainvoke(h.first({"messages": [{"role": "user", "content": prompt}]}),
                               h.config),
@@ -287,11 +341,17 @@ class Loop:
                 if action is None:
                     await h.discard()
         except AgentPolicyLimitExceeded as spent:
+            self._charge_seconds(ctx, started)
             return await self._fail(ctx, str(spent))
         except Ended as ended:
+            self._charge_seconds(ctx, started)
             return await self._fail(ctx, ended.reason)
 
         self._charge(ctx, result)
+        self._charge_seconds(ctx, started)
+
+        if (over := self._out_of_time(ctx)) is not None:
+            return await self._fail(ctx, over)
 
         # `on_failure: fail` was declared and unenforced after the harness rewrite
         # — the check went with the loop it lived in. A tool whose failure should
@@ -304,6 +364,31 @@ class Loop:
         if action is not None:
             return self._gate(ctx, action)
         return Complete(result=result.output)
+
+    SKILLS_ROOT = "/skills"
+
+    async def _ship_skills(self, h) -> list[str]:
+        """Upload this version's skills into the store, and say where they went.
+
+        The harness reads skills from its *backend*, not from disk — so a directory
+        sitting next to the yaml reaches the agent only if we put it there. Loading
+        them and never shipping them was the gap: declared, parsed, and invisible.
+
+        Re-uploaded each task rather than cached, because a finished task drops its
+        namespace. They are small, and the alternative is a second lifetime to
+        reason about.
+        """
+        if self.skills is None or not self.skills.is_dir():
+            return []
+        backend = h.wiring.get("backend")
+        if backend is None:
+            return []
+
+        for path in sorted(self.skills.rglob("*")):
+            if path.is_file():
+                target = f"{self.SKILLS_ROOT}/{path.relative_to(self.skills)}"
+                await backend.awrite(target, path.read_text())
+        return [f"{self.SKILLS_ROOT}/"]
 
     def _wiring(self, h) -> dict:
         """The harness's wiring, plus our subagent bounds.

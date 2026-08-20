@@ -99,8 +99,10 @@ async def test_a_spent_budget_says_which_ceiling_it_hit(cp, project, tenant):
     reloaded = load_project(project.path)
 
     wf = await one_instance(cp, reloaded, "ticket-sweeper", tenant)
-    # Never submits, so the only way out is the cap.
-    model = scripted(calls("desk__list_open_tickets"))
+    # More turns than the cap allows and no submit, so the cap is the only way out.
+    # (The script no longer repeats its last turn — a repeated tool call gets
+    # replayed by subagents that may not have it, and loops.)
+    model = scripted(*[calls("desk__list_open_tickets") for _ in range(6)])
 
     info = await run_one(cp, reloaded, "ticket-sweeper", wf, model)
 
@@ -120,6 +122,6 @@ async def test_a_failed_task_reports_how_far_it_got(cp, project, tenant):
 
     wf = await one_instance(cp, reloaded, "ticket-sweeper", tenant)
     info = await run_one(cp, reloaded, "ticket-sweeper", wf,
-                         scripted(calls("desk__list_open_tickets")))
+                         scripted(*[calls("desk__list_open_tickets") for _ in range(6)]))
 
     assert set(info.result) >= {"failed", "reason", "cost_usd", "llm_calls", "gates"}

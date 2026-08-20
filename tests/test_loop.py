@@ -24,6 +24,7 @@ from charter.workflows.loop import (
     K_DECISION,
     K_GATES,
     K_LLM_CALLS,
+    K_SECONDS,
     ASK_TOOL,
     Loop,
     ask_tool,
@@ -431,3 +432,66 @@ def test_a_spent_budget_reports_what_it_spent():
     out = run(loop.entry(ctx))
     assert out.result["llm_calls"] == 2
     assert out.result["cost_usd"] == pytest.approx(0.042)
+
+
+@pytest.mark.parametrize("answer,expected", [
+    ({"answer": "start with 4821"}, "start with 4821"),
+    ({"text": "use the newest"}, "use the newest"),
+    ({"unexpected": "shape"}, "{'unexpected': 'shape'}"),
+    (None, ""),
+])
+def test_a_structured_answer_becomes_something_the_model_can_read(answer, expected):
+    """`submit_input` takes a dict, and the harness's `respond` carries a message —
+    so an answer someone took the trouble to give must not be dropped on the way."""
+    from charter.workflows.loop import _answer_text
+    assert _answer_text(answer) == expected
+
+
+class TestWorkingTime:
+    """`max_seconds` bounds what the *agent* spends, not wall clock. A task parked
+    two days waiting for a human has spent none of it — that is the useful reading,
+    since it bounds a runaway agent rather than punishing a slow approver."""
+
+    def _loop(self, seconds):
+        bundle = load_agent(EXAMPLES / "refund-triage")
+        bundle.runtime.per_run.max_seconds = seconds
+        empty = type("NoTools", (), {"langchain_tools": lambda self: []})()
+        return Loop(bundle.latest, bundle.runtime, tools=empty,
+                    chat_model=lambda m: object(), store_url="postgresql://unused")
+
+    def test_time_already_spent_ends_the_task(self):
+        loop = self._loop(60)
+        ctx = FakeCtx(context={K_SECONDS: 61.0},
+                      results=[FakeResult({"resolution": "done"})])
+
+        out = run(loop.entry(ctx))
+        assert out.result["failed"] is True
+        assert "max_seconds" in out.result["reason"]
+        assert "waiting for a human isn't counted" in out.result["reason"]
+
+    def test_a_task_within_its_allowance_completes(self):
+        loop = self._loop(60)
+        out = run(loop.entry(FakeCtx(context={K_SECONDS: 1.0},
+                                     results=[FakeResult({"resolution": "done"})])))
+        assert "failed" not in out.result
+
+    def test_no_ceiling_means_no_ceiling(self):
+        loop = self._loop(0)
+        out = run(loop.entry(FakeCtx(context={K_SECONDS: 99_999.0},
+                                     results=[FakeResult({"resolution": "done"})])))
+        assert "failed" not in out.result
+
+    def test_the_round_timeout_never_outlasts_the_task_allowance(self):
+        """Otherwise the ceiling would only ever be noticed after it had been
+        passed — one round could burn the whole budget before anyone checked."""
+        bundle = load_agent(EXAMPLES / "refund-triage")
+        bundle.runtime.per_run.max_seconds = 90
+        assert bundle.runtime.operation_timeout_seconds <= 90
+
+    def test_gate_timeouts_are_a_different_clock(self):
+        """A human's allowance and the agent's are independent — one bounds waiting,
+        the other bounds working."""
+        cfg = load_agent(EXAMPLES / "refund-triage").latest
+        assert cfg.gate.timeout_seconds == 1800
+        loop = self._loop(60)
+        assert loop.runtime.per_run.max_seconds == 60
