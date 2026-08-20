@@ -336,6 +336,49 @@ GATEABLE = frozenset({
 })
 
 
+def duration_seconds(raw: str, where: str) -> int:
+    """`30s`, `15m`, `1h`, `7d`. Seconds are what BoundFlow takes, but nobody
+    thinks in seconds past about a minute."""
+    units = {"s": 1, "m": 60, "h": 3600, "d": 86400}
+    text = (raw or "").strip()
+    if text[-1:] in units and text[:-1].isdigit():
+        return int(text[:-1]) * units[text[-1]]
+    raise ValueError(f"{where}: {raw!r} — use 30s, 15m, 1h, 7d")
+
+
+class Wait(Base):
+    """Let the agent stop and come back later.
+
+    The harness has no way to do this, and structurally can't: waiting durably
+    needs a scheduler, and it is a library. So it names the moment — the agent
+    calls a tool — and BoundFlow does the waiting, which is the same split as
+    approvals and questions.
+
+    Nothing is running while it waits. The worker lets go, the task sleeps in
+    Postgres, and it resumes on whatever worker is free with its whole
+    conversation intact. Working time doesn't accrue, so a task that waits a week
+    has spent none of its `max_seconds`.
+
+    Off unless declared. The model chooses how long, because only it knows whether
+    it's waiting on a person, a rate limit, or nothing; `max` is the ceiling, so a
+    confused agent can't sleep for a year.
+    """
+
+    max: str = Field(default="7d", description=(
+        "Longest single wait. 30s, 15m, 1h, 7d. A longer request is clamped to "
+        "this rather than refused — the agent asked to wait, and waiting less is "
+        "closer to what it wanted than not waiting at all."))
+
+    @property
+    def max_seconds(self) -> int:
+        return duration_seconds(self.max, "wait.max")
+
+    @model_validator(mode="after")
+    def _check(self) -> Wait:
+        self.max_seconds  # raises with the readable message
+        return self
+
+
 class Gate(Base):
     """How long a human has, and what happens if nobody answers.
 
@@ -393,11 +436,7 @@ class Schedule(Base):
 
     @property
     def every_seconds(self) -> int:
-        units = {"s": 1, "m": 60, "h": 3600, "d": 86400}
-        raw = self.every.strip()
-        if raw[-1:] in units and raw[:-1].isdigit():
-            return int(raw[:-1]) * units[raw[-1]]
-        raise ValueError(f"every: {self.every!r} — use 30s, 15m, 1h, 7d")
+        return duration_seconds(self.every, "every")
 
     @model_validator(mode="after")
     def _check(self) -> Schedule:
@@ -426,6 +465,7 @@ class AgentConfig(Base):
     # Structured output, handed to the harness as its response format. Omit and the
     # agent answers in prose, which is what most agents want.
     response_format: dict[str, FieldSpec] | None = None
+    wait: Wait | None = None
     gate: Gate = Field(default_factory=Gate)
     ask_human: AskHuman | None = None
 

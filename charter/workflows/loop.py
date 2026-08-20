@@ -37,7 +37,7 @@ from boundflow.llm import AgentPolicyLimitExceeded
 import time
 from pathlib import Path
 
-from ..config.agent import AgentConfig
+from ..config.agent import AgentConfig, duration_seconds
 from .subagents import subagent_limits
 
 log = logging.getLogger(__name__)
@@ -49,6 +49,8 @@ K_COST = "_cost"
 K_LLM_CALLS = "_llm_calls"
 K_GATES = "_gates"
 K_GATED_TOOL = "_gated_tool"
+K_WAITED = "_waited"      # total seconds slept, for the record
+K_WAITED_FOR = "_waited_for"
 K_SECONDS = "_seconds"   # working time, excluding waits for a human
 
 
@@ -63,6 +65,7 @@ def render(template: str, inputs: dict) -> str:
 
 
 ASK_TOOL = "ask_human"
+WAIT_TOOL = "wait"
 
 
 def ask_tool(cfg: AgentConfig):
@@ -94,6 +97,40 @@ def ask_tool(cfg: AgentConfig):
     )
 
 
+def wait_tool(cfg: AgentConfig):
+    """A tool whose call means "come back later", or None.
+
+    Same shape as asking a human, and for the same reason: the harness has no way
+    to park, so parking has to *be* a tool call it can be stopped on. The
+    difference is only what we do with the stop — an answer for `ask_human`, a
+    timer for this one.
+
+    It never runs. Calling it ends the operation, and the result the model
+    eventually sees is that the time has passed.
+    """
+    if cfg.wait is None:
+        return None
+    from langchain_core.tools import StructuredTool
+
+    async def _wait(duration: str, why: str = "") -> str:
+        return "waiting"
+
+    return StructuredTool.from_function(
+        coroutine=_wait,
+        name=WAIT_TOOL,
+        description=(
+            "Stop and come back later. Use this when there is nothing useful to do "
+            "until time passes — waiting on someone to reply, a job to finish, a "
+            "rate limit to clear. Nothing runs while you wait and it costs nothing; "
+            "you resume with everything you know now. Duration is like '30m', "
+            "'6h', '2d'."),
+        args_schema={"type": "object",
+                     "properties": {"duration": {"type": "string"},
+                                    "why": {"type": "string"}},
+                     "required": ["duration"]},
+    )
+
+
 def interrupt_on(cfg: AgentConfig) -> dict[str, Any]:
     """Which tools stop for a human, in the harness's own vocabulary.
 
@@ -111,6 +148,11 @@ def interrupt_on(cfg: AgentConfig) -> dict[str, Any]:
     if cfg.ask_human is not None:
         # The only sensible decision on a question is an answer.
         gates[ASK_TOOL] = {"allowed_decisions": ["respond"]}
+    if cfg.wait is not None:
+        # Nobody decides anything here — `interrupt_on` is just the only way the
+        # harness will stop, and stopping is the whole point. What comes back is
+        # the fact that the time has passed.
+        gates[WAIT_TOOL] = {"allowed_decisions": ["respond"]}
     return gates
 
 
@@ -143,6 +185,15 @@ def _field(spec) -> dict:
         # expect back, and an optional-by-default object invites half-filled answers.
         out["required"] = list(spec.properties)
     return out
+
+
+def _duration_text(seconds: int) -> str:
+    """How long that was, in the units a person would use."""
+    for size, unit in ((86400, "day"), (3600, "hour"), (60, "minute")):
+        if seconds >= size:
+            n = seconds // size
+            return f"{n} {unit}{'s' if n != 1 else ''}"
+    return f"{seconds} seconds"
 
 
 def _answer_text(answer) -> str:
@@ -333,6 +384,11 @@ class Loop:
             decision = reject(ctx.approval_reason or "no reason given")
         elif verdict == "answer":
             decision = respond(_answer_text(ctx.input_answer))
+        elif verdict == "waited":
+            waited = ctx.context.pop(K_WAITED_FOR, 0)
+            decision = respond(
+                f"{_duration_text(waited)} has passed. Carry on from where you "
+                f"were — nothing else has changed unless you check.")
         elif verdict == "unanswered":
             # Told, not failed: a question nobody answered shouldn't end the task
             # when the agent may well be able to proceed on what it has.
@@ -444,8 +500,9 @@ class Loop:
     def _tools(self) -> list:
         """Declared MCP tools, plus the ask tool when this agent may ask."""
         tools = self.tools.langchain_tools()
-        if (ask := ask_tool(self.cfg)) is not None:
-            tools.append(ask)
+        for extra in (ask_tool(self.cfg), wait_tool(self.cfg)):
+            if extra is not None:
+                tools.append(extra)
         return tools
 
     def _prompt(self, ctx) -> str:
@@ -495,6 +552,8 @@ class Loop:
 
         if action.get("name") == ASK_TOOL:
             return self._question(ctx, action, resume)
+        if action.get("name") == WAIT_TOOL:
+            return self._sleep(ctx, action, c)
 
         log.info("gate: agent=%s tool=%s", self.cfg.name, action.get("name", "?"))
         return AwaitApproval(
@@ -504,6 +563,35 @@ class Loop:
             justification=self._justify(action),
             metadata={"tool": action.get("name", ""), "args": action.get("args", {})},
         )
+
+    def _sleep(self, ctx, action: dict, c: dict):
+        """Park until the time has passed, holding nothing open.
+
+        `Next.delay_seconds` writes `dispatch_at` on the job, so the worker lets go
+        and no scheduler hands the task back until then. Nothing is running, so
+        nothing is spent — which is why `max_seconds` measures working time.
+
+        The request is clamped rather than refused. The agent asked to wait; waiting
+        less is closer to what it wanted than not waiting at all, and it is told the
+        real duration so it doesn't assume otherwise.
+        """
+        args = action.get("args") or {}
+        cap = self.cfg.wait.max_seconds
+        try:
+            wanted = duration_seconds(str(args.get("duration", "")), "wait")
+        except ValueError:
+            # A model that mangles the duration shouldn't end the task over it.
+            wanted = min(3600, cap)
+        seconds = max(1, min(wanted, cap))
+
+        c[K_WAITED] = c.get(K_WAITED, 0) + seconds
+        log.info("waiting: agent=%s for=%ss why=%s",
+                 self.cfg.name, seconds, args.get("why", "-"))
+        return Next(ENTRY_OPERATION,
+                    context=task_context(ctx, {**c, K_DECISION: "waited",
+                                               K_WAITED_FOR: seconds}),
+                    timeout=self._operation_timeout(),
+                    delay_seconds=seconds)
 
     def _gate_timeout(self, tool: str) -> int:
         """How long this tool's approver has.

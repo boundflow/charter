@@ -27,8 +27,10 @@ from charter.workflows.loop import (
     K_SECONDS,
     ASK_TOOL,
     Loop,
+    WAIT_TOOL,
     ask_tool,
     interrupt_on,
+    wait_tool,
     render,
     response_schema,
 )
@@ -594,3 +596,70 @@ class TestGatingAnything:
         from charter.config.agent import Gate
         with pytest.raises(Exception, match="not a tool the harness provides"):
             Gate(tools=["submit_reslt"])
+
+
+class TestWaiting:
+    """The harness cannot park for time — that needs a scheduler, and it is a
+    library. So it names the moment by stopping on a tool call, and BoundFlow does
+    the waiting. Same split as approvals and questions."""
+
+    def _loop(self, max="7d"):
+        from charter.config.agent import Wait
+        bundle = load_agent(EXAMPLES / "refund-triage")
+        bundle.latest.wait = Wait(max=max)
+        empty = type("NoTools", (), {"langchain_tools": lambda self: []})()
+        return Loop(bundle.latest, bundle.runtime, tools=empty,
+                    chat_model=lambda m: object(), store_url="postgresql://unused")
+
+    def _asks_to_wait(self, duration="1d"):
+        return {"__interrupt__": [type("I", (), {
+            "value": {"action_requests": [{
+                "name": WAIT_TOOL, "args": {"duration": duration, "why": "checking back"},
+                "description": "d"}]},
+            "id": "i"})()]}
+
+    def test_no_block_means_no_tool(self):
+        _, loop = loop_for()
+        assert wait_tool(loop.cfg) is None
+        assert WAIT_TOOL not in interrupt_on(loop.cfg)
+
+    def test_waiting_parks_the_task_without_holding_anything_open(self):
+        """Not a gate: nobody is being asked for anything, and no approval is
+        pending. The job simply isn't dispatched until the time has passed."""
+        loop = self._loop()
+        out = run(loop.entry(FakeCtx(results=[FakeResult(self._asks_to_wait("1d"))])))
+
+        assert isinstance(out, Next)
+        assert out.delay_seconds == 86400
+        assert out.operation == ENTRY_OPERATION
+
+    def test_a_longer_wait_is_clamped_not_refused(self):
+        """The agent asked to wait; waiting less is closer to what it wanted than
+        not waiting at all."""
+        loop = self._loop(max="6h")
+        out = run(loop.entry(FakeCtx(results=[FakeResult(self._asks_to_wait("30d"))])))
+        assert out.delay_seconds == 6 * 3600
+
+    def test_a_mangled_duration_does_not_end_the_task(self):
+        loop = self._loop()
+        out = run(loop.entry(FakeCtx(results=[FakeResult(self._asks_to_wait("soon"))])))
+        assert out.delay_seconds == 3600
+
+    def test_the_agent_is_told_how_long_it_actually_slept(self, _stub_harness):
+        """It asked for one thing and may have got another, so it shouldn't have to
+        assume."""
+        loop = self._loop()
+        ctx = FakeCtx(context={K_DECISION: "waited", "_waited_for": 172800},
+                      results=[FakeResult({"resolution": "carried on"})])
+
+        run(loop.entry(ctx))
+        message = _stub_harness.resume["decisions"][0]["message"]
+        assert "2 days has passed" in message
+
+    def test_sleeping_does_not_spend_working_time(self):
+        """A task that waits a week has spent none of its max_seconds — that is the
+        whole reason the budget measures working time."""
+        loop = self._loop()
+        ctx = FakeCtx(results=[FakeResult(self._asks_to_wait("7d"))])
+        run(loop.entry(ctx))
+        assert ctx.context.get(K_SECONDS, 0) < 5
