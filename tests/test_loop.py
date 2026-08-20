@@ -22,6 +22,7 @@ from charter.config.loader import load_agent
 from charter.workflows.loop import (
     K_COST,
     K_DECISION,
+    K_ACTS,
     K_GATES,
     K_LLM_CALLS,
     K_SECONDS,
@@ -623,3 +624,54 @@ class TestGatingAnything:
         from charter.config.agent import Gate
         with pytest.raises(Exception, match="not a tool the harness provides"):
             Gate(tools=["submit_reslt"])
+
+
+class TestActs:
+    """The harness dispatches tools now, so a result is otherwise only the agent's
+    account of itself. These come from the governor's metering — a different source
+    from the claim, which is the whole point."""
+
+    def test_a_gated_tool_that_ran_is_recorded(self):
+        cfg, loop = loop_for()
+        tool = cfg.gated_tools[0]
+        out = run(loop.entry(FakeCtx(results=[
+            FakeResult({"resolution": "refunded"}, tool_calls={tool: 1})])))
+
+        assert out.result["acts"] == {tool: 1}
+        assert out.result["resolution"] == "refunded", "the answer is still the answer"
+
+    def test_ungated_tools_are_not_recorded(self):
+        """Only what a human was asked about, so it reconciles against approvals."""
+        _, loop = loop_for()
+        out = run(loop.entry(FakeCtx(results=[
+            FakeResult({"resolution": "looked around"},
+                       tool_calls={"stripe__get_charge": 3})])))
+        assert "acts" not in out.result
+
+    def test_acts_accumulate_across_gates(self):
+        """A task that stopped twice did two things, and the result should say so."""
+        cfg, loop = loop_for()
+        tool = cfg.gated_tools[0]
+        ctx = FakeCtx(context={K_ACTS: {tool: 1}},
+                      results=[FakeResult({"resolution": "and again"},
+                                          tool_calls={tool: 1})])
+        out = run(loop.entry(ctx))
+        assert out.result["acts"] == {tool: 2}
+
+    def test_a_failed_task_still_says_what_it_did(self):
+        """A failure is when what already happened matters most."""
+        cfg, loop = loop_for()
+        tool = cfg.gated_tools[0]
+        ctx = FakeCtx(context={K_ACTS: {tool: 1}},
+                      results=[AgentPolicyLimitExceeded("reached max_cost_usd=0.3")])
+        out = run(loop.entry(ctx))
+        assert out.result["acts"] == {tool: 1}
+
+    def test_a_gated_harness_tool_counts_too(self):
+        """`gate.tools` names them, so they are equally things a human approved."""
+        from charter.config.agent import Gate
+        cfg, loop = loop_for()
+        loop.cfg.gate = Gate(tools=["submit_result"])
+        out = run(loop.entry(FakeCtx(results=[
+            FakeResult({"resolution": "done"}, tool_calls={"submit_result": 1})])))
+        assert out.result["acts"] == {"submit_result": 1}
