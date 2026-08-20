@@ -346,7 +346,7 @@ class TestAskHuman:
         cfg = self._cfg("eagerly")
         assert ask_tool(cfg).name == ASK_TOOL
         # The only sensible decision on a question is an answer.
-        assert interrupt_on(cfg)[ASK_TOOL]["allowed_decisions"] == ["response"]
+        assert interrupt_on(cfg)[ASK_TOOL]["allowed_decisions"] == ["respond"]
 
     def test_posture_reaches_the_prompt_and_is_not_a_number(self):
         """A model's confidence in itself isn't calibrated, so a threshold would
@@ -379,7 +379,7 @@ class TestAskHuman:
         run(loop.entry(FakeCtx(context={K_DECISION: "unanswered"},
                                results=[FakeResult({"resolution": "guessed"})])))
         msg = _stub_harness.resume["decisions"][0]
-        assert msg["type"] == "response"
+        assert msg["type"] == "respond"
         assert "Nobody answered" in msg["message"]
 
     def test_an_answer_reaches_the_model(self, _stub_harness):

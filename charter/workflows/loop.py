@@ -110,7 +110,7 @@ def interrupt_on(cfg: AgentConfig) -> dict[str, Any]:
         gates.setdefault(tool, {"allowed_decisions": ["approve", "edit", "reject"]})
     if cfg.ask_human is not None:
         # The only sensible decision on a question is an answer.
-        gates[ASK_TOOL] = {"allowed_decisions": ["response"]}
+        gates[ASK_TOOL] = {"allowed_decisions": ["respond"]}
     return gates
 
 
