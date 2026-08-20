@@ -561,35 +561,6 @@ class TestGateGranularity:
         assert "nobody answered in time" in out.result["reason"]
 
 
-class TestActs:
-    """The harness dispatches tools, so Charter no longer watches an action go by.
-    Without recording them the result is only the agent's account of itself."""
-
-    def test_a_gated_tool_that_ran_is_recorded(self):
-        cfg, loop = loop_for()
-        tool = cfg.gated_tools[0]
-        out = run(loop.entry(FakeCtx(results=[
-            FakeResult({"resolution": "refunded"}, tool_calls={tool: 1})])))
-        assert out.result["acts"] == {tool: 1}
-
-    def test_ungated_tools_are_not_recorded(self):
-        """Only what a human was asked about, so it reconciles against approvals."""
-        _, loop = loop_for()
-        out = run(loop.entry(FakeCtx(results=[
-            FakeResult({"resolution": "looked around"},
-                       tool_calls={"stripe__get_charge": 3})])))
-        assert "acts" not in out.result
-
-    def test_a_failed_task_still_says_what_it_did(self):
-        """A failure is when what already happened matters most."""
-        cfg, loop = loop_for()
-        tool = cfg.gated_tools[0]
-        ctx = FakeCtx(context={"_acts": {tool: 1}},
-                      results=[AgentPolicyLimitExceeded("reached max_cost_usd=0.3")])
-        out = run(loop.entry(ctx))
-        assert out.result["acts"] == {tool: 1}
-
-
 class TestGatingAnything:
     """Gating was only expressible for declared MCP tools, which left no way to
     approve the thing that matters most — the answer itself."""

@@ -257,22 +257,3 @@ def _bounded(tool, seconds: float):
 
     tool.coroutine = run
     return tool
-
-
-async def probe(*, command: str = "", args: list[str] | None = None,
-                url: str = "", env: list[str] | None = None) -> list:
-    """Every tool a server offers, for `charter import`. No config needed — this
-    runs before there is one."""
-    from langchain_mcp_adapters.client import MultiServerMCPClient
-
-    if command:
-        passthrough = {n: os.environ[n] for n in (env or []) if n in os.environ}
-        conn = {"transport": "stdio", "command": command, "args": list(args or []),
-                **({"env": passthrough} if passthrough else {})}
-    else:
-        conn = {"transport": "streamable_http", "url": url}
-
-    try:
-        return await MultiServerMCPClient({"probe": conn}).get_tools()
-    except Exception as e:
-        raise QuarantineError(f"mcp: {e}") from e

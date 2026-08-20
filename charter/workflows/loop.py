@@ -48,7 +48,6 @@ K_DECISION = "_decision"
 K_COST = "_cost"
 K_LLM_CALLS = "_llm_calls"
 K_GATES = "_gates"
-K_ACTS = "_acts"          # gated tools that actually ran
 K_GATED_TOOL = "_gated_tool"
 K_SECONDS = "_seconds"   # working time, excluding waits for a human
 
@@ -223,25 +222,13 @@ class Loop:
         c[K_COST] = c.get(K_COST, 0.0) + gov.cost_usd
         c[K_LLM_CALLS] = c.get(K_LLM_CALLS, 0) + gov.llm_calls
 
-    def _record_acts(self, ctx, result) -> None:
-        """Count the gated tools that actually ran.
-
-        The harness dispatches tools now, so Charter no longer sees an action go by
-        — and without this the task result is only the agent's own account of
-        itself. "It says it refunded $240" and "a refund tool was called once" are
-        different claims, and the second is the one an operator can act on.
-
-        Gated tools only: those are the ones a human was asked about, so those are
-        the ones worth reconciling against the approval record.
-        """
-        called = getattr(result, "calls_per_tool", None) or {}
-        gated = set(self.cfg.gated_tools)
-        acts = ctx.context.get(K_ACTS) or {}
-        for tool, n in called.items():
-            if tool in gated:
-                acts[tool] = acts.get(tool, 0) + n
-        if acts:
-            ctx.context[K_ACTS] = acts
+    # No record here of which gated tools ran. It was tried and removed: the
+    # transcript already holds it, keyed by `thread_id` — which *is* the request id
+    # the CLI prints — and a count derived from our metering is the lossy copy of
+    # something with the actual results in it. `charter transcript <task-id>` is
+    # the version worth building, joined against the audit so an approval and the
+    # call it authorised appear on one timeline. It needs retention first: today a
+    # task's state is discarded the moment it completes.
 
     def _charge_seconds(self, ctx, started: float) -> None:
         c = ctx.context
@@ -298,7 +285,6 @@ class Loop:
             "llm_calls": ctx.context.get(K_LLM_CALLS, 0),
             "gates": ctx.context.get(K_GATES, 0),
             "seconds": round(ctx.context.get(K_SECONDS, 0.0), 1),
-            "acts": ctx.context.get(K_ACTS) or {},
         })
 
     # ── the one operation ───────────────────────────────────────────────────
@@ -387,7 +373,6 @@ class Loop:
 
         self._charge(ctx, result)
         self._charge_seconds(ctx, started)
-        self._record_acts(ctx, result)
 
         if (over := self._out_of_time(ctx)) is not None:
             return await self._fail(ctx, over)
@@ -403,9 +388,7 @@ class Loop:
         if action is not None:
             return self._gate(ctx, action)
 
-        acts = ctx.context.get(K_ACTS)
-        return Complete(result={**(result.output or {}), "acts": acts} if acts
-                        else result.output)
+        return Complete(result=result.output)
 
     SKILLS_ROOT = "/skills"
 
