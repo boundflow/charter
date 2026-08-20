@@ -92,14 +92,23 @@ def _stub_harness(monkeypatch):
         thread_id = "task-1"
         wiring: dict = {}
         config: dict = {}
+        discarded = False
 
         def first(self, payload):
             return payload
 
+        async def discard(self):
+            # Recorded rather than ignored: whether state is dropped is the whole
+            # difference between a finished task and a parked one.
+            Wiring.discarded = True
+
+    Wiring.discarded = False
+
     @asynccontextmanager
     async def fake(ctx, agent_name, store_url, *, resume=None):
         fake.resume = resume
-        yield Wiring()
+        fake.wiring = Wiring()
+        yield fake.wiring
 
     monkeypatch.setattr("boundflow.harness.durable_harness", fake)
     monkeypatch.setattr("charter.workflows.loop.durable_harness", fake)

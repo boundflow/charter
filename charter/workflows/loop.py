@@ -182,7 +182,7 @@ class Loop:
         c[K_COST] = c.get(K_COST, 0.0) + result.cost_usd
         c[K_LLM_CALLS] = c.get(K_LLM_CALLS, 0) + result.llm_calls_used
 
-    def _fail(self, ctx, reason: str) -> Complete:
+    async def _fail(self, ctx, reason: str) -> Complete:
         """Record a customer-domain failure and still return a result.
 
         `mark_failed()` increments num_failures for the lifecycle rules while the run
@@ -192,6 +192,11 @@ class Loop:
         """
         ctx.mark_failed()
         log.warning("task failed: agent=%s reason=%s", self.cfg.name, reason)
+        try:
+            async with durable_harness(ctx, self.cfg.name, self.store_url) as h:
+                await h.discard()
+        except Exception:  # noqa: BLE001 — reporting the failure matters more
+            log.warning("could not discard state for the failed task", exc_info=True)
         return Complete(result={
             "failed": True,
             "reason": reason,
@@ -229,6 +234,7 @@ class Loop:
             decision = respond("Nobody answered in time — proceed with what you "
                                "have and say what you assumed.")
 
+        action = None
         try:
             async with durable_harness(ctx, self.cfg.name, self.store_url,
                                        resume=decision) as h:
@@ -249,14 +255,20 @@ class Loop:
                     output_schema=response_schema(self.cfg),
                     budget=self._remaining(ctx),
                 )
+                # Decided in here, because only the open harness can drop its own
+                # state, and only it knows the key. A task that is parking keeps
+                # everything — that state is the entire reason it can resume.
+                action = pending_action(result)
+                if action is None:
+                    await h.discard()
         except AgentPolicyLimitExceeded as spent:
-            return self._fail(ctx, str(spent))
+            return await self._fail(ctx, str(spent))
         except Ended as ended:
-            return self._fail(ctx, ended.reason)
+            return await self._fail(ctx, ended.reason)
 
         self._charge(ctx, result)
 
-        if (action := pending_action(result)) is not None:
+        if action is not None:
             return self._gate(ctx, action)
         return Complete(result=result.output)
 
