@@ -1,0 +1,11 @@
+apiVersion: charter/v1
+kind: RuntimePolicy
+
+agent: scout
+
+# Its own ceiling, not a slice of the parent's — which is the thing to understand
+# about durable children. A parent that starts five of these can spend six budgets.
+per_run:
+  max_llm_calls: 8
+  max_cost_usd: 0.50
+  max_seconds: 3600

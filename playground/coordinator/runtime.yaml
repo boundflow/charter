@@ -1,0 +1,11 @@
+apiVersion: charter/v1
+kind: RuntimePolicy
+
+agent: coordinator
+
+per_run:
+  # Polling costs calls: every check is a model turn. A coordinator that sleeps and
+  # checks a few times needs headroom the work itself never uses.
+  max_llm_calls: 12
+  max_cost_usd: 0.50
+  max_seconds: 7200

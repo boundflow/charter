@@ -1,0 +1,31 @@
+apiVersion: charter/v1
+kind: AgentConfig
+
+name: coordinator
+version: 1
+description: Hands work to scouts and waits for them, without holding a worker open.
+
+model: claude-haiku-4-5
+
+inputs:
+  topic:
+    type: string
+
+objective: |
+  Start a scout on: {{ inputs.topic }}
+
+  Then wait before checking on it. Checking in a tight loop tells you nothing new
+  and spends your budget on asking. When it has finished, report what it found.
+
+# Nothing else may be started. An agent that could name any workflow type could
+# mint governed units nobody budgeted for.
+spawns:
+  - scout
+
+wait:
+  max: 1h
+
+response_format:
+  finding:
+    type: string
+    description: What the scout came back with.

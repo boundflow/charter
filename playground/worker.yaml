@@ -21,10 +21,19 @@ serves:
 - agent: delegator
   versions:
   - 1
+- agent: scout
+  versions:
+  - 1
+- agent: coordinator
+  versions:
+  - 1
 model_pricing:
   claude-haiku-4-5:
     input: 0.8
     output: 4.0
+  claude-sonnet-4-5:
+    input: 3.0
+    output: 15.0
 notifications:
   channels:
   - name: terminal

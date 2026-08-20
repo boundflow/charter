@@ -129,3 +129,20 @@ def factory(model: BaseChatModel):
     """`CharterWorker.chat_model` takes a factory, since the model name comes from
     each agent's versioned config rather than the worker manifest."""
     return lambda _name: model
+
+
+def by_model(**scripts):
+    """A factory that hands each agent its own script, keyed by model name.
+
+    Needed once a parent and its child run at the same time: a single scripted
+    model is a shared cursor, so the child consumes turns the parent was going to
+    get and both go off the rails. Model name is the only thing a factory sees, so
+    that's the key — give the agents in a test different models.
+    """
+    def build(name: str):
+        if name not in scripts:
+            raise AssertionError(
+                f"no script for model {name!r} — this test's agents use "
+                f"{', '.join(sorted(scripts))}")
+        return scripts[name]
+    return build

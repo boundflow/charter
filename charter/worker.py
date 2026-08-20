@@ -27,7 +27,9 @@ from .config.loader import AgentBundle, Project
 from .config.worker import Channel, WorkerManifest
 from .mcp.client import QuarantineError, ToolSet
 from .notify import Notifier
+from .provisioning.apply import resolve_tenant
 from .workflows.loop import Loop
+from .workflows.spawning import Spawner
 
 log = logging.getLogger(__name__)
 
@@ -102,6 +104,11 @@ class CharterWorker:
             resolve(manifest.control_plane.api_key))
 
         async with cp:
+            # Resolved once, up front: every child a spawner creates belongs to the
+            # same tenant as its parent, and looking it up per spawn would be a
+            # round trip on the model's critical path.
+            self._tenant_id = (manifest.control_plane.tenant_id
+                               or await resolve_tenant(cp, manifest.control_plane.tenant))
             worker = BoundFlowWorker(
                 # The harness drives the loop and gets its model per call via
                 # run_governed, so nothing here uses BoundFlow's own client. It's
@@ -137,14 +144,23 @@ class CharterWorker:
             for version in spec.versions:
                 key = (spec.agent, version)
                 cfg = bundle.versions[version]
+                missing = [a for a in cfg.spawns if a not in self.project.agents]
                 tools = ToolSet().with_timeout(
                     bundle.runtime.limits.max_tool_seconds)
                 served = Served(bundle, version, tools,
                                 Loop(cfg, bundle.runtime, tools,
                                      self._chat_model,
                                      resolve(self.project.manifest.store.url),
-                                     skills=bundle.skills.get(version)))
+                                     skills=bundle.skills.get(version),
+                                     spawner=self._spawner(cp, cfg)))
                 try:
+                    if missing:
+                        # Caught at boot rather than the first time the model tries
+                        # it — a typo here is a config error, and discovering it as
+                        # a tool result mid-run is far too late to be useful.
+                        raise QuarantineError(
+                            f"spawns names {', '.join(missing)}, which this project "
+                            f"has no config for")
                     await tools.connect(cfg)
                     for server in tools.servers.values():
                         for tool, why in server.tightened.items():
@@ -154,6 +170,13 @@ class CharterWorker:
                     served.quarantined = str(e)
                     log.error("quarantined %s@v%d: %s", spec.agent, version, e)
                 self.served[key] = served
+
+    def _spawner(self, cp: ControlPlaneClient, cfg) -> Spawner | None:
+        """None unless this version declares `spawns`, which is what keeps the
+        async tools off the model's list for agents that shouldn't delegate."""
+        if not cfg.spawns:
+            return None
+        return Spawner(cp, self._tenant_id, self.project.agents, cfg.spawns)
 
     # ── registration ────────────────────────────────────────────────────────
 

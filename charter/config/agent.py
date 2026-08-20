@@ -333,6 +333,9 @@ class AskHuman(Base):
 GATEABLE = frozenset({
     "ls", "read_file", "write_file", "edit_file", "delete", "glob", "grep",
     "execute", "task", "submit_result",
+    # Starting a durable child creates a governed unit with a budget of its own,
+    # which the parent's ceiling does not bound — worth a signature in some shops.
+    "start_async_task",
 })
 
 
@@ -479,6 +482,16 @@ class AgentConfig(Base):
         "permitted."))
     file_rules: list[FileRule] = Field(default_factory=list)
 
+    # Which other agents this one may hand long-running work to. Declared, because
+    # an agent that can create workflows freely can mint governed units nobody
+    # budgeted for — each child gets its own budget, and the parent's ceiling does
+    # not bound them. Empty means it may spawn none, and the async tools are not
+    # offered at all; unlike `allowed_capabilities`, silence here forbids rather
+    # than permits, because the risk runs the other way.
+    spawns: list[str] = Field(default_factory=list, description=(
+        "Agent names this one may start as durable background tasks, via "
+        "start_async_task. Each runs as its own instance with its own budget."))
+
     # Skills are not declared here. Anything under `v<N>/skills/` is shipped to the
     # agent's store and handed to the harness's own loader, so an author's existing
     # SKILL.md directories work unchanged and the config stays free of a manifest
@@ -488,9 +501,21 @@ class AgentConfig(Base):
     @model_validator(mode="after")
     def _check(self) -> AgentConfig:
         self._check_servers_unique()
+        self._check_spawns()
         self._check_templates()
         self._check_schedule()
         return self
+
+    def _check_spawns(self) -> None:
+        """An agent that may spawn itself recurses with no bound. Each child gets a
+        fresh budget, so nothing downstream stops it — the config is the only place
+        it can be caught."""
+        if self.name in self.spawns:
+            raise ValueError(
+                f"`spawns` includes {self.name!r} itself. Each child gets its own "
+                f"budget, so a self-spawning agent has nothing to stop it.")
+        if len(set(self.spawns)) != len(self.spawns):
+            raise ValueError("`spawns` lists the same agent twice.")
 
     def _check_schedule(self) -> None:
         if self.schedule and self.inputs:

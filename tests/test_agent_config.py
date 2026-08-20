@@ -255,3 +255,33 @@ def test_a_hyphenated_tool_name_is_allowed():
     cfg = AgentConfig.model_validate(raw)
     assert cfg.mcp[0].tools[0].tool == "tavily-search"
     assert "-" in cfg.all_tools[0]
+
+
+# ── spawning ────────────────────────────────────────────────────────────────
+
+
+def test_spawns_defaults_to_none_allowed():
+    """Silence forbids here, unlike `allowed_capabilities` where it permits. A
+    child is a governed unit with a budget of its own, so the risk of a default
+    runs the other way."""
+    assert AgentConfig.model_validate(load()).spawns == []
+
+
+def test_an_agent_cannot_spawn_itself():
+    """Each child gets a fresh budget, so the parent's ceiling doesn't bound the
+    recursion — the config is the only place this can be caught."""
+    with pytest.raises(ValidationError, match="itself"):
+        AgentConfig.model_validate(load(spawns=["refund-triage"]))
+
+
+def test_spawns_rejects_duplicates():
+    with pytest.raises(ValidationError, match="same agent twice"):
+        AgentConfig.model_validate(load(spawns=["outreach", "outreach"]))
+
+
+def test_starting_a_child_can_be_gated():
+    """Spawning commits money nobody has approved, so it belongs in the same
+    vocabulary as the other harness tools an operator can put a signature on."""
+    cfg = AgentConfig.model_validate(
+        load(spawns=["outreach"], gate={"tools": ["start_async_task"]}))
+    assert "start_async_task" in cfg.gate.tools

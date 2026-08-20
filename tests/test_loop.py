@@ -663,3 +663,65 @@ class TestWaiting:
         ctx = FakeCtx(results=[FakeResult(self._asks_to_wait("7d"))])
         run(loop.entry(ctx))
         assert ctx.context.get(K_SECONDS, 0) < 5
+
+
+# ── publishing ──────────────────────────────────────────────────────────────
+
+
+class PublishCtx:
+    """Just enough context for the publish path: it reads spend and marks failure.
+    Distinct from the module's `FakeCtx`, which drives whole operations."""
+
+    def __init__(self) -> None:
+        self.context: dict = {}
+        self.failed = False
+
+    def mark_failed(self) -> None:
+        self.failed = True
+
+
+async def _published(loop, output, ctx=None):
+    return await loop._publish(ctx or PublishCtx(), output)
+
+
+@pytest.mark.asyncio
+async def test_a_structured_answer_is_published_as_it_stands():
+    """The ordinary case: the agent filled the declared schema, so that is the
+    result and nothing here touches it."""
+    _, loop = loop_for()
+    result = await _published(loop, {"resolution": "refunded", "refunded_usd": 240})
+    assert result.result == {"resolution": "refunded", "refunded_usd": 240}
+
+
+@pytest.mark.asyncio
+async def test_raw_graph_state_is_never_published():
+    """It used to be, and the control plane couldn't encode it — the run failed
+    with `Unexpected type`, naming no agent and no cause. Anything unreadable
+    enough to be mistaken for a platform bug has to be caught here instead."""
+    class Msg:
+        content = "I had a look but couldn't decide."
+
+    _, loop = loop_for()
+    assert loop.cfg.response_format, "this test needs an agent that declares a shape"
+    ctx = PublishCtx()
+
+    result = await _published(loop, {"messages": [Msg()], "files": {}}, ctx)
+
+    assert result.result["failed"] is True
+    assert "submit_result" in result.result["reason"]
+    assert "couldn't decide" in result.result["reason"], "say what it did say"
+    assert ctx.failed
+
+
+@pytest.mark.asyncio
+async def test_an_agent_with_no_declared_shape_publishes_its_prose():
+    """Nothing was asked for, so prose is the answer rather than a shortfall."""
+    class Msg:
+        content = "Nothing needs attention today."
+
+    _, loop = loop_for()
+    loop.cfg = loop.cfg.model_copy(update={"response_format": None})
+
+    result = await _published(loop, {"messages": [Msg()], "files": {}})
+
+    assert result.result == {"answer": "Nothing needs attention today."}

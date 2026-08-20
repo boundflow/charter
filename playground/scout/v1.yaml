@@ -1,0 +1,32 @@
+apiVersion: charter/v1
+kind: AgentConfig
+
+name: scout
+version: 1
+description: Runs one piece of delegated work on its own, for as long as it takes.
+
+model: claude-sonnet-4-5
+
+# The work arrives as an input, because that is how `start_async_task` delivers a
+# description — nothing about being a child is special here. This same agent can
+# be invoked directly, and often is while you're getting its objective right.
+inputs:
+  description:
+    type: string
+    description: What to go and find out.
+
+objective: |
+  {{ inputs.description }}
+
+  Work on this alone and report what you found. Nobody is waiting on the other
+  end of a prompt, so finish the job rather than asking for direction.
+
+# So a scout can sit on something slow — waiting on a reply, a rate limit — without
+# holding a worker open. Its parent may well finish first, and that is fine.
+wait:
+  max: 6h
+
+response_format:
+  finding:
+    type: string
+    description: What you found out.

@@ -38,6 +38,7 @@ import time
 from pathlib import Path
 
 from ..config.agent import AgentConfig, duration_seconds
+from .spawning import spawn_middleware
 from .subagents import subagent_limits
 
 log = logging.getLogger(__name__)
@@ -52,6 +53,25 @@ K_GATED_TOOL = "_gated_tool"
 K_WAITED = "_waited"      # total seconds slept, for the record
 K_WAITED_FOR = "_waited_for"
 K_SECONDS = "_seconds"   # working time, excluding waits for a human
+
+
+def task_id(ctx) -> str:
+    """This run's task id, derived exactly as `durable_harness` derives it — a
+    second spelling here would silently key children to the wrong parent."""
+    return ctx.context.get("task_id") or ctx._op.request_id
+
+
+def _final_text(messages) -> str:
+    """The last thing the agent actually said, or "" if it said nothing."""
+    for m in reversed(list(messages or [])):
+        content = getattr(m, "content", None)
+        if isinstance(content, str) and content.strip():
+            return content.strip()
+        if isinstance(content, list):
+            parts = [b.get("text", "") for b in content if isinstance(b, dict)]
+            if joined := " ".join(p for p in parts if p).strip():
+                return joined
+    return ""
 
 
 def render(template: str, inputs: dict) -> str:
@@ -228,7 +248,8 @@ class Loop:
     different worker after a gate."""
 
     def __init__(self, cfg: AgentConfig, runtime, tools, chat_model,
-                 store_url: str, skills: Path | None = None) -> None:
+                 store_url: str, skills: Path | None = None,
+                 spawner=None) -> None:
         self.cfg = cfg
         self.runtime = runtime
         # The ToolSet, not its tools: it hasn't connected yet when the worker builds
@@ -239,6 +260,9 @@ class Loop:
         # This version's skills directory on disk, or None. Uploaded per task —
         # see `_ship_skills`.
         self.skills = skills
+        # Creates durable children, or None when this agent declares no `spawns`.
+        # Needs the control plane, so the worker builds it rather than the Loop.
+        self.spawner = spawner
 
     # ── the budget the harness can't see ────────────────────────────────────
 
@@ -399,6 +423,7 @@ class Loop:
         # human took to answer the last gate isn't charged to the agent.
         started = time.monotonic()
         action = None
+        spawner = self._task_spawner(ctx)
         try:
             async with durable_harness(ctx, self.cfg.name, self.store_url,
                                        resume=decision) as h:
@@ -413,7 +438,7 @@ class Loop:
                         # Ours to declare, theirs to enforce, durable because of us.
                         interrupt_on=interrupt_on(self.cfg),
                         skills=skills or None,
-                        **self._wiring(h),
+                        **self._wiring(h, spawner),
                     ).ainvoke(h.first({"messages": [{"role": "user", "content": prompt}]}),
                               h.config),
                     chat_model=self.chat_model(self.cfg.model),
@@ -457,7 +482,31 @@ class Loop:
         if action is not None:
             return self._gate(ctx, action)
 
-        return Complete(result=result.output)
+        return await self._publish(ctx, result.output)
+
+    async def _publish(self, ctx, output) -> Complete:
+        """Turn what the harness returned into something publishable.
+
+        A structured answer comes back as the declared schema and goes straight
+        out. Without one, the harness hands back its whole graph state — messages,
+        files, the lot — which the control plane cannot encode. It used to be
+        published anyway, and the run failed with `Unexpected type`: no agent name,
+        no reason, nothing to act on. Two very different situations wearing the same
+        unreadable error.
+        """
+        if not isinstance(output, dict) or "messages" not in output:
+            return Complete(result=output)
+
+        text = _final_text(output.get("messages"))
+        if self.cfg.response_format:
+            # It was asked for a shape and ended without producing one — a real
+            # failure, and worth naming as that rather than as a protobuf error.
+            return await self._fail(
+                ctx, "the agent stopped without calling submit_result, so there is "
+                     "no result in the shape response_format declares"
+                     + (f" (it said: {text[:200]})" if text else ""))
+        # No shape was asked for, so prose is the answer rather than a shortfall.
+        return Complete(result={"answer": text})
 
     SKILLS_ROOT = "/skills"
 
@@ -484,7 +533,7 @@ class Loop:
                 await backend.awrite(target, path.read_text())
         return [f"{self.SKILLS_ROOT}/"]
 
-    def _wiring(self, h) -> dict:
+    def _wiring(self, h, spawner) -> dict:
         """The harness's wiring, plus our subagent bounds.
 
         Appended rather than replacing: `h.wiring` carries the policy BoundFlow
@@ -493,17 +542,23 @@ class Loop:
         just a tool.
         """
         wiring = dict(h.wiring)
-        if extra := subagent_limits(self.runtime.per_run):
+        extra = subagent_limits(self.runtime.per_run) + spawn_middleware(spawner)
+        if extra:
             wiring["middleware"] = list(wiring.get("middleware") or []) + extra
         return wiring
 
     def _tools(self) -> list:
-        """Declared MCP tools, plus the ask tool when this agent may ask."""
+        """Declared MCP tools, plus whichever of ours this agent's config turns on."""
         tools = self.tools.langchain_tools()
         for extra in (ask_tool(self.cfg), wait_tool(self.cfg)):
             if extra is not None:
                 tools.append(extra)
         return tools
+
+    def _task_spawner(self, ctx):
+        """The spawner for this run. Nothing per-task to bind: a child is addressed
+        through `async_tasks`, which is per-thread already."""
+        return self.spawner
 
     def _prompt(self, ctx) -> str:
         """The objective, plus how readily this agent should interrupt you.
