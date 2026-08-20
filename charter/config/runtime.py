@@ -120,6 +120,14 @@ class Limits(Base):
 
     max_tokens_per_call: int = Field(default=1024, gt=0)
     max_call_seconds: float = Field(default=60.0, gt=0)
+    # The other side of the same boundary. A model call is bounded by
+    # max_call_seconds; a tool call had nothing — the MCP adapter offers a timeout
+    # for HTTP servers and none at all for stdio, so a hung server blocked until
+    # the control plane killed the whole round. That works and it is the bluntest
+    # instrument available: a dead round with no explanation, rather than one tool
+    # failing in a way the agent can read and work around.
+    max_tool_seconds: float = Field(default=30.0, gt=0, description=(
+        "How long one tool call may take before it's treated as a failure."))
 
 
 # Floor so a tiny budget still gets room to dispatch; ceiling so a wedged round

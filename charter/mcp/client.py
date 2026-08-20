@@ -24,6 +24,7 @@ only ever tighten.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from dataclasses import dataclass, field
@@ -193,6 +194,18 @@ class ToolSet:
                 log.info("mcp %s: %s gated by policy (%s)",
                          server.spec.name, declared.tool, why)
 
+    def with_timeout(self, seconds: float) -> "ToolSet":
+        """Bound how long any one tool call may take.
+
+        Applied here rather than through the adapter's own setting because that one
+        only exists for HTTP connections — a stdio server has no timeout at all, so
+        a hung one blocks until the control plane cancels the entire round. Wrapping
+        the tool covers both transports the same way, and turns a hang into a
+        failure the agent can read.
+        """
+        self._tool_seconds = seconds
+        return self
+
     def langchain_tools(self) -> list:
         """Every declared tool, renamed to `server__tool` and ready for the harness.
 
@@ -204,7 +217,7 @@ class ToolSet:
         for server in self.servers.values():
             for name, tool in server.tools.items():
                 tool.name = server.spec.qualified(name)
-                out.append(tool)
+                out.append(_bounded(tool, getattr(self, "_tool_seconds", 0.0)))
         return out
 
     def gated_tools(self) -> list[str]:
@@ -223,6 +236,27 @@ class ToolSet:
 
     async def __aexit__(self, *exc) -> None:
         await self.aclose()
+
+
+def _bounded(tool, seconds: float):
+    """The tool, with a ceiling on how long one call may take."""
+    if not seconds:
+        return tool
+
+    inner = tool.coroutine or tool.func
+    name = tool.name
+
+    async def run(*args, **kwargs):
+        try:
+            return await asyncio.wait_for(inner(*args, **kwargs), timeout=seconds)
+        except TimeoutError:
+            # Raised, not returned, so it counts as a tool failure — a tool that
+            # hangs is a broken integration, and max_tool_failures exists to notice.
+            raise McpError(
+                f"{name} did not respond within {seconds:g}s") from None
+
+    tool.coroutine = run
+    return tool
 
 
 async def probe(*, command: str = "", args: list[str] | None = None,

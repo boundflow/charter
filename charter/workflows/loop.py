@@ -48,6 +48,8 @@ K_DECISION = "_decision"
 K_COST = "_cost"
 K_LLM_CALLS = "_llm_calls"
 K_GATES = "_gates"
+K_ACTS = "_acts"          # gated tools that actually ran
+K_GATED_TOOL = "_gated_tool"
 K_SECONDS = "_seconds"   # working time, excluding waits for a human
 
 
@@ -102,6 +104,11 @@ def interrupt_on(cfg: AgentConfig) -> dict[str, Any]:
     """
     gates = {tool: {"allowed_decisions": ["approve", "edit", "reject"]}
              for tool in cfg.gated_tools}
+    # Harness tools have no declaration site of their own, so they're named on the
+    # gate block. `submit_result` among them: gating how an agent finishes is how
+    # you approve what it produced.
+    for tool in cfg.gate.tools:
+        gates.setdefault(tool, {"allowed_decisions": ["approve", "edit", "reject"]})
     if cfg.ask_human is not None:
         # The only sensible decision on a question is an answer.
         gates[ASK_TOOL] = {"allowed_decisions": ["response"]}
@@ -216,6 +223,26 @@ class Loop:
         c[K_COST] = c.get(K_COST, 0.0) + gov.cost_usd
         c[K_LLM_CALLS] = c.get(K_LLM_CALLS, 0) + gov.llm_calls
 
+    def _record_acts(self, ctx, result) -> None:
+        """Count the gated tools that actually ran.
+
+        The harness dispatches tools now, so Charter no longer sees an action go by
+        — and without this the task result is only the agent's own account of
+        itself. "It says it refunded $240" and "a refund tool was called once" are
+        different claims, and the second is the one an operator can act on.
+
+        Gated tools only: those are the ones a human was asked about, so those are
+        the ones worth reconciling against the approval record.
+        """
+        called = getattr(result, "calls_per_tool", None) or {}
+        gated = set(self.cfg.gated_tools)
+        acts = ctx.context.get(K_ACTS) or {}
+        for tool, n in called.items():
+            if tool in gated:
+                acts[tool] = acts.get(tool, 0) + n
+        if acts:
+            ctx.context[K_ACTS] = acts
+
     def _charge_seconds(self, ctx, started: float) -> None:
         c = ctx.context
         c[K_SECONDS] = c.get(K_SECONDS, 0.0) + (time.monotonic() - started)
@@ -271,6 +298,7 @@ class Loop:
             "llm_calls": ctx.context.get(K_LLM_CALLS, 0),
             "gates": ctx.context.get(K_GATES, 0),
             "seconds": round(ctx.context.get(K_SECONDS, 0.0), 1),
+            "acts": ctx.context.get(K_ACTS) or {},
         })
 
     # ── the one operation ───────────────────────────────────────────────────
@@ -293,6 +321,16 @@ class Loop:
         if verdict == "approve":
             decision = approve()
         elif verdict == "reject":
+            if self.cfg.gate.on_reject == "fail":
+                # The gated action was the point, so finishing without it would be
+                # a task that reports success having done nothing. Covers a timeout
+                # too — the control plane resolves an unanswered gate as a
+                # rejection, and nothing here can tell the two apart.
+                refused = ctx.context.pop(K_GATED_TOOL, "the gated action")
+                because = ctx.approval_reason or "nobody answered in time"
+                return await self._fail(
+                    ctx, f"{refused} was not approved ({because}) and this agent is "
+                         f"declared on_reject: fail")
             decision = reject(ctx.approval_reason or "no reason given")
         elif verdict == "answer":
             decision = respond(_answer_text(ctx.input_answer))
@@ -349,6 +387,7 @@ class Loop:
 
         self._charge(ctx, result)
         self._charge_seconds(ctx, started)
+        self._record_acts(ctx, result)
 
         if (over := self._out_of_time(ctx)) is not None:
             return await self._fail(ctx, over)
@@ -363,7 +402,10 @@ class Loop:
 
         if action is not None:
             return self._gate(ctx, action)
-        return Complete(result=result.output)
+
+        acts = ctx.context.get(K_ACTS)
+        return Complete(result={**(result.output or {}), "acts": acts} if acts
+                        else result.output)
 
     SKILLS_ROOT = "/skills"
 
@@ -447,9 +489,12 @@ class Loop:
         c[K_GATES] = c.get(K_GATES, 0) + 1
         gate = self.cfg.gate
 
+        tool = action.get("name", "")
+
         def resume(verdict: str):
             return Next(ENTRY_OPERATION,
-                        context=task_context(ctx, {**c, K_DECISION: verdict}),
+                        context=task_context(ctx, {**c, K_DECISION: verdict,
+                                                   K_GATED_TOOL: tool}),
                         timeout=self._operation_timeout())
 
         if action.get("name") == ASK_TOOL:
@@ -459,10 +504,23 @@ class Loop:
         return AwaitApproval(
             on_approve=resume("approve"),
             on_reject=resume("reject"),
-            timeout=gate.timeout_seconds,
+            timeout=self._gate_timeout(tool),
             justification=self._justify(action),
             metadata={"tool": action.get("name", ""), "args": action.get("args", {})},
         )
+
+    def _gate_timeout(self, tool: str) -> int:
+        """How long this tool's approver has.
+
+        Per tool where it's declared, falling back to the agent's default: a refund
+        can wait half an hour, a production deploy might need someone in five
+        minutes, and one number for both is the wrong shape.
+        """
+        for server in self.cfg.mcp:
+            for spec in server.tools:
+                if server.qualified(spec.tool) == tool and spec.approval_timeout_seconds:
+                    return spec.approval_timeout_seconds
+        return self.cfg.gate.timeout_seconds
 
     def _question(self, ctx, action: dict, resume):
         """The agent asked something, so park for an answer rather than a verdict.

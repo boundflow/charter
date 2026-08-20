@@ -151,3 +151,34 @@ def test_a_failing_tool_reports_its_error_to_the_model():
         return str(await tool.ainvoke({"ticket_id": "7"}))
 
     assert "already closed" in run(go())
+
+
+def test_a_hanging_tool_becomes_a_failure_rather_than_a_dead_round():
+    """The adapter offers a timeout for HTTP connections and none for stdio, so a
+    hung stdio server blocked until the control plane cancelled the whole
+    operation. Bounded, but by the bluntest instrument there is.
+
+    Raised rather than returned, so it counts: a tool that hangs is a broken
+    integration and `max_tool_failures` exists to notice."""
+    async def go():
+        ts = ToolSet().with_timeout(0.001)   # nothing answers this fast
+        await ts.connect(Cfg(spec([ToolSpec(tool="get_ticket")])))
+        tool = ts.langchain_tools()[0]
+        try:
+            await tool.ainvoke({"ticket_id": "42"})
+            return None
+        except Exception as e:  # noqa: BLE001 — the point is that it raises
+            return e
+
+    raised = run(go())
+    assert raised is not None, "a hanging tool returned instead of failing"
+    assert "did not respond within" in str(raised)
+
+
+def test_no_timeout_configured_leaves_the_tool_alone():
+    async def go():
+        ts = ToolSet()   # no with_timeout
+        await ts.connect(Cfg(spec([ToolSpec(tool="get_ticket")])))
+        return str(await ts.langchain_tools()[0].ainvoke({"ticket_id": "42"}))
+
+    assert "customer wants a refund" in run(go())

@@ -37,11 +37,13 @@ EXAMPLES = Path(__file__).parent.parent / "examples"
 
 
 class FakeResult:
-    def __init__(self, output, cost=0.01, calls=2, tool_failures=None):
+    def __init__(self, output, cost=0.01, calls=2, tool_failures=None,
+                 tool_calls=None):
         self.output = output
         self.cost_usd = cost
         self.llm_calls_used = calls
         self.tool_failure_counts = tool_failures or {}
+        self.calls_per_tool = tool_calls or {}
 
 
 class FakeCtx:
@@ -495,3 +497,129 @@ class TestWorkingTime:
         assert cfg.gate.timeout_seconds == 1800
         loop = self._loop(60)
         assert loop.runtime.per_run.max_seconds == 60
+
+
+class TestGateGranularity:
+    """One number for every gated tool is the wrong shape — a refund can wait half
+    an hour, a production deploy might need someone in five minutes."""
+
+    def _loop(self, **gate):
+        bundle = load_agent(EXAMPLES / "refund-triage")
+        for k, v in gate.items():
+            setattr(bundle.latest.gate, k, v)
+        empty = type("NoTools", (), {"langchain_tools": lambda self: []})()
+        return Loop(bundle.latest, bundle.runtime, tools=empty,
+                    chat_model=lambda m: object(), store_url="postgresql://unused")
+
+    def _interrupt(self, tool="stripe__create_refund"):
+        return {"__interrupt__": [type("I", (), {
+            "value": {"action_requests": [
+                {"name": tool, "args": {"amount": 40}, "description": "d"}]},
+            "id": "i"})()]}
+
+    def test_a_tool_without_an_override_uses_the_agent_default(self):
+        loop = self._loop()
+        out = run(loop.entry(FakeCtx(results=[FakeResult(self._interrupt())])))
+        assert out.timeout == 1800
+
+    def test_a_tool_may_shorten_its_own_gate(self):
+        loop = self._loop()
+        spec = next(t for s in loop.cfg.mcp for t in s.tools
+                    if t.tool == "create_refund")
+        spec.approval_timeout_seconds = 300
+
+        out = run(loop.entry(FakeCtx(results=[FakeResult(self._interrupt())])))
+        assert out.timeout == 300
+
+    def test_on_reject_continue_lets_the_agent_carry_on(self, _stub_harness):
+        loop = self._loop(on_reject="continue")
+        run(loop.entry(FakeCtx(context={K_DECISION: "reject"},
+                               results=[FakeResult({"resolution": "did what I could"})])))
+        assert _stub_harness.resume["decisions"][0]["type"] == "reject"
+
+    def test_on_reject_fail_stops_the_task(self):
+        """Otherwise a task nobody approved still reports success, and an operator
+        scanning statuses never learns the thing it existed to do didn't happen."""
+        loop = self._loop(on_reject="fail")
+        ctx = FakeCtx(context={K_DECISION: "reject",
+                               "_gated_tool": "stripe__create_refund"},
+                      approval_reason="too much",
+                      results=[FakeResult({"resolution": "unused"})])
+
+        out = run(loop.entry(ctx))
+        assert out.result["failed"] is True
+        assert "stripe__create_refund" in out.result["reason"]
+        assert "too much" in out.result["reason"]
+
+    def test_an_unanswered_gate_under_fail_says_so(self):
+        """A timeout and a reasonless rejection arrive identically, so the message
+        has to cover both without claiming to know which."""
+        loop = self._loop(on_reject="fail")
+        out = run(loop.entry(FakeCtx(context={K_DECISION: "reject"},
+                                     approval_reason=None,
+                                     results=[FakeResult({"resolution": "unused"})])))
+        assert "nobody answered in time" in out.result["reason"]
+
+
+class TestActs:
+    """The harness dispatches tools, so Charter no longer watches an action go by.
+    Without recording them the result is only the agent's account of itself."""
+
+    def test_a_gated_tool_that_ran_is_recorded(self):
+        cfg, loop = loop_for()
+        tool = cfg.gated_tools[0]
+        out = run(loop.entry(FakeCtx(results=[
+            FakeResult({"resolution": "refunded"}, tool_calls={tool: 1})])))
+        assert out.result["acts"] == {tool: 1}
+
+    def test_ungated_tools_are_not_recorded(self):
+        """Only what a human was asked about, so it reconciles against approvals."""
+        _, loop = loop_for()
+        out = run(loop.entry(FakeCtx(results=[
+            FakeResult({"resolution": "looked around"},
+                       tool_calls={"stripe__get_charge": 3})])))
+        assert "acts" not in out.result
+
+    def test_a_failed_task_still_says_what_it_did(self):
+        """A failure is when what already happened matters most."""
+        cfg, loop = loop_for()
+        tool = cfg.gated_tools[0]
+        ctx = FakeCtx(context={"_acts": {tool: 1}},
+                      results=[AgentPolicyLimitExceeded("reached max_cost_usd=0.3")])
+        out = run(loop.entry(ctx))
+        assert out.result["acts"] == {tool: 1}
+
+
+class TestGatingAnything:
+    """Gating was only expressible for declared MCP tools, which left no way to
+    approve the thing that matters most — the answer itself."""
+
+    def _cfg(self, tools):
+        from charter.config.agent import Gate
+        cfg = load_agent(EXAMPLES / "refund-triage").latest
+        cfg.gate = Gate(tools=tools)
+        return cfg
+
+    def test_the_final_answer_can_be_gated(self):
+        """`submit_result` is how an agent finishes, so gating it is how you approve
+        what it produced — and the approver sees the structured result, not a
+        summary of it."""
+        gates = interrupt_on(self._cfg(["submit_result"]))
+        assert "submit_result" in gates
+        assert gates["submit_result"]["allowed_decisions"] == [
+            "approve", "edit", "reject"]
+
+    def test_harness_tools_can_be_gated_too(self):
+        gates = interrupt_on(self._cfg(["write_file", "execute"]))
+        assert {"write_file", "execute"} <= set(gates)
+
+    def test_declared_mcp_tools_still_gate_themselves(self):
+        """Two mechanisms, one for each declaration site — a tool that declares
+        `approval: always` shouldn't also need naming here."""
+        cfg = self._cfg([])
+        assert "stripe__create_refund" in interrupt_on(cfg)
+
+    def test_a_typo_is_refused_rather_than_gating_nothing(self):
+        from charter.config.agent import Gate
+        with pytest.raises(Exception, match="not a tool the harness provides"):
+            Gate(tools=["submit_reslt"])

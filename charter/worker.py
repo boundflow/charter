@@ -137,7 +137,8 @@ class CharterWorker:
             for version in spec.versions:
                 key = (spec.agent, version)
                 cfg = bundle.versions[version]
-                tools = ToolSet()
+                tools = ToolSet().with_timeout(
+                    bundle.runtime.limits.max_tool_seconds)
                 served = Served(bundle, version, tools,
                                 Loop(cfg, bundle.runtime, tools,
                                      self._chat_model,

@@ -110,6 +110,9 @@ class ToolSpec(Base):
         "never: handed to the model, called inline. always: the model never "
         "receives it and can only propose it. Unset follows the server's "
         "approval rules, or never if it has none."))
+    approval_timeout_seconds: int | None = Field(default=None, gt=0, description=(
+        "How long an approver has for *this* tool, overriding the agent's `gate`. "
+        "A refund can wait; a production deploy might not."))
     on_failure: Literal["continue", "fail"] = Field(default="continue", description=(
         "continue: the model is told and carries on. fail: the task stops, "
         "checked at the next round boundary."))
@@ -296,6 +299,15 @@ class AskHuman(Base):
         return ASK_POSTURE.get(self.when, "")
 
 
+# Everything the harness brings that a call can be stopped on. `submit_result` is
+# injected by BoundFlow rather than deepagents, and it is the one worth naming: it
+# is how an agent finishes, so gating it is how you approve the answer.
+GATEABLE = frozenset({
+    "ls", "read_file", "write_file", "edit_file", "delete", "glob", "grep",
+    "execute", "task", "submit_result",
+})
+
+
 class Gate(Base):
     """How long a human has, and what happens if nobody answers.
 
@@ -306,12 +318,33 @@ class Gate(Base):
     """
 
     timeout_seconds: int = Field(default=1800, gt=0, description=(
-        "How long a human has before the action is refused on their behalf."))
+        "How long a human has before the action is refused on their behalf. "
+        "A tool may override this with its own `approval_timeout_seconds`."))
+    tools: list[str] = Field(default_factory=list, description=(
+        "Harness tools that also stop for a human. `submit_result` gates the final "
+        "answer itself — the approver sees the result, not a summary of it. "
+        "Declared MCP tools use their own `approval:` field instead."))
+    on_reject: Literal["continue", "fail"] = Field(default="continue", description=(
+        "continue: the agent is told and carries on without that action. "
+        "fail: the task stops. Choose fail when the gated action is the point — "
+        "otherwise a task nobody approved still reports success."))
 
-    # No `on_timeout`: `AwaitApproval` has approve and reject branches and nothing
-    # else, so an unanswered gate is a rejection. Saying otherwise in config would
-    # promise a behaviour the control plane can't express — and a silent rejection
-    # is the safe direction for a gate to fail in anyway.
+    @model_validator(mode="after")
+    def _check_tools(self) -> Gate:
+        # Validated because a typo here gates nothing, silently — the worst
+        # possible failure for a field whose entire job is stopping something.
+        if unknown := sorted(set(self.tools) - GATEABLE):
+            raise ValueError(
+                f"gate.tools: {', '.join(unknown)} — not a tool the harness "
+                f"provides. One of: {', '.join(sorted(GATEABLE))}. Declared MCP "
+                f"tools are gated with their own `approval: always`.")
+        return self
+
+    # One field rather than separate reject and timeout handling, because the
+    # control plane gives us one branch: `AwaitApproval` has approve and reject and
+    # nothing else, and an unanswered gate is resolved as a rejection. Nothing at
+    # resume time can tell "nobody answered" from "someone said no" — both arrive
+    # with no reason — so config shouldn't pretend to distinguish them.
 
 
 class Schedule(Base):
