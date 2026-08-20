@@ -188,10 +188,6 @@ async def test_a_skill_reaches_the_prompt(cp, project, tenant):
 # ── asking a human ───────────────────────────────────────────────────────────
 
 
-@pytest.mark.xfail(reason="the ask tool parks correctly but the run doesn't resume "
-                          "after submit_input — only one model call is ever made. "
-                          "Unproven end to end; the unit tests cover the branch.",
-                   strict=True)
 async def test_the_agent_can_ask_and_the_answer_reaches_it(cp, project, tenant):
     """The harness only ever stops at a tool call, so asking is a tool. This is the
     whole path: the tool exists, calling it parks on AwaitInput, and the answer

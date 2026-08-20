@@ -26,6 +26,7 @@ real store.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 import uuid
 from contextlib import asynccontextmanager
@@ -102,3 +103,9 @@ async def running(worker):
     finally:
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
+        # Cancelling the task doesn't close the worker: its control-plane session
+        # and its MCP subprocesses outlive it. A lingering worker keeps polling and
+        # can claim the *next* test's job — running it against the wrong scripted
+        # model, which is why these pass alone and fail together.
+        with contextlib.suppress(Exception):
+            await worker.aclose()

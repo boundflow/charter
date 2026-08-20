@@ -56,16 +56,13 @@ async def test_apply_refuses_to_guess_between_instances(cp, project, tenant):
         await apply_project(cp, project, only="ticket-sweeper")
 
 
-@pytest.mark.xfail(reason="MCP tool failures aren't counted: the adapter returns "
-                          "the error rather than raising, and the governed wrapper "
-                          "counts failures on a raise. See charter/mcp/client.py.",
-                   strict=True)
 async def test_a_broken_tool_fails_the_task_naming_the_tool(cp, project, tenant):
-    """`on_failure: fail` should end the task and name the integration to go look at.
+    """`on_failure: fail` ends the task and names the integration to go look at.
 
-    Marked xfail rather than deleted, because the behaviour is right and the
-    plumbing isn't: nothing counts the failure, so nothing can act on it. Strict,
-    so it fails loudly the day the wrapper learns to classify a returned error.
+    Was xfail until the wrapper learned to classify a *returned* tool error — an
+    MCP adapter reports a failure by returning it, so nothing was counted and
+    nothing could act on it. Strict xfail is what said so: the day the fix landed,
+    this passing broke the suite.
     """
     path = project.path.parent / "ticket-sweeper" / "v1.yaml"
     raw = yaml.safe_load(path.read_text())
