@@ -30,13 +30,17 @@ AGENT_NAME = r"^[a-z][a-z0-9-]{2,62}$"
 # so a config can't produce a request that 400s.
 WIRE_TOOL_NAME = r"^[a-zA-Z0-9_-]{1,128}$"
 SERVER_NAME = r"^[a-z][a-z0-9_]{1,31}$"
-TOOL_NAME = r"^[a-z][a-z0-9_]{0,63}$"
+# Hyphens allowed: real servers use them (`tavily-search`), and our own wire
+# pattern always did. Rejecting them here meant a tool that exists couldn't be
+# declared — the config was stricter than the protocol for no reason.
+TOOL_NAME = r"^[a-z][a-z0-9_-]{0,63}$"
 ENV_NAME = r"^[A-Z][A-Z0-9_]*$"
 # How a tool is namespaced onto its server. Double underscore because a dot is
 # rejected by the providers' tool-name charset — see McpServer.qualified.
 SEPARATOR = "__"
 
 ScalarType = Literal["string", "integer", "number", "boolean"]
+FieldType = Literal["string", "integer", "number", "boolean", "array", "object"]
 
 _PYTYPES: dict[str, tuple[type, ...]] = {
     "string": (str,),
@@ -215,8 +219,32 @@ def split_qualified(qualified: str) -> tuple[str, str]:
 
 
 class FieldSpec(Base):
-    type: ScalarType
+    """One field of the agent's answer.
+
+    Nests, because most answers aren't flat. A leads finder returns a *list of
+    leads*, and flattening that into one formatted string turns a result you could
+    query into prose someone has to re-parse. The schema goes straight to the
+    harness as JSON Schema, which has always supported this — the restriction was
+    ours, inherited from a time when the deliverable was a couple of scalars.
+    """
+
+    type: FieldType
     description: str | None = None
+    items: "FieldSpec | None" = Field(default=None, description=(
+        "What's in the list. Required when type is array."))
+    properties: "dict[str, FieldSpec] | None" = Field(default=None, description=(
+        "The object's fields. Required when type is object."))
+
+    @model_validator(mode="after")
+    def _check(self) -> FieldSpec:
+        if self.type == "array" and self.items is None:
+            raise ValueError("type: array needs `items` — an untyped list tells "
+                             "the model nothing about what to put in it")
+        if self.type == "object" and not self.properties:
+            raise ValueError("type: object needs `properties`")
+        if self.type not in ("array", "object") and (self.items or self.properties):
+            raise ValueError(f"type: {self.type} takes neither items nor properties")
+        return self
 
 
 # The harness's own vocabulary, deliberately. deepagents groups its filesystem

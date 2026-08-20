@@ -216,3 +216,42 @@ class TestCapabilities:
         cfg = AgentConfig.model_validate(
             load(allowed_capabilities=["read", "write", "execute", "spawn"]))
         assert cfg.allowed_capabilities == ["read", "write", "execute", "spawn"]
+
+
+class TestResponseFormat:
+    """An answer isn't always flat. A leads finder returns a list of leads, and
+    flattening that into one string turns a result you could query into prose
+    someone has to re-parse."""
+
+    def test_a_list_of_objects(self):
+        cfg = AgentConfig.model_validate(load(response_format={
+            "leads": {"type": "array", "items": {"type": "object", "properties": {
+                "handle": {"type": "string"}, "pain": {"type": "string"}}}}}))
+        leads = cfg.response_format["leads"]
+        assert leads.items.properties["handle"].type == "string"
+
+    def test_an_untyped_list_is_refused(self):
+        """`type: array` alone tells the model nothing about what to put in it."""
+        with pytest.raises(ValidationError, match="needs `items`"):
+            AgentConfig.model_validate(load(response_format={
+                "leads": {"type": "array"}}))
+
+    def test_an_object_needs_its_fields(self):
+        with pytest.raises(ValidationError, match="needs `properties`"):
+            AgentConfig.model_validate(load(response_format={
+                "lead": {"type": "object"}}))
+
+    def test_a_scalar_takes_neither(self):
+        with pytest.raises(ValidationError, match="neither items nor properties"):
+            AgentConfig.model_validate(load(response_format={
+                "count": {"type": "integer", "items": {"type": "string"}}}))
+
+
+def test_a_hyphenated_tool_name_is_allowed():
+    """Real servers use them — `tavily-search` — and the wire pattern always did.
+    Rejecting them meant a tool that exists couldn't be declared."""
+    raw = load()
+    raw["mcp"][0]["tools"] = [{"tool": "tavily-search"}]
+    cfg = AgentConfig.model_validate(raw)
+    assert cfg.mcp[0].tools[0].tool == "tavily-search"
+    assert "-" in cfg.all_tools[0]

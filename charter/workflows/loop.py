@@ -127,9 +127,22 @@ def response_schema(cfg: AgentConfig) -> dict | None:
     """
     if not cfg.response_format:
         return None
-    return {name: {"type": spec.type,
-                   **({"description": spec.description} if spec.description else {})}
-            for name, spec in cfg.response_format.items()}
+    return {name: _field(spec) for name, spec in cfg.response_format.items()}
+
+
+def _field(spec) -> dict:
+    """One field as JSON Schema. Recurses, because answers nest."""
+    out: dict[str, Any] = {"type": spec.type}
+    if spec.description:
+        out["description"] = spec.description
+    if spec.items is not None:
+        out["items"] = _field(spec.items)
+    if spec.properties:
+        out["properties"] = {n: _field(f) for n, f in spec.properties.items()}
+        # Required by default: a field the author bothered to declare is one they
+        # expect back, and an optional-by-default object invites half-filled answers.
+        out["required"] = list(spec.properties)
+    return out
 
 
 def _answer_text(answer) -> str:
