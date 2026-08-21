@@ -1,0 +1,68 @@
+apiVersion: charter/v1
+kind: AgentConfig
+
+name: leads-finder
+version: 1
+description: Finds people worth talking to and hands each one to its own agent.
+
+model: claude-haiku-4-5
+
+inputs:
+  topic:
+    type: string
+    description: What kind of person to look for, e.g. agent-governance.
+
+objective: |
+  Find people worth reaching out to about {{ inputs.topic }}, and get a
+  conversation started with each of them.
+
+  Search for people first. For each one worth contacting, start an `outreach`
+  agent and give it everything it needs in the description: who they are, their
+  id on the network, and the specific thing they said that makes them worth
+  writing to. Be concrete — that agent cannot see what you searched, only what
+  you tell it.
+
+  Each outreach runs on its own from then on: it connects, waits however long the
+  person takes to accept, gets a human to sign off the message, and keeps the
+  conversation. That takes far longer than you should sit here for. Start them
+  all, wait a little, check how they are getting on, and report. Do not wait for
+  every one to finish — some people never accept, and that is a normal outcome
+  rather than something to sit on.
+
+  Report by calling submit_result. Writing the summary out as a message is not
+  reporting it — nobody is reading this conversation, and the run has no result
+  unless you fill in the fields.
+
+# Each lead gets its own instance, its own budget, and its own audit trail. This
+# is the only agent it may start.
+spawns:
+  - outreach
+
+wait:
+  max: 30m
+
+mcp:
+  - name: net
+    command: python
+    args: ["network.py"]
+    tools:
+      - tool: search_people
+        on_failure: fail
+
+response_format:
+  started:
+    type: array
+    description: One entry per outreach agent started.
+    items:
+      type: object
+      properties:
+        person:
+          type: string
+        task_id:
+          type: string
+        status:
+          type: string
+          description: How it was doing when you last checked.
+  summary:
+    type: string
+    description: What you found and what is now in flight.

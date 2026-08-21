@@ -1,0 +1,15 @@
+apiVersion: charter/v1
+kind: RuntimePolicy
+
+agent: outreach
+
+per_run:
+  # Its own ceiling, not a slice of the parent's. Ten of these can be in flight
+  # and each is bounded on its own — which is the point of a child being an
+  # instance rather than a coroutine.
+  max_llm_calls: 25
+  max_cost_usd: 1.00
+  # Long, because most of it is spent waiting for a person. Waiting is not
+  # charged as working time, so this bounds the work rather than the wall clock.
+  max_seconds: 7200
+  max_tool_failures: 3

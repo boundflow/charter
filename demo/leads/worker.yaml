@@ -1,0 +1,28 @@
+apiVersion: charter/v1
+kind: Worker
+name: leads
+
+control_plane:
+  endpoint: ${BOUNDFLOW_SERVER_ADDRESS}
+  api_key: ${BOUNDFLOW_API_KEY}
+  tenant: default
+
+llm:
+  provider: anthropic
+  api_key: ${ANTHROPIC_API_KEY}
+
+store:
+  url: ${CHARTER_STORE_URL}
+
+agents_dir: ./
+
+serves:
+  - agent: leads-finder
+    versions: [1]
+  - agent: outreach
+    versions: [1]
+
+model_pricing:
+  claude-haiku-4-5:
+    input: 0.8
+    output: 4.0

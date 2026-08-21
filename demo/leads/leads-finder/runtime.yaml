@@ -1,0 +1,11 @@
+apiVersion: charter/v1
+kind: RuntimePolicy
+
+agent: leads-finder
+
+per_run:
+  # Checking on children costs a turn each, so this is searching plus starting
+  # plus a few rounds of looking in on them.
+  max_llm_calls: 20
+  max_cost_usd: 1.00
+  max_seconds: 3600
