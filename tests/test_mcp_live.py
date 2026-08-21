@@ -158,21 +158,23 @@ def test_a_hanging_tool_becomes_a_failure_rather_than_a_dead_round():
     hung stdio server blocked until the control plane cancelled the whole
     operation. Bounded, but by the bluntest instrument there is.
 
-    Raised rather than returned, so it counts: a tool that hangs is a broken
-    integration and `max_tool_failures` exists to notice."""
+    Returned rather than raised, and in the shape a tool that fails without raising
+    returns — so it is counted and classified down the same path as any other
+    failure, and the agent's declared `on_failure` is what decides. Raising took
+    that decision away: it ended the run wherever it stood, so a customer got
+    `on_failure: continue` honoured when the tool errored and ignored when it hung.
+    """
     async def go():
         ts = ToolSet().with_timeout(0.001)   # nothing answers this fast
         await ts.connect(Cfg(spec([ToolSpec(tool="get_ticket")])))
         tool = ts.langchain_tools()[0]
-        try:
-            await tool.ainvoke({"ticket_id": "42"})
-            return None
-        except Exception as e:  # noqa: BLE001 — the point is that it raises
-            return e
+        return await tool.ainvoke({"ticket_id": "42"})
 
-    raised = run(go())
-    assert raised is not None, "a hanging tool returned instead of failing"
-    assert "did not respond within" in str(raised)
+    answered = str(run(go()))
+    assert "no response within" in answered
+    # The wording a returned failure is recognised by. Without it the timeout is
+    # read as an ordinary result and the agent carries on believing it worked.
+    assert "error executing tool" in answered.lower()
 
 
 def test_no_timeout_configured_leaves_the_tool_alone():

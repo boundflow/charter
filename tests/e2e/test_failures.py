@@ -122,3 +122,65 @@ async def test_a_failed_task_reports_how_far_it_got(cp, project, tenant):
                          scripted(*[calls("desk__list_open_tickets") for _ in range(6)]))
 
     assert set(info.result) >= {"failed", "reason", "cost_usd", "llm_calls", "gates"}
+
+
+async def test_a_hung_tool_obeys_on_failure_like_any_other(cp, project, tenant):
+    """A tool that hangs is a tool that failed, and the config already says what to
+    do about that.
+
+    `on_failure: continue` means work around it. A customer who declared that for a
+    flaky integration should get the same behaviour whether it errors or hangs —
+    same tool, same config, same outcome. Anything else means the timeout quietly
+    outranks what they asked for.
+    """
+    path = project.path.parent / "ticket-sweeper" / "v1.yaml"
+    raw = yaml.safe_load(path.read_text())
+    raw["mcp"][0]["tools"].append({"tool": "hangs", "on_failure": "continue"})
+    raw["objective"] = "Call hangs, then report what you found regardless."
+    path.write_text(yaml.safe_dump(raw))
+
+    runtime = project.path.parent / "ticket-sweeper" / "runtime.yaml"
+    limits = yaml.safe_load(runtime.read_text())
+    # Short enough that the tool is still hanging when the ceiling is reached.
+    limits.setdefault("limits", {})["max_tool_seconds"] = 2
+    runtime.write_text(yaml.safe_dump(limits))
+    reloaded = load_project(project.path)
+
+    wf = await one_instance(cp, reloaded, "ticket-sweeper", tenant)
+    model = scripted(
+        calls("desk__hangs", seconds=30),
+        submits(summary="the tool never answered", needs_attention=0),
+    )
+
+    info = await run_one(cp, reloaded, "ticket-sweeper", wf, model)
+
+    assert info.result.get("failed") is not True, (
+        f"a hung tool ended the task despite on_failure: continue — {info.result}")
+    assert info.result["summary"] == "the tool never answered"
+
+
+async def test_a_hung_tool_under_on_failure_fail_names_the_tool(cp, project, tenant):
+    """The other half. A hang that should stop the task has to stop it *and* say
+    which integration hung — the reason is what an operator goes and looks at."""
+    path = project.path.parent / "ticket-sweeper" / "v1.yaml"
+    raw = yaml.safe_load(path.read_text())
+    raw["mcp"][0]["tools"].append({"tool": "hangs", "on_failure": "fail"})
+    raw["objective"] = "Call hangs, then report."
+    path.write_text(yaml.safe_dump(raw))
+
+    runtime = project.path.parent / "ticket-sweeper" / "runtime.yaml"
+    limits = yaml.safe_load(runtime.read_text())
+    limits.setdefault("limits", {})["max_tool_seconds"] = 2
+    runtime.write_text(yaml.safe_dump(limits))
+    reloaded = load_project(project.path)
+
+    wf = await one_instance(cp, reloaded, "ticket-sweeper", tenant)
+    model = scripted(
+        calls("desk__hangs", seconds=30),
+        submits(summary="never gets here", needs_attention=0),
+    )
+
+    info = await run_one(cp, reloaded, "ticket-sweeper", wf, model)
+
+    assert info.result.get("failed") is True, info.result
+    assert "hangs" in info.result["reason"], info.result["reason"]

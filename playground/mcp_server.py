@@ -84,6 +84,19 @@ def create_refund(charge_id: str, amount_usd: float, reason: str) -> str:
 
 
 @mcp.tool()
+async def hangs(seconds: float = 60.0) -> str:
+    """Takes longer than any sane timeout. For watching what a hung server does.
+
+    A server that hangs is the failure `max_tool_seconds` exists for, and it is a
+    different shape from one that errors: nothing comes back at all, so there is no
+    error result for anyone to classify.
+    """
+    import asyncio
+    await asyncio.sleep(seconds)
+    return "eventually"
+
+
+@mcp.tool()
 def always_fails(why: str = "") -> str:
     """Fails every time. For watching max_tool_failures trip and name the tool."""
     raise RuntimeError(f"this tool is broken on purpose ({why or 'no reason given'})")

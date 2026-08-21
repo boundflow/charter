@@ -35,10 +35,6 @@ from ..config.agent import AgentConfig, McpServer
 log = logging.getLogger(__name__)
 
 
-class McpError(Exception):
-    """A tool call failed — the server said so, or the transport did."""
-
-
 class QuarantineError(Exception):
     """This agent version can't be served: a server is unreachable, or doesn't
     expose something the config declared."""
@@ -245,15 +241,25 @@ def _bounded(tool, seconds: float):
 
     inner = tool.coroutine or tool.func
     name = tool.name
+    # MCP tools are built with `content_and_artifact`, so a bare string is rejected
+    # before anything sees it. Whatever the tool promises to return, the timeout has
+    # to return the same shape.
+    two_part = getattr(tool, "response_format", None) == "content_and_artifact"
 
     async def run(*args, **kwargs):
         try:
             return await asyncio.wait_for(inner(*args, **kwargs), timeout=seconds)
         except TimeoutError:
-            # Raised, not returned, so it counts as a tool failure — a tool that
-            # hangs is a broken integration, and max_tool_failures exists to notice.
-            raise McpError(
-                f"{name} did not respond within {seconds:g}s") from None
+            # Returned, not raised. A hung tool is a failed tool, and the config
+            # already says what to do about one — `on_failure` and
+            # `max_tool_failures` decide. Raising took that decision away: it ended
+            # the agent's run wherever it stood, so `on_failure: continue` was
+            # honoured when the tool errored and ignored when it hung. The wording
+            # matches what a tool that fails without raising returns, so it is
+            # counted and classified down the same path as any other.
+            failed = (f"Error executing tool {name}: no response within "
+                      f"{seconds:g}s")
+            return (failed, None) if two_part else failed
 
     tool.coroutine = run
     return tool
