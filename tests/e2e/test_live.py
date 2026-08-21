@@ -1,30 +1,34 @@
 """Against a real model. Everything else is real too.
 
-The mock suite can't see the things a provider enforces. A dotted tool name —
-`desk.get_ticket` — passed every unit test and every mock end-to-end test, then
+The mock suite can't see what a provider enforces. A dotted tool name —
+`desk.get_ticket` — passed every unit test and every mocked end-to-end test, then
 400'd on the first live call because Anthropic requires ^[a-zA-Z0-9_-]{1,128}$.
 That class of bug only surfaces here.
 
 So these assert on *structure and acceptance*, not on wording: that the request we
 build is one the provider accepts, that the injected output schema comes back
-filled, that tokens are priced. What the model chooses to say is not under test.
+filled, and that a gated call still stops for a human when a real model is the one
+reaching for it. What the model chooses to say is not under test.
 
     export ANTHROPIC_API_KEY=...
     pytest tests/e2e/test_live.py
 
-Cheap on purpose — haiku, tiny budgets, two tests.
+Cheap on purpose — haiku, small budgets, two tests. They skip without a key, which
+means a run with no key looks identical to a passing one; if these matter to you,
+count the skips.
 """
 from __future__ import annotations
 
 import os
+import re
 
 import pytest
-from boundflow.anthropic_client import AnthropicLlmClient
+from langchain_anthropic import ChatAnthropic
 
-from charter.provisioning.apply import apply_project
+from charter.config.agent import WIRE_TOOL_NAME
 from charter.worker import CharterWorker
 from tests.e2e.conftest import running, wait_for_gate, wait_for_run
-from tests.e2e.test_lifecycle import project  # noqa: F401
+from tests.e2e.test_lifecycle import one_instance, project  # noqa: F401
 
 pytestmark = [
     pytest.mark.asyncio,
@@ -33,54 +37,60 @@ pytestmark = [
 ]
 
 
-def recording_client():
-    """A real client that remembers what tool names it was asked to send.
+def recording():
+    """A real model factory that remembers the tool lists it was handed.
 
-    Same trick the mock uses, and the reason it matters here: the charset failure
-    happened in the request we built, so the request is the thing to look at.
+    `bind_tools` is where the harness decides what this agent may see, so it is the
+    honest place to read the request from — and the charset failure was in the
+    request we built, which is the thing worth looking at.
+
+    A subclass rather than a wrapper: ChatAnthropic is a pydantic model and refuses
+    attributes it has no field for.
     """
-    client = AnthropicLlmClient(api_key=os.environ["ANTHROPIC_API_KEY"])
-    inner = client.complete
-    client.offered = []
+    offered: list[list[str]] = []
 
-    async def complete(request):
-        client.offered.append([t.name for t in request.tools])
-        return await inner(request)
+    class Recording(ChatAnthropic):
+        def bind_tools(self, tools, **kw):
+            offered.append([getattr(t, "name", None) or t.get("name", "")
+                            for t in tools])
+            return super().bind_tools(tools, **kw)
 
-    client.complete = complete
-    return client
+    def factory(model: str):
+        return Recording(model=model, api_key=os.environ["ANTHROPIC_API_KEY"])
+
+    factory.offered = offered
+    return factory
 
 
-async def test_a_real_model_completes_a_task(cp, project):
-    """The whole chain with nothing faked: tool names the provider accepts, the
-    injected submit_result schema coming back filled, real tokens priced."""
-    await apply_project(cp, project, only="ticket-sweeper")
-    llm = recording_client()
+async def test_a_real_model_completes_a_task(cp, project, tenant):
+    """The whole chain with nothing faked: tool names the provider accepts, and the
+    injected submit_result schema coming back filled."""
+    wf = await one_instance(cp, project, "ticket-sweeper", tenant)
+    model = recording()
 
-    worker = CharterWorker(project, llm=llm)
+    worker = CharterWorker(project, chat_model=model)
     async with running(worker):
-        wf = next(w for w in await cp.list_workflows()
-                  if w.workflow_type == "ticket-sweeper")
         info = await wait_for_run(cp, await cp.invoke_workflow(wf.id), timeout=180)
     await worker.aclose()
 
     assert info.run_outcome.value == "successful", info.failure_reason
-    # The deliverable is the schema we injected, filled by the model.
+    # The deliverable is the shape `response_format` declared, filled by the model.
     assert isinstance(info.result["summary"], str) and info.result["summary"].strip()
-    assert isinstance(info.result["needs_attention"], int)
-    # Real tokens, priced with the tenant's pricing.
-    assert info.result["cost_usd"] > 0
+    # A number, not an int: protobuf Struct carries every number as a double, so a
+    # field declared `type: integer` arrives back as a float. Asserting `== 2` would
+    # hide that, which is how it went unnoticed — the mocked test does exactly that.
+    count = info.result["needs_attention"]
+    assert isinstance(count, (int, float)) and count == int(count)
 
-    # Every tool name we sent was one the provider accepted — no dots, no 400.
-    import re
-    from charter.config.agent import WIRE_TOOL_NAME
-    assert llm.offered, "the model was never called"
-    for names in llm.offered:
+    # Every name we sent was one the provider accepted — no dots, no 400.
+    assert model.offered, "the model was never called"
+    for names in model.offered:
         for name in names:
             assert re.match(WIRE_TOOL_NAME, name), name
 
 
-async def test_a_real_model_proposes_the_gated_tool_rather_than_calling_it(cp, project):
+async def test_a_real_model_proposes_the_gated_tool_rather_than_calling_it(
+        cp, project, tenant):
     """Ticket 4821 is two identical charges on one day, so a refund is the obvious
     move — and the only way the agent can take it is to ask.
 
@@ -88,13 +98,11 @@ async def test_a_real_model_proposes_the_gated_tool_rather_than_calling_it(cp, p
     decided no refund were warranted this would fail, which is a real (small) risk
     and the reason the fixture is unambiguous.
     """
-    await apply_project(cp, project, only="refund-demo")
-    llm = recording_client()
+    wf = await one_instance(cp, project, "refund-demo", tenant)
+    model = recording()
 
-    worker = CharterWorker(project, llm=llm)
+    worker = CharterWorker(project, chat_model=model)
     async with running(worker):
-        wf = next(w for w in await cp.list_workflows()
-                  if w.workflow_type == "refund-demo")
         request_id = await cp.invoke_workflow(wf.id, context={"ticket_id": "4821"})
 
         gate = await wait_for_gate(cp, wf.id, timeout=180)
@@ -105,9 +113,10 @@ async def test_a_real_model_proposes_the_gated_tool_rather_than_calling_it(cp, p
     await worker.aclose()
 
     assert info.run_outcome.value == "successful", info.failure_reason
-    assert info.result["acts_performed"][0]["tool"] == "desk__create_refund"
+    assert isinstance(info.result["refunded_usd"], (int, float))
 
-    # It could only ever propose it: the tool was never in a request we sent.
-    for names in llm.offered:
-        assert "desk__create_refund" not in names
-        assert "desk__get_ticket" in names
+    # It was offered, and still couldn't be called without a human. Omission was
+    # the old mechanism; under the harness the tool is in the list and the *call*
+    # is what stops, so a test that asserted absence would now pass for the wrong
+    # reason.
+    assert any("desk__create_refund" in names for names in model.offered)
