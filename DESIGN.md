@@ -799,3 +799,11 @@ learned nothing from a rejection that did happen.
   `coalesce` is correct — two such triggers really are one piece of work.
 - **Model pricing.** `set_model_pricing` is per-tenant and global, not per-agent —
   belongs in `worker.yaml` or a separate tenant-level file, not in an agent's config.
+- **Stranded versions.** A worker registers a handler per `(agent, version)`, so a
+  task pinned to a version no running worker serves is never claimed — it waits,
+  silently, with no error anywhere. The trap is a deploy: roll workers that serve
+  only v2 and every task parked at a gate on v1 is stranded. `serves: versions:
+  [1, 2]` is already the fix and the bundle keeps every version for exactly this,
+  but nothing says when it is safe to drop v1. Wants one question asked of the
+  control plane — are there tasks pinned to versions nobody serves — as a boot
+  warning or a `charter doctor`. Same class as the warnings `apply` already gives.

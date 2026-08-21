@@ -123,7 +123,7 @@ def _stub_harness(monkeypatch):
         fake.wiring = Wiring()
         yield fake.wiring
 
-    monkeypatch.setattr("boundflow.harness.durable_harness", fake)
+    monkeypatch.setattr("charter.harness.durable_harness", fake)
     monkeypatch.setattr("charter.workflows.loop.durable_harness", fake)
     monkeypatch.setattr("charter.workflows.loop.task_context",
                         lambda ctx, extra=None: {**(extra or {})})

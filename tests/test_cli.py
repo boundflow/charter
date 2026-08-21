@@ -176,14 +176,24 @@ class TestStatus:
         out = invoke("status", "req_1").output
         assert "tools.0.custom.name" in out
 
-    def test_shows_actions_already_taken_on_a_failure(self, cp):
-        """A failed task is not an untouched one."""
+    def test_a_failure_shows_what_it_spent_getting_there(self, cp):
+        """The reason alone doesn't say whether to raise the ceiling or fix the
+        agent. The numbers that stopped it are the thing an operator acts on."""
         cp.request = self._request(result={
             "failed": True, "reason": "ran out of budget",
-            "acts_performed": [{"tool": "desk__create_refund", "args": {"amount": 240}}]})
+            "cost_usd": 0.42, "llm_calls": 12, "gates": 1, "seconds": 31.5})
         out = invoke("status", "req_1").output
-        assert "desk__create_refund" in out
         assert "ran out of budget" in out
+        assert "0.42" in out and "12" in out
+
+    def test_a_successful_result_is_only_the_agent_answer(self, cp):
+        """Charter injects nothing into a result it didn't fail, so there is no
+        wrapper to unpick and nothing of ours to strip out of the display."""
+        cp.request = self._request(result={"summary": "two need a look",
+                                           "needs_attention": 2})
+        out = invoke("status", "req_1").output
+        assert "two need a look" in out
+        assert "spent" not in out
 
 
 class TestPendingAndApprove:

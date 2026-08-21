@@ -9,11 +9,27 @@ description = "Declarative, governed agents on BoundFlow — objective, tools, a
 requires-python = ">=3.10"
 
 dependencies = [
-    # Charter needs Budget and tool_failure_limits, which are unreleased — install
-    # the SDK from a checkout until they ship:
+    # Charter needs the governor (run_governed, agent_governor) and the ctx id
+    # properties, which are unreleased — install the SDK from a checkout until they
+    # ship:
     #     pip install -e ../convergeplane/sdk/python
     "boundflow>=0.3.0",
-    # The MCP client. `anthropic` arrives via boundflow.
+    # The harness, and required rather than optional. Charter is the
+    # use-an-existing-harness product: an install that can't run deepagents isn't a
+    # smaller Charter, it's a Charter that does nothing. BoundFlow keeps these
+    # optional for the opposite and equally correct reason — it governs whatever
+    # loop you bring, so it must not care which one that is.
+    "deepagents>=0.7.7",
+    "langchain-core>=1.5",
+    "langgraph>=1.2",
+    # A separate distribution from langgraph: `langgraph.checkpoint.postgres` and
+    # `langgraph.store.postgres`.
+    "langgraph-checkpoint-postgres>=3.1",
+    # The only model provider wired up today — `worker.yaml` refuses any other.
+    "langchain-anthropic>=0.3",
+    # The MCP client, and the adapter that turns a server's tools into the
+    # harness's. `anthropic` arrives via boundflow.
+    "langchain-mcp-adapters>=0.1",
     "mcp>=1.0",
     "pydantic>=2.0",
     "pyyaml>=6.0",

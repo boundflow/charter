@@ -1,0 +1,59 @@
+# A worker fleet and the database it shares.
+#
+#   docker compose up                      one worker
+#   docker compose up --scale worker=3     three, sharing everything
+#
+# There is no "pool" to declare. Workers that share `store.url` and serve the same
+# agents are a pool — scaling this service is the whole mechanism.
+#
+# Sharing the database is not an optimisation. A task parks at an approval gate and
+# resumes later, possibly days later and on whichever worker is alive then; that
+# only works if the worker picking it up can read the state the first one wrote.
+# Give each worker its own database and every task can only ever resume on the
+# machine it started on.
+#
+# The control plane is not here. That is Charter's side — this file is the half
+# that runs where your data and credentials already are.
+
+name: charter
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: charter
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-charter}
+      POSTGRES_DB: charter
+    volumes:
+      - store:/var/lib/postgresql/data
+    healthcheck:
+      # Workers create their own tables at boot and will fail if they start first,
+      # so this gate is what makes `up` work rather than needing a retry.
+      test: ["CMD-SHELL", "pg_isready -U charter -d charter"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
+  worker:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      # Charter's control plane, and the key identifying you to it.
+      BOUNDFLOW_SERVER_ADDRESS: ${BOUNDFLOW_SERVER_ADDRESS}
+      BOUNDFLOW_API_KEY: ${BOUNDFLOW_API_KEY}
+      # Your model provider. This never leaves your side.
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      # The store above, by service name. Every worker gets the same one.
+      CHARTER_STORE_URL: postgres://charter:${POSTGRES_PASSWORD:-charter}@postgres:5432/charter
+    volumes:
+      # Your agents, read-only: a worker has no business editing the config it is
+      # serving, and mounting it read-only makes that true rather than assumed.
+      - ${CHARTER_PROJECT:-../playground}:/project:ro
+    restart: unless-stopped
+
+volumes:
+  store:

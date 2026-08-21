@@ -30,8 +30,14 @@ from boundflow import (
     Complete,
     Next,
 )
-from boundflow.harness import durable_harness, task_context
-from boundflow.harness_gates import approve, pending_action, reject, respond
+from ..harness import (
+    approve,
+    durable_harness,
+    pending_action,
+    reject,
+    respond,
+    task_context,
+)
 from boundflow.llm import AgentPolicyLimitExceeded
 
 import time
@@ -58,7 +64,7 @@ K_SECONDS = "_seconds"   # working time, excluding waits for a human
 def task_id(ctx) -> str:
     """This run's task id, derived exactly as `durable_harness` derives it — a
     second spelling here would silently key children to the wrong parent."""
-    return ctx.context.get("task_id") or ctx._op.request_id
+    return ctx.context.get("task_id") or ctx.request_id
 
 
 def _final_text(messages) -> str:

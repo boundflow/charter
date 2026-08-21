@@ -1040,33 +1040,21 @@ def status(task_id: str = typer.Argument(..., help="The id `charter run` printed
             if not result:
                 return
 
-            meta = ("failed", "reason", "history", "cost_usd", "rounds",
-                    "acts_performed", "truncated")
+            # What a failed task reports. A successful one publishes the agent's own
+            # answer and nothing else, so on that path there is no spend to strip.
+            spent = ("cost_usd", "llm_calls", "gates", "seconds")
             typer.echo()
             if result.get("failed"):
                 ui.err(result.get("reason", "failed"))
             else:
                 typer.secho("result", fg=typer.colors.BRIGHT_BLACK)
-                ui.kv([(k, v) for k, v in result.items() if k not in meta], indent="  ")
+                ui.kv([(k, v) for k, v in result.items()
+                       if k not in ("failed", "reason", *spent)], indent="  ")
 
-            typer.echo()
-            typer.secho("cost", fg=typer.colors.BRIGHT_BLACK)
-            ui.kv([(k, result[k]) for k in ("rounds", "cost_usd") if k in result], indent="  ")
-            if result.get("truncated"):
-                ui.warn("  produced after the task ran out of budget")
-
-            # A failed task is not an untouched one.
-            if acts := result.get("acts_performed"):
+            if any(k in result for k in spent):
                 typer.echo()
-                typer.secho("actions taken", fg=typer.colors.BRIGHT_BLACK)
-                for act in acts:
-                    ui.kv([(act.get("tool", "?"), act.get("args", {}))], indent="  ")
-
-            if history := result.get("history"):
-                typer.echo()
-                typer.secho("what happened", fg=typer.colors.BRIGHT_BLACK)
-                for line in history:
-                    ui.detail(line)
+                typer.secho("spent", fg=typer.colors.BRIGHT_BLACK)
+                ui.kv([(k, result[k]) for k in spent if k in result], indent="  ")
 
     asyncio.run(go())
 
