@@ -52,8 +52,16 @@ async def main() -> None:
     cp = ControlPlaneClient(os.environ["BOUNDFLOW_SERVER_ADDRESS"],
                             os.environ["BOUNDFLOW_API_KEY"])
     async with cp:
-        tenant = next((t for t in await cp.list_tenants() if t.name == args.tenant),
-                      None)
+        try:
+            tenants = await cp.list_tenants()
+        except Exception as e:  # noqa: BLE001
+            # Fail here rather than retry: if the control plane is unreachable at
+            # startup that is a wrong address or a server that isn't up, and neither
+            # gets better by waiting.
+            sys.exit(f"can't reach the control plane at "
+                     f"{os.environ['BOUNDFLOW_SERVER_ADDRESS']}: "
+                     f"{e.__class__.__name__}")
+        tenant = next((t for t in tenants if t.name == args.tenant), None)
         if tenant is None:
             sys.exit(f"no tenant named {args.tenant!r}")
 
@@ -61,7 +69,18 @@ async def main() -> None:
               f"({'auto-approving' if args.auto else 'interactive'}) — ctrl-c to stop\n")
         seen: set[str] = set()
         while True:
-            for workflow, gate in await pending(cp, tenant.id):
+            try:
+                waiting = await pending(cp, tenant.id)
+            except Exception as e:  # noqa: BLE001
+                # Keep watching. A console that exits on a blip leaves gates sitting
+                # unapproved with nobody looking and nothing saying it stopped —
+                # which reads exactly like an agent that has gone quiet.
+                print(f"   control plane unreachable ({e.__class__.__name__}), "
+                      f"retrying")
+                await asyncio.sleep(POLL_SECONDS)
+                continue
+
+            for workflow, gate in waiting:
                 if gate.approval_id in seen:
                     continue
                 seen.add(gate.approval_id)
