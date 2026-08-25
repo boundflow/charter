@@ -104,17 +104,20 @@ def tool_allowlist_middleware(governor):
     return ToolAllowlistMiddleware()
 
 
-def harness_middleware(governor) -> list:
+def harness_middleware(governor, spent: dict[str, int] | None = None) -> list:
     """Every middleware the agent's policy calls for, outermost first.
 
     The one call a customer needs: whatever the policy happens to declare, this is what
     enforces it.
     """
+    # One dict across the parent and every subagent it spawns, so a capability
+    # allowance is the agent's rather than each graph's.
+    spent = {} if spent is None else spent
     allowlist = tool_allowlist_middleware(governor)
-    return ([allowlist] if allowlist else []) + harness_call_limits(governor)
+    return ([allowlist] if allowlist else []) + harness_call_limits(governor, spent)
 
 
-def harness_call_limits(governor) -> list:
+def harness_call_limits(governor, spent: dict[str, int] | None = None) -> list:
     """Turn the policy's call limits into middleware the harness runs.
 
     A cap naming a tool is handed to the harness's own `ToolCallLimitMiddleware`, using
@@ -131,18 +134,34 @@ def harness_call_limits(governor) -> list:
     """
     from langchain.agents.middleware import ToolCallLimitMiddleware
 
+    spent = {} if spent is None else spent
     middleware = [ToolCallLimitMiddleware(tool_name=tool, run_limit=limit,
                                          exit_behavior="continue")
                   for tool, limit in governor.tool_call_caps().items()]
     by_capability = charter_policy.capability_call_caps(governor.policy)
     if by_capability:
         # Outermost, so a capability's budget is spent before any single tool's is.
-        middleware.insert(0, _capability_limit_middleware(governor, by_capability))
+        middleware.insert(0, _capability_limit_middleware(governor, by_capability, spent))
     return middleware
 
 
-def _capability_limit_middleware(governor, limits: dict[str, int]):
-    """Cap how many times an agent may do a *kind* of thing, however it does it."""
+def _capability_limit_middleware(governor, limits: dict[str, int], spent: dict[str, int]):
+    """Cap how many times an agent may do a *kind* of thing, however it does it.
+
+    `spent` is counted here rather than read off `governor.calls_per_tool`, and it
+    is passed in rather than made here, for two different reasons.
+
+    Counted here, because reading a total that is written *after* the call returns
+    leaves a gap: two concurrent calls both see `used < cap` and both proceed, so a
+    cap of one admits as many calls as the model issued in that turn. Claiming the
+    slot before the call runs closes it — the same thing `begin_tool_call` does for
+    per-tool caps, and for the same reason. A call that then fails still counts,
+    also matching: the allowance is on attempts, not successes.
+
+    Passed in, because a subagent gets its own middleware instances. A counter made
+    in here would be per-agent, so a parent and two children would each get the
+    full allowance and the cap would mean three times what it says.
+    """
     from langchain.agents.middleware import AgentMiddleware
     from langchain_core.messages import ToolMessage
 
@@ -152,16 +171,11 @@ def _capability_limit_middleware(governor, limits: dict[str, int]):
         cap = limits.get(capability) if capability else None
         if cap is None:
             return None
-        # Counted from what actually ran, summed across every tool filed under the
-        # capability — including declared tools, which their own wrapper records into
-        # the same place. Refused calls were never recorded, so a spent cap doesn't
-        # inflate itself.
-        used = sum(n for tool, n in governor.calls_per_tool.items()
-                   if capability_of(tool) == capability)
-        if used < cap:
+        if spent.get(capability, 0) < cap:
+            spent[capability] = spent.get(capability, 0) + 1
             return None
         log.debug("capability cap spent, refusing: tool=%s capability=%s used=%d cap=%d",
-                  name, capability, used, cap)
+                  name, capability, spent.get(capability, 0), cap)
         return ToolMessage(
             content=(f"Limit reached: this agent may perform at most {cap} "
                      f"'{capability}' operations. '{name}' and every other "

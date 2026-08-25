@@ -82,6 +82,24 @@ class DurableHarness:
         return self._resume if self._resume is not None else payload
 
 
+def bounded_subagent(governor, spent: dict[str, int]) -> dict:
+    """deepagents' general-purpose subagent, held to the same policy as its parent.
+
+    Identical to theirs — same name, same description, same prompt, and it
+    inherits the parent's tools, which is what makes it general-purpose. The only
+    addition is the governance: the same middleware and the same file permissions
+    the parent runs under, so `allowed_capabilities` and the per-tool caps mean
+    the same thing whoever is holding the tool.
+    """
+    from deepagents.middleware.subagents import GENERAL_PURPOSE_SUBAGENT
+
+    return {
+        **GENERAL_PURPOSE_SUBAGENT,
+        "middleware": harness_middleware(governor, spent),
+        "permissions": file_permissions(governor.policy),
+    }
+
+
 @asynccontextmanager
 async def durable_harness(ctx, agent_name: str, store_url: str, *, resume: Any = None):
     """Open the durable stores for this task and yield its wiring.
@@ -96,6 +114,9 @@ async def durable_harness(ctx, agent_name: str, store_url: str, *, resume: Any =
 
     governor = ctx.agent_governor(agent_name)
     governor.register_harness_observer()
+    # Capability allowances are the agent's, not each graph's — so the parent and
+    # every subagent it spawns count into the same dict.
+    spent: dict[str, int] = {}
 
     # The task, not the operation: a resumed operation must land on the same thread and
     # the same filesystem as the one that parked.
@@ -123,7 +144,14 @@ async def durable_harness(ctx, agent_name: str, store_url: str, *, resume: Any =
                 "checkpointer": metered(saver, governor, ctx.report_metrics),
                 # Policy, translated. Ours to declare and version, theirs to enforce.
                 "permissions": file_permissions(governor.policy),
-                "middleware": harness_middleware(governor),
+                "middleware": harness_middleware(governor, spent),
+                # Supplied rather than defaulted, and only so the same bounds reach
+                # it. deepagents adds a general-purpose subagent on its own, but a
+                # subagent gets its own middleware list — `SubAgentMiddleware` has
+                # no way to inherit the parent's — so a defaulted one runs outside
+                # the tool allowlist and the per-tool caps. An agent allowed to
+                # spawn could then do through a child what it may not do itself.
+                "subagents": [bounded_subagent(governor, spent)],
             },
             config={
                 "configurable": {"thread_id": task_id},
