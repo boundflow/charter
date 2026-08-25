@@ -85,11 +85,17 @@ class DurableHarness:
 def bounded_subagent(governor, spent: dict[str, int]) -> dict:
     """deepagents' general-purpose subagent, held to the same policy as its parent.
 
-    Identical to theirs — same name, same description, same prompt, and it
-    inherits the parent's tools, which is what makes it general-purpose. The only
-    addition is the governance: the same middleware and the same file permissions
-    the parent runs under, so `allowed_capabilities` and the per-tool caps mean
-    the same thing whoever is holding the tool.
+    Their spec, unchanged — name, standing prompt, and the parent's tools, which is
+    what makes it general-purpose. Added: the same middleware and file permissions
+    the parent runs under, so `allowed_capabilities` and the per-tool caps mean the
+    same thing whoever is holding the tool.
+
+    What the parent tells it to do is not fixed here. `task` takes a `description`
+    per call — free text, "include all necessary context and specify the expected
+    output format" — so the work is the parent's to choose every time. What a
+    declared subagent would add is a different *standing* frame: its own persona, a
+    narrower tool list, a cheaper model. That is a config surface Charter does not
+    have yet, and it would attach governance the same way this does.
     """
     from deepagents.middleware.subagents import GENERAL_PURPOSE_SUBAGENT
 
