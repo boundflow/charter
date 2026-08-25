@@ -1,20 +1,80 @@
+# The worker: where agents run, and what it needs to run them.
+#
+# Not versioned and never sealed into an artifact. This describes a *deployment* —
+# which control plane, whose credentials, which agents this process serves — and
+# two workers serving the same agent will differ here legitimately.
+#
+# Every field the schema accepts is shown. Ones this demo doesn't use are
+# commented, not omitted.
+
 apiVersion: charter/v1
 kind: Worker
+
+# Shown in the worker's banner. Optional.
 name: leads
+
 control_plane:
   endpoint: ${BOUNDFLOW_SERVER_ADDRESS}
   api_key: ${BOUNDFLOW_API_KEY}
+  # Which tenant these agents belong to. `charter tenant create <name>` first —
+  # provisioning makes a tenant *group* and a key, not a tenant.
   tenant: default
+  # Skips the name lookup if you already know the id. Rarely worth it.
+  # tenant_id: ""
+
 llm:
+  # anthropic is the only provider wired up; anything else is refused at load.
   provider: anthropic
   api_key: ${ANTHROPIC_API_KEY}
+
 store:
+  # Postgres for the harness's own state — each task's conversation and its
+  # filesystem. Not the control plane's database. It has to be reachable from
+  # every worker that might resume a task, because a task parked at a gate can
+  # come back on a different one.
   url: ${CHARTER_STORE_URL}
+
+# Where agent directories live, relative to this file.
 agents_dir: ./
+
 serves:
-- agent: leads-finder
-  versions:
-  - 1
+  # Two spellings. A directory is what you want while writing an agent — edit,
+  # restart, see it. A registry ref is what you want once it is real.
+  - agent: leads-finder
+    versions: [1]
+
+  # Pulled at boot. The artifact names its own agent and version, so neither is
+  # repeated, and the worker needs no checkout at all.
+  # - ref: ghcr.io/acme/agents/leads-finder:v1
+  #   insecure: false      # plain HTTP, for a local registry
+
+# Who to tell when an agent stops for a human. Without a route that resolves,
+# a gate is just a slow timeout — `charter apply` warns about exactly this.
+# notifications:
+#   channels:
+#     - name: terminal
+#       kind: webhook          # webhook | slack | telegram
+#       url: http://localhost:8899
+#       secret: ${WEBHOOK_SECRET}   # HMAC-SHA256 into X-Charter-Signature
+#       timeout_seconds: 5
+#       max_attempts: 3
+#     # - name: ops
+#     #   kind: telegram
+#     #   url: https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage
+#     #   chat_id: "-1001234567890"
+#   routes:
+#     - channel: terminal
+#       # agent: leads-finder                     # omit for every agent
+#       # events: [approval_requested, input_requested]
+
+# Where run traces go. Validated today and not yet wired.
+# trace_sink:
+#   kind: jsonl                # none | logging | jsonl | otel
+#   path: ./traces.jsonl
+#   # endpoint: http://localhost:4318   # otel only
+
+# Tenant-global, not per agent — which is why it lives here. A model with no
+# price reads as costing zero, and every cost ceiling silently stops applying.
 model_pricing:
   claude-haiku-4-5:
     input: 0.8

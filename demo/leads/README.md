@@ -8,6 +8,36 @@ stake and nobody real on the other end.
 
 It is one agent and a config file. There is no pipeline code.
 
+## The files
+
+    worker.yaml                          the deployment — which control plane, whose
+                                         credentials, which agents this process serves
+
+    leads-finder/
+      v1.yaml                            behaviour at v1: objective, tools, answer
+                                         shape. immutable — you write v2, you don't
+                                         edit v1
+      v1/skills/boundflow/SKILL.md       what it knows. versioned with v1, because a
+                                         rollback has to restore what the agent knew
+      runtime.yaml                       policy: spend ceilings, what it may reach,
+                                         how long a human has. mutable, re-applied
+      lifecycle.yaml                     what the control plane does to the agent
+                                         between tasks — pause it, cool it down,
+                                         roll it back
+
+    network.py                           the fake network, as an MCP server
+    approve.py                           you, approving what the agent wants to send
+    inbox.py                             you, as the people being contacted
+
+Every field the schema accepts appears in those four YAML files. Anything the demo
+doesn't use is commented rather than omitted, so the file is the reference.
+
+**Which half goes where.** `charter push` seals `v1.yaml` + `v1/skills/` into an
+artifact; `charter apply` sends `runtime.yaml` and `lifecycle.yaml` to the control
+plane. Behaviour is packaged because it has to reach workers that may not exist
+yet. Policy is applied because it has to stay changeable — a budget you cannot
+lower without cutting a release is not a budget.
+
 ## What it exercises
 
 One agent runs the whole campaign:

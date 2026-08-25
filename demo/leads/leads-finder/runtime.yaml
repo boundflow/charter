@@ -1,29 +1,92 @@
+# Policy: what this agent may spend, and what it may reach.
+#
+# Not versioned, and deliberately so. Re-applied every time and never rolled back,
+# because a budget you cannot lower without cutting a release is not a budget. This
+# file is *applied* to the control plane, which ships it with every operation and
+# snapshots what was in force per run — so "what limits applied when this was
+# approved" is answerable without sealing it into an artifact.
+#
+# Every field is shown; unused ones are commented.
+
 apiVersion: charter/v1
 kind: RuntimePolicy
 
+# Must match the agent directory's name.
 agent: leads-finder
 
 per_run:
-  # One agent now runs the whole campaign, so this is the campaign's ceiling
-  # rather than one lead's. Most of the calls go on checking: every round of
-  # waiting costs a turn to look, whether or not anyone moved.
-  max_llm_calls: 80
+  # At least one of max_cost_usd / max_llm_calls is required. An agent with no
+  # spend ceiling is a mistake, not a choice.
   max_cost_usd: 3.00
-  # Working time, not wall clock — the waiting doesn't count, so a campaign that
-  # runs for a week still only spends minutes of this.
+  # Most of these go on checking: every round of waiting costs a turn to look,
+  # whether or not anyone moved.
+  max_llm_calls: 80
+  # Working time across every round. Time parked — on a human, or on a timer —
+  # doesn't count, so a campaign that runs for a week still spends minutes of it.
   max_seconds: 7200
+  # Failures of any ONE tool before the task gives up. Per tool, not in
+  # aggregate: a circuit breaker on a broken integration.
   max_tool_failures: 3
 
+  # Cap a specific tool. Enforced by the harness's own middleware.
+  # tool_call_limits:
+  #   - tool: net__send_message
+  #     max_calls: 10
+
+  # Cap a *kind* of thing, however it is done — `write` covers write_file,
+  # edit_file and delete together, so the cap survives the harness shipping a
+  # fourth way to do it.
+  # capability_call_limits:
+  #   - capability: read
+  #     max_calls: 40
+
+  # Bounds on delegation. Only meaningful alongside authority.allowed_spawns.
+  # max_total_subagents: 5
+  # max_parallel_subagents: 2
+
+  # How many invocations may queue before the control plane refuses more.
+  # max_queue_depth: 100
+
 limits:
+  # Per model call.
+  max_tokens_per_call: 1024
+  max_call_seconds: 60
+  # Per tool call. A hung server would otherwise block until the whole round is
+  # cancelled — the bluntest instrument available. Exceeding this is a returned
+  # failure, so `on_failure` decides what happens next.
   max_tool_seconds: 30
 
 authority:
-  # A day, because the approver is a person who may not be at a terminal. The
-  # agent's own config no longer carries this: how long you have to answer is
-  # about you, not about what the agent does.
+  # What the agent may reach, as opposed to how much it may spend. Policy rather
+  # than versioned config: tightening what an agent can touch should not require
+  # cutting a release.
+
+  # Default-deny over the harness's own tools: read | write | execute | spawn.
+  # Empty means unrestricted, not "nothing". Declared MCP tools are always
+  # permitted regardless of what is listed here.
+  allowed_capabilities: [read]
+
+  # How long a person has. Both are a day, because the approver may not be at a
+  # terminal. A tool can shorten its own with `approval_timeout_seconds`.
   approval_timeout_seconds: 86400
   question_timeout_seconds: 86400
-  # Default-deny over the harness's own tools. It reads its skill and nothing
-  # else: no reason to write files, run commands, or start other agents. Declared
-  # MCP tools are permitted regardless of what is listed here.
-  allowed_capabilities: [read]
+
+  # Which agents this one may start as durable background tasks. Empty forbids —
+  # unlike allowed_capabilities, silence here denies, because a child is a
+  # governed unit with a budget of its own.
+  # allowed_spawns: [outreach]
+
+  # Tightens `wait.max` from the version without raising it. 0 leaves the
+  # version's own ceiling as the only bound.
+  # max_wait_seconds: 3600
+
+  # Which files the agent may touch. Paths are absolute inside the harness's own
+  # filesystem, which is Postgres rather than a disk. mode: allow | deny |
+  # interrupt — interrupt stops for a human the same way a gated tool does.
+  # file_rules:
+  #   - operations: [read]
+  #     paths: ["/skills/**"]
+  #     mode: allow
+  #   - operations: [write]
+  #     paths: ["/**"]
+  #     mode: deny

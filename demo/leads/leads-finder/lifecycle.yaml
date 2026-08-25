@@ -1,0 +1,70 @@
+# Lifecycle: what the control plane does to this agent when its runs go wrong.
+#
+# The only file that acts *between* tasks. Runtime policy bounds one task; these
+# rules read what the last ones actually cost and change the agent's state — which
+# is the difference between an agent that fails expensively once and one that keeps
+# failing expensively all night.
+#
+# Not versioned, applied like runtime.yaml. Every metric and action is shown.
+#
+# Nothing here is active in the demo: with a person approving every outbound
+# message there is no unattended failure to catch. Uncomment for an agent that
+# runs on a schedule with nobody watching.
+
+apiVersion: charter/v1
+kind: LifecyclePolicy
+
+agent: leads-finder
+
+rules:
+  # `rules` needs at least one entry, so this one is real but inert: it takes a
+  # threshold no run reaches. Delete it once you add a rule you mean.
+  - when:
+      metric: num_failures
+      threshold: 1000000
+    then:
+      pause:
+        # How many recent tasks the metric sums over — a count, not a duration.
+        window: 20
+
+  # Stop accepting work after repeated failures. `window` is how many recent
+  # tasks to sum over, so this is "three of the last twenty", not three ever.
+  # - when:
+  #     metric: num_failures        # runs that ended failed
+  #     threshold: 3
+  #   then:
+  #     pause:
+  #       window: 20                # over the last 20 tasks
+  #                                 # `charter resume` releases it
+
+  # Slow down rather than stop: cooldown refuses new work for a while and then
+  # lets it through again on its own.
+  # - when:
+  #     metric: cost                # dollars across the window
+  #     threshold: 25.0
+  #   then:
+  #     cooldown:
+  #       window: 50                # tasks the metric sums over
+  #       seconds: 3600             # how long the cooldown itself lasts
+
+  # Roll back. The task that is already running finishes on the version it
+  # started with, so this strands nothing — but every worker must still serve the
+  # target version, or the control plane dispatches operations nobody can handle.
+  # - when:
+  #     metric: approval_rejections # a human said no this many times
+  #     threshold: 5
+  #   then:
+  #     set_version:
+  #       target: 1
+
+  # The remaining metrics:
+  #   num_llm_calls   — calls across the window
+  #   latency         — seconds a run took
+  #   tool_failures   — needs `tool:` naming which one
+  # - when:
+  #     metric: tool_failures
+  #     tool: net__send_message
+  #     threshold: 5
+  #   then:
+  #     pause:
+  #       window: 20

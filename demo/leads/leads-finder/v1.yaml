@@ -1,3 +1,13 @@
+# The agent's behaviour, at version 1.
+#
+# Immutable: you do not edit a version, you write v2. This file plus v1/skills/ is
+# what `charter push` seals into an OCI artifact, so its digest is what "v1" means.
+# Nothing that governs the agent lives here — limits, capabilities, approval
+# windows and who it may spawn are all policy, in runtime.yaml, so they can be
+# tightened without cutting a release.
+#
+# Every field is shown; unused ones are commented.
+
 apiVersion: charter/v1
 kind: AgentConfig
 
@@ -7,6 +17,9 @@ description: Finds people worth talking to and runs the conversation with each o
 
 model: claude-haiku-4-5
 
+# Per-task inputs, referenced as {{ inputs.<name> }} in the objective. Become
+# flags on `charter run`, so scalars only. Mutually exclusive with `schedule:` —
+# a periodic run has nobody to supply them.
 inputs:
   topic:
     type: string
@@ -74,21 +87,53 @@ objective: |
 
 # Long, because most of it is spent waiting for people. Waiting is not charged as
 # working time, so this bounds the work rather than the wall clock.
+# Run on a clock instead of on demand. Mutually exclusive with `inputs:`.
+# schedule:
+#   every: 1d
+#   manual: true        # still invocable by hand as well
+
+# Lets the agent stop and come back later. Its presence is versioned because it
+# changes the tool list; runtime.yaml's `max_wait_seconds` can shorten this
+# ceiling without raising it.
 wait:
   max: 6h
 
 # Without this the agent has no way to answer a question. An approver who rejects
 # with "why this person?" gets silence, and the agent — able only to act or not
 # act — re-proposes, which reads as ignoring them.
+# Tool servers. `command`+`args` forks a process and speaks JSON-RPC down a pipe;
+# `url` talks to one over HTTP, which is what a sidecar is. Exactly one of the two.
+#
+# A stdio server is NOT carried by the artifact — the config travels, the process
+# does not — so the worker must already have it. `charter push` says so.
 mcp:
   - name: net
     command: python
     args: ["network.py"]
+    # Variable NAMES only; values come from the worker's environment. This file is
+    # committed and then sealed, which makes it the worst place for a secret.
+    # env: [NETWORK_TOKEN]
+
+    # A server over HTTP instead — a sidecar, or something hosted:
+    # url: http://localhost:8080/mcp     # loopback, or https:// anywhere else
+    # headers:
+    #   Authorization: "Bearer ${NET_TOKEN}"
+
+    # Follow the server's own annotations for tools that don't say. Upward only:
+    # a server can make an agent safer without a deploy, never less safe.
+    # approval:
+    #   read_only: never       # what a tool hinting read-only gets
+    #   default: always        # what everything else gets
+
     tools:
       - tool: search_people
         on_failure: fail
       - tool: connection_status
       - tool: conversation
+      # Per-tool settings in full:
+      #   approval: always | never          — stop for a human before this call
+      #   approval_timeout_seconds: 900     — overrides the policy's window
+      #   on_failure: continue | fail       — fail ends the task and names the tool
       # Everything that reaches a person stops for one. The note on a connection
       # request is as public as the message that follows it.
       - tool: send_connection_request
@@ -96,7 +141,25 @@ mcp:
       - tool: send_message
         approval: always
 
+# Lets the agent ask you something and wait for the answer. Its presence is
+# versioned — it changes the tool list and adds a line to the prompt — while how
+# long it waits is `question_timeout_seconds` in runtime.yaml.
+#
+# Without this an approver who rejects with a question gets silence: the agent can
+# only act or not act, so it re-proposes, which reads as ignoring them.
+ask_human:
+  # How readily it interrupts you: rarely | balanced | eagerly. A posture, not a
+  # threshold — a model's confidence in itself isn't calibrated enough to be a
+  # number.
+  when: balanced
+
+# Which harness tools stop for a human, and what a rejection means. Declared MCP
+# tools use their own `approval:` instead. Timeouts moved to runtime.yaml.
 gate:
+  # Harness tools that also need a signature. `submit_result` gates the final
+  # answer itself — the approver sees the result, not a summary of it.
+  # tools: [execute, write_file, submit_result, task, start_async_task]
+
   # An unapproved message simply doesn't go. The rest of the campaign carries on:
   # one lead you decided against is not a reason to abandon the others.
   on_reject: continue
