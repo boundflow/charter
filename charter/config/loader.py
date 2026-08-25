@@ -240,6 +240,11 @@ def load_project(worker_yaml: Path) -> Project:
     agents: dict[str, AgentBundle] = {}
 
     for served in manifest.serves:
+        if served.from_registry:
+            # Nothing to read: the artifact is fetched at boot and validated then,
+            # because a config error inside one is the registry's problem to report
+            # and not something a local parse could have caught.
+            continue
         agent_dir = root / served.agent
         if not agent_dir.is_dir():
             problems.append(
@@ -251,6 +256,8 @@ def load_project(worker_yaml: Path) -> Project:
             problems.extend(f"{served.agent}/{p}" for p in e.problems)
 
     for served in manifest.serves:
+        if served.from_registry:
+            continue
         bundle = agents.get(served.agent)
         if bundle is None:
             continue

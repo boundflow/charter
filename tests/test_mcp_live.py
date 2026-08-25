@@ -238,3 +238,61 @@ def test_a_task_group_error_is_flattened_to_its_causes():
         leaves = _leaves(e)
 
     assert leaves == ["ValueError: the actual problem"]
+
+
+# ── remote servers, which is what a sidecar is ──────────────────────────────
+
+
+def test_a_sidecar_is_reachable_over_loopback():
+    """A sidecar shares the pod's network namespace, so http://localhost is a
+    deployment shape rather than an oversight. Requiring https everywhere made the
+    sidecar pattern unusable — and it was our own validator, nothing MCP asks for.
+    """
+    from charter.config.agent import McpServer
+
+    for url in ("http://localhost:8080/mcp", "http://127.0.0.1:9000",
+                "https://mcp.example.com/x"):
+        McpServer(name="side_car", url=url, tools=[ToolSpec(tool="x")])
+
+    with pytest.raises(ValueError, match="loopback"):
+        McpServer(name="side_car", url="http://mcp.example.com/x",
+                  tools=[ToolSpec(tool="x")])
+
+
+def test_a_header_carries_a_name_not_a_secret(monkeypatch):
+    """The config file is committed and, once it is in an artifact, immutable — so
+    a token in it is a token you cannot rotate. `${VAR}` is filled from the
+    worker's environment at connect time, the same rule `env:` follows."""
+    from charter.config.agent import McpServer
+    from charter.mcp.client import _connection
+
+    monkeypatch.setenv("A_TOKEN", "s3cret")
+    spec = McpServer(name="hosted", url="https://mcp.example.com",
+                     headers={"Authorization": "Bearer ${A_TOKEN}"},
+                     tools=[ToolSpec(tool="x")])
+
+    assert _connection(spec)["headers"] == {"Authorization": "Bearer s3cret"}
+
+
+def test_an_unset_header_variable_is_left_visible(monkeypatch):
+    """Blanking it would send `Bearer ` and leave the server guessing. Left as it
+    stands, the 401 names the header that was never filled in."""
+    from charter.config.agent import McpServer
+    from charter.mcp.client import _connection
+
+    monkeypatch.delenv("NOPE_TOKEN", raising=False)
+    spec = McpServer(name="hosted", url="https://mcp.example.com",
+                     headers={"Authorization": "Bearer ${NOPE_TOKEN}"},
+                     tools=[ToolSpec(tool="x")])
+
+    assert "${NOPE_TOKEN}" in _connection(spec)["headers"]["Authorization"]
+
+
+def test_headers_are_meaningless_on_a_stdio_server():
+    """stdio talks over a pipe. A header there would be config that looks like it
+    does something and does nothing."""
+    from charter.config.agent import McpServer
+
+    with pytest.raises(ValueError, match="only valid alongside"):
+        McpServer(name="local_one", command="python", headers={"X": "1"},
+                  tools=[ToolSpec(tool="x")])

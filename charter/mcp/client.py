@@ -27,6 +27,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -79,7 +80,22 @@ def _connection(spec: McpServer) -> dict:
         env = {name: os.environ[name] for name in spec.env if name in os.environ}
         return {"transport": "stdio", "command": spec.command,
                 "args": list(spec.args), **({"env": env} if env else {})}
-    return {"transport": "streamable_http", "url": spec.url}
+    headers = {name: _expand(value) for name, value in spec.headers.items()}
+    return {"transport": "streamable_http", "url": spec.url,
+            **({"headers": headers} if headers else {})}
+
+
+_VAR = re.compile(r"\$\{([A-Z][A-Z0-9_]*)\}")
+
+
+def _expand(value: str) -> str:
+    """Fill ${VAR} from the environment, leaving anything unset as it stands.
+
+    Left rather than blanked on purpose: a header that arrives as
+    `Bearer ${GITHUB_TOKEN}` gets a 401 naming the header, which is a better
+    failure than `Bearer ` and a server wondering what you meant.
+    """
+    return _VAR.sub(lambda m: os.environ.get(m.group(1), m.group(0)), value)
 
 
 def _leaves(e: BaseException) -> list[str]:

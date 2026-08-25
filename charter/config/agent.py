@@ -149,6 +149,18 @@ class ApprovalRules(Base):
     default: Literal["never", "always"] = "always"
 
 
+#: Hosts where plain HTTP is a deployment shape rather than an oversight. A
+#: sidecar shares the pod's network namespace, so the traffic never leaves it.
+_LOOPBACK = ("http://localhost", "http://127.0.0.1", "http://[::1]")
+
+
+def _reachable(url: str) -> bool:
+    if url.startswith("https://"):
+        return True
+    return any(url.startswith(f"{host}:") or url == host or
+               url.startswith(f"{host}/") for host in _LOOPBACK)
+
+
 class McpServer(Base):
     """One MCP server: a single endpoint or process exposing many tools.
 
@@ -165,6 +177,13 @@ class McpServer(Base):
     # Variable NAMES only. Values come from the worker's environment — this file is
     # committed and immutable, and must never carry a secret.
     env: list[str] = Field(default_factory=list)
+    # Sent with every request to a `url` server. Values may reference the
+    # environment as ${VAR} and usually should: a hosted server wants a bearer
+    # token, and this file is committed.
+    #
+    #     headers:
+    #       Authorization: "Bearer ${GITHUB_MCP_TOKEN}"
+    headers: dict[str, str] = Field(default_factory=dict)
     # Set this and a tool without its own `approval` follows the server's
     # annotations instead of the `never` default.
     approval: ApprovalRules | None = None
@@ -176,8 +195,13 @@ class McpServer(Base):
             raise ValueError("exactly one of `command` or `url` is required")
         if self.args and not self.command:
             raise ValueError("`args` is only valid alongside `command`")
-        if self.url and not self.url.startswith("https://"):
-            raise ValueError("`url` must be https://")
+        if self.headers and not self.url:
+            raise ValueError("`headers` is only valid alongside `url`")
+        if self.url and not _reachable(self.url):
+            raise ValueError(
+                "`url` must be https://, or http:// on loopback — a sidecar in the "
+                "same pod is reached over localhost, and anything else carrying a "
+                "token in cleartext is a mistake")
         for name in self.env:
             if not re.match(ENV_NAME, name):
                 raise ValueError(f"env {name!r} must be a variable NAME, not a value")

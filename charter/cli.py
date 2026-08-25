@@ -182,6 +182,79 @@ def validate(
 
 
 @app.command()
+def push(
+    agent: str = typer.Argument(..., help="Agent name (its directory)"),
+    repository: str = typer.Option(..., "--repository", "-r",
+                                   help="e.g. ghcr.io/acme/agents"),
+    path: Path = typer.Option(Path("."), "--path", help="Where agents live"),
+    version: int = typer.Option(None, "--version", help="Defaults to the newest"),
+    insecure: bool = typer.Option(False, "--insecure", help="Plain HTTP (local registries)"),
+) -> None:
+    """Publish one version's behaviour to a registry.
+
+    What travels is the objective, the tools, the answer shape and the skills —
+    everything a worker needs to *be* this agent. Policy is not in here: it
+    converges on the control plane through `charter apply`, stays mutable, and
+    sealing it would make a thing you can change look like a thing you cannot.
+
+    The result is an ordinary OCI artifact — one gzipped tarball, the same shape a
+    Helm chart or an OPA bundle takes. `oras pull` gets the same bytes and `cosign`
+    can sign it. Credentials are whatever `docker login` already wrote.
+
+    The tag comes from the config rather than from you. An artifact that said
+    version 1 inside and wore a `v2` tag would break the thing the design rests
+    on: that a worker can read an artifact and know which handler to register.
+    """
+    from . import artifact
+
+    try:
+        bundle = load_agent(Path(path) / agent)
+    except ConfigError as e:
+        _fail(e)
+
+    chosen = version or max(bundle.versions)
+    if chosen not in bundle.versions:
+        _err(f"{agent} has no v{chosen} — it has "
+             f"{', '.join(f'v{v}' for v in sorted(bundle.versions))}")
+        raise typer.Exit(1)
+
+    packed = artifact.pack(bundle, chosen)
+
+    typer.echo()
+    ui.dim(f"packing {agent} v{chosen}")
+    for name in packed.files:
+        ui.detail(name)
+    ui.detail(f"{len(packed.tar):,} bytes  {packed.digest}")
+
+    # An artifact is content-addressed and immutable, which makes it read as a
+    # complete description of the agent. For a stdio server it isn't: the config
+    # travels, the process does not, and the same digest then behaves differently
+    # on two workers — the one thing the artifact exists to prevent. Saying so
+    # costs a line; discovering it costs a quarantine at boot, in production.
+    local = [m for m in bundle.versions[chosen].mcp if m.command]
+    if local:
+        typer.echo()
+        ui.warn(f"{len(local)} tool server(s) this artifact does not carry:")
+        for server in local:
+            ui.detail(f"{server.name}: {server.command} {' '.join(server.args)}")
+        ui.detail("the worker must provide these — put them in its image, or use "
+                  "a url: server and run one as a sidecar")
+
+    typer.echo()
+    ui.dim(f"pushing to {packed.reference(repository)}")
+    try:
+        ref = artifact.push(packed, repository, insecure=insecure)
+    except Exception as e:  # noqa: BLE001 — a registry failure is theirs to read
+        _err(f"push failed: {type(e).__name__}: {e}")
+        ui.detail("credentials come from `docker login <registry>`")
+        raise typer.Exit(1) from e
+
+    typer.echo()
+    _ok(ref)
+    ui.detail(f"serve it:  charter worker  (serves: [{ref.split('@')[0]}])")
+
+
+@app.command()
 def apply(
     path: Path = typer.Argument(Path("."), help="worker.yaml or a project dir"),
     only: str = typer.Option(None, "--agent", help="Apply just this agent"),

@@ -79,6 +79,18 @@ class CharterWorker:
     # the model name comes from each agent's versioned config, so one worker
     # serving three agents builds three models.
     chat_model: object | None = None
+    # Where pulled artifacts are unpacked. A temp directory per process, because a
+    # restart is a deploy and a cache would be a second answer to "what is v1"
+    # sitting on a disk nobody looks at.
+    _pulled_dir: object | None = None
+
+    @property
+    def _pulled(self):
+        import tempfile
+        from pathlib import Path
+        if self._pulled_dir is None:
+            self._pulled_dir = tempfile.TemporaryDirectory(prefix="charter-agents-")
+        return Path(self._pulled_dir.name)
 
     def _chat_model(self, model: str):
         """The LangChain model for one agent, built from the operator's credential.
@@ -140,9 +152,9 @@ class CharterWorker:
         """Connect each served version's MCP servers. A failure quarantines that
         agent rather than the process — the others are unaffected."""
         for spec in self.project.manifest.serves:
-            bundle = self.project.agents[spec.agent]
-            for version in spec.versions:
-                key = (spec.agent, version)
+            bundle, versions = await self._bundle_for(cp, spec)
+            for version in versions:
+                key = (bundle.name, version)
                 cfg = bundle.versions[version]
                 missing = [a for a in cfg.spawns if a not in self.project.agents]
                 tools = ToolSet().with_timeout(
@@ -168,8 +180,51 @@ class CharterWorker:
                                      server.spec.qualified(tool), why)
                 except QuarantineError as e:
                     served.quarantined = str(e)
-                    log.error("quarantined %s@v%d: %s", spec.agent, version, e)
+                    log.error("quarantined %s@v%d: %s", bundle.name, version, e)
                 self.served[key] = served
+
+    async def _bundle_for(self, cp: ControlPlaneClient, spec):
+        """The agent this entry names, and which of its versions to serve.
+
+        A directory is read straight off disk. A registry ref is pulled, unpacked
+        and then read the same way — `load_agent` cannot tell the difference, which
+        is the whole point of the artifact being a plain tarball of the layout it
+        already expects.
+
+        An artifact carries no runtime.yaml, because that is policy and policy is
+        applied rather than shipped. Its numbers come back from the control plane
+        instead, so a worker serving an artifact enforces exactly what a worker
+        serving a checkout does.
+        """
+        if not spec.from_registry:
+            bundle = self.project.agents[spec.agent]
+            return bundle, spec.versions
+
+        from . import artifact, policy as charter_policy
+        from .config.loader import load_agent
+
+        directory = artifact.pull(spec.ref, self._pulled, insecure=spec.insecure)
+        bundle = load_agent(directory)
+        version = max(bundle.versions)
+
+        wf = await self._workflow_for(cp, bundle.name)
+        if wf is not None:
+            live = await cp.get_agent_runtime_policy(wf.id, bundle.name)
+            bundle.runtime = charter_policy.runtime_file(bundle.name, live)
+        else:
+            # Nothing applied yet, so there is no policy to read. The defaults are
+            # the ones runtime.yaml would have given, and `charter apply` replaces
+            # them on the next boot.
+            log.warning("%s: no instance on the control plane yet — running on "
+                        "default limits until one is applied", bundle.name)
+        log.info("pulled %s v%d from %s", bundle.name, version, spec.ref)
+        return bundle, [version]
+
+    async def _workflow_for(self, cp: ControlPlaneClient, agent: str):
+        for w in await cp.list_workflows():
+            if w.workflow_type == agent and w.tenant_id == self._tenant_id:
+                return w
+        return None
 
     def _spawner(self, cp: ControlPlaneClient, cfg) -> Spawner | None:
         """None unless this version declares `spawns`, which is what keeps the

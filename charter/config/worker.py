@@ -65,16 +65,55 @@ class Store(Base):
 
 
 class Served(Base):
-    """`versions` is a list, not a single number, because a `set_version` rollback
-    dispatches operations at the old version and this process must still be able to
-    build that agent from disk. Dropping a version a lifecycle rule can target
-    strands the control plane."""
+    """One agent this worker serves, from a directory or from a registry.
 
-    agent: str = Field(pattern=AGENT_NAME)
-    versions: list[int] = Field(min_length=1)
+    Two spellings, because they answer different questions. A directory is what you
+    want while writing an agent — edit the yaml, restart, see it. A registry ref is
+    what you want once it is real: the artifact is immutable, the same bytes reach
+    every worker, and nothing has to be checked out.
+
+        serves:
+          - agent: leads-finder          # from ./leads-finder
+            versions: [1]
+          - ref: ghcr.io/acme/agents/leads-finder:v1
+
+    `versions` is a list, not a single number, because a `set_version` rollback
+    dispatches operations at the old version and this process must still be able to
+    build that agent. Dropping a version a lifecycle rule can target strands the
+    control plane. A ref names one version — its own — so serving two means two
+    entries, which is honest: they are two artifacts.
+    """
+
+    agent: str | None = Field(default=None, pattern=AGENT_NAME)
+    versions: list[int] = Field(default_factory=list)
+    insecure: bool = Field(default=False, description=(
+        "Plain HTTP to the registry. For a local one; a real registry is TLS."))
+    ref: str | None = Field(default=None, description=(
+        "An OCI reference like ghcr.io/acme/agents/leads-finder:v1. The artifact "
+        "names its own agent and version, so neither is repeated here."))
+
+    @property
+    def from_registry(self) -> bool:
+        return self.ref is not None
 
     @model_validator(mode="after")
     def _check(self) -> Served:
+        if bool(self.ref) == bool(self.agent):
+            raise ValueError(
+                "give either `agent` (a directory) or `ref` (a registry artifact), "
+                "not both — an artifact names the agent it holds")
+        if self.ref:
+            if self.versions:
+                raise ValueError(
+                    "`versions` doesn't apply to a `ref`: an artifact is one "
+                    "version, and it says which inside")
+            if ":" not in self.ref.rsplit("/", 1)[-1]:
+                raise ValueError(
+                    f"{self.ref!r} has no tag — pin the version you mean, "
+                    f"e.g. {self.ref}:v1")
+            return self
+        if not self.versions:
+            raise ValueError("`versions` is required when serving from a directory")
         if any(v < 1 for v in self.versions):
             raise ValueError("versions must be >= 1")
         if len(set(self.versions)) != len(self.versions):
