@@ -46,6 +46,7 @@ from __future__ import annotations
 
 import logging
 
+from .. import policy as charter_policy
 from .capabilities import capability_of
 
 log = logging.getLogger(__name__)
@@ -68,8 +69,8 @@ def tool_allowlist_middleware(governor):
     from langchain.agents.middleware import AgentMiddleware
     from langchain_core.messages import ToolMessage
 
-    tools = set(governor.policy.allowed_tools)
-    caps = set(governor.policy.allowed_capabilities)
+    tools = charter_policy.allowed_tools(governor.policy)
+    caps = charter_policy.allowed_capabilities(governor.policy)
     if not tools and not caps:
         return None
 
@@ -133,7 +134,7 @@ def harness_call_limits(governor) -> list:
     middleware = [ToolCallLimitMiddleware(tool_name=tool, run_limit=limit,
                                          exit_behavior="continue")
                   for tool, limit in governor.tool_call_caps().items()]
-    by_capability = governor.capability_call_caps()
+    by_capability = charter_policy.capability_call_caps(governor.policy)
     if by_capability:
         # Outermost, so a capability's budget is spent before any single tool's is.
         middleware.insert(0, _capability_limit_middleware(governor, by_capability))

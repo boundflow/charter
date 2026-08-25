@@ -17,16 +17,16 @@ from boundflow import (
     Cooldown,
     InvokeMode,
     Pause,
-    CapabilityCallLimit,
-    FileRule,
     RuntimePolicy,
     SetVersion,
     ToolCallLimit,
+    ToolFailureLimit,
     WorkflowConfig,
     WorkflowMetric,
     WorkflowRule,
 )
 
+from . import policy
 from .config.agent import AgentConfig
 from .config.lifecycle import BOUNDFLOW_METRIC, LifecyclePolicyFile
 from .config.loader import AgentBundle
@@ -99,24 +99,18 @@ def compile_runtime_policy(cfg: AgentConfig, runtime: RuntimePolicyFile) -> Runt
             ToolCallLimit(tool=l.tool, max_calls=l.max_calls)
             for l in per_run.tool_call_limits
         ],
-        # Declared here, enforced by the harness — which is the point. These are the
-        # rules an engineer would otherwise hard-code where the agent is built;
-        # policy arrives with the operation instead, and rolls back with it.
-        capability_call_limits=[
-            CapabilityCallLimit(capability=l.capability, max_calls=l.max_calls)
-            for l in per_run.capability_call_limits
+        # Every declared tool gets the same allowance. BoundFlow enforces this one,
+        # raising ToolFailureLimitExceeded — the standing backstop behind the
+        # per-operation Budget that carries the same number.
+        tool_failure_limits=[
+            ToolFailureLimit(tool=tool, max_failures=per_run.max_tool_failures)
+            for tool in (cfg.all_tools if per_run.max_tool_failures else [])
         ],
-        file_rules=[
-            FileRule(operations=list(r.operations), paths=list(r.paths), mode=r.mode)
-            for r in cfg.file_rules
-        ],
-        allowed_capabilities=list(cfg.allowed_capabilities),
-        # Declared MCP tools are always permitted, so the allowlist only ever has to
-        # name what the *harness* brings. Empty means no allowlist, not "nothing".
-        allowed_tools=cfg.all_tools if cfg.allowed_capabilities else [],
+        # Declared here, enforced by Charter and the harness it wires up — which is
+        # why it rides in `custom` rather than as a typed field. BoundFlow stores it
+        # and hands it back; nothing over there reads it. See charter/policy.py.
+        custom=policy.build(cfg, per_run),
     )
-    # NOTE: max_tool_failures has no BoundFlow equivalent — it becomes a
-    # tool_failure_limits Budget at the call itself, from task context.
 
 
 def compile_workflow_rules(lifecycle: LifecyclePolicyFile | None) -> list[WorkflowRule]:

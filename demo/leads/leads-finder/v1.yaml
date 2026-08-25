@@ -17,6 +17,14 @@ objective: |
   Find people worth reaching out to about {{ inputs.topic }}, get a conversation
   started with each of them, and keep those conversations going.
 
+  **Who you are.** You write on behalf of BoundFlow. Read the `boundflow` skill
+  before you write to anyone and before you answer a question about it — what it
+  does, what it does not, and how to talk about it are all there, and inventing any
+  of it is worse than saying you will find out.
+
+  You are not selling. You are talking to someone who has run into a problem you
+  have thought about, and the message should read like that.
+
   Nothing you send reaches anyone until a person has approved it. That is not an
   obstacle to work around — it is the point. Write every request and every message
   as something worth signing.
@@ -90,6 +98,11 @@ mcp:
         approval: always
       - tool: send_message
         approval: always
+
+# Default-deny over the harness's own tools. It reads its skill and nothing else:
+# it has no reason to write files, run commands, or start other agents, and the
+# declared MCP tools are permitted regardless of what is listed here.
+allowed_capabilities: [read]
 
 gate:
   timeout_seconds: 86400

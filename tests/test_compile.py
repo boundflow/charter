@@ -123,3 +123,59 @@ def test_schedule_becomes_repeat_and_triggerable():
 
 def test_no_schedule_means_no_repeat():
     assert refund().workflow_config.repeat_every_seconds == 0
+
+
+# ── the half BoundFlow carries but never reads ───────────────────────────────
+
+
+def test_charters_own_limits_ride_in_custom():
+    """BoundFlow's invariant: every typed field is enforced by its SDK, and nothing
+    in `custom` is enforced by anything. Capability caps, file rules and the
+    allowlists are enforced by Charter and the harness it wires up, so a typed
+    field for them over there would claim an enforcement that doesn't exist — and
+    would mean a control plane that knows what a deepagents capability is.
+    """
+    from charter import policy
+
+    custom = refund().runtime_policy.custom
+
+    assert policy.allowed_capabilities(refund().runtime_policy) == {"read"}
+    assert custom["capability_call_limits"], "declared caps should travel"
+    assert all({"capability", "max_calls"} == set(l) for l in
+               custom["capability_call_limits"])
+    # Plain JSON-able data, because the wire treats it as a struct — a model here
+    # would only be re-parsed by us on the far side.
+    assert isinstance(custom["allowed_capabilities"], list)
+
+
+def test_writing_and_reading_custom_cannot_drift():
+    """Both ends live in charter/policy.py for this reason: a key spelled one way
+    when written and another when read is a policy that silently stops applying,
+    and nothing anywhere fails."""
+    from charter import policy
+
+    compiled = refund().runtime_policy
+
+    assert policy.capability_call_caps(compiled), "written caps must read back"
+    assert policy.allowed_tools(compiled), "an allowlist implies the tool list"
+
+
+def test_the_tool_allowlist_only_appears_alongside_a_capability_one():
+    """Empty means "no allowlist", not "nothing permitted". Declared MCP tools are
+    always allowed, so the list only ever has to name what the harness brings —
+    and setting it without a capability allowlist would forbid everything."""
+    from charter import policy
+
+    summary = summarizer().runtime_policy   # declares no allowed_capabilities
+
+    assert policy.allowed_capabilities(summary) == set()
+    assert policy.allowed_tools(summary) == set()
+
+
+def test_a_failure_allowance_is_a_typed_field_because_boundflow_enforces_it():
+    """The one that moved the other way: tool_failure_limits raises
+    ToolFailureLimitExceeded in the SDK, so it belongs in the typed half."""
+    limits = refund().runtime_policy.tool_failure_limits
+
+    assert limits, "declared max_tool_failures should reach the policy"
+    assert all(l.max_failures == 3 for l in limits)

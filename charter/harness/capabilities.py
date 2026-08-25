@@ -30,6 +30,8 @@ for capping `execute`, not for distrusting the grouping.
 """
 from __future__ import annotations
 
+from .. import policy as charter_policy
+
 READ = "read"
 WRITE = "write"
 EXECUTE = "execute"
@@ -92,6 +94,6 @@ def file_permissions(policy) -> list:
     """
     from deepagents.middleware.filesystem import FilesystemPermission
 
-    return [FilesystemPermission(operations=list(rule.operations),
-                                 paths=list(rule.paths), mode=rule.mode)
-            for rule in policy.file_rules]
+    return [FilesystemPermission(operations=list(rule["operations"]),
+                                 paths=list(rule["paths"]), mode=rule["mode"])
+            for rule in charter_policy.file_rules(policy)]
