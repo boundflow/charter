@@ -4,8 +4,15 @@ kind: RuntimePolicy
 agent: leads-finder
 
 per_run:
-  # Checking on children costs a turn each, so this is searching plus starting
-  # plus a few rounds of looking in on them.
-  max_llm_calls: 20
-  max_cost_usd: 1.00
-  max_seconds: 3600
+  # One agent now runs the whole campaign, so this is the campaign's ceiling
+  # rather than one lead's. Most of the calls go on checking: every round of
+  # waiting costs a turn to look, whether or not anyone moved.
+  max_llm_calls: 80
+  max_cost_usd: 3.00
+  # Working time, not wall clock — the waiting doesn't count, so a campaign that
+  # runs for a week still only spends minutes of this.
+  max_seconds: 7200
+  max_tool_failures: 3
+
+limits:
+  max_tool_seconds: 30

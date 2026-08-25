@@ -3,43 +3,77 @@ kind: AgentConfig
 
 name: leads-finder
 version: 1
-description: Finds people worth talking to and hands each one to its own agent.
+description: Finds people worth talking to and runs the conversation with each of them, with you signing off everything that reaches a person.
 
 model: claude-haiku-4-5
 
 inputs:
   topic:
     type: string
+    required: true
     description: What kind of person to look for, e.g. agent-governance.
 
 objective: |
-  Find people worth reaching out to about {{ inputs.topic }}, and get a
-  conversation started with each of them.
+  Find people worth reaching out to about {{ inputs.topic }}, get a conversation
+  started with each of them, and keep those conversations going.
 
-  Search for people first. For each one worth contacting, start an `outreach`
-  agent and give it everything it needs in the description: who they are, their
-  id on the network, and the specific thing they said that makes them worth
-  writing to. Be concrete — that agent cannot see what you searched, only what
-  you tell it.
+  Nothing you send reaches anyone until a person has approved it. That is not an
+  obstacle to work around — it is the point. Write every request and every message
+  as something worth signing.
 
-  Each outreach runs on its own from then on: it connects, waits however long the
-  person takes to accept, gets a human to sign off the message, and keeps the
-  conversation. That takes far longer than you should sit here for. Start them
-  all, wait a little, check how they are getting on, and report. Do not wait for
-  every one to finish — some people never accept, and that is a normal outcome
-  rather than something to sit on.
+  When something is rejected, read the reason before doing anything. If it is a
+  question, answer it with ask_human and wait — do not re-propose the same thing
+  and hope. If it is a correction, make the correction. If it is a decision that
+  this person should not be contacted, leave them alone and say so in your report.
+  Re-sending an identical request after a rejection is the one thing never to do:
+  it turns someone's decision into a negotiation.
 
-  Report by calling submit_result. Writing the summary out as a message is not
-  reporting it — nobody is reading this conversation, and the run has no result
-  unless you fill in the fields.
+  **Finding them.** Search first, and contact at most three. Pick the three whose
+  problem you can speak to most specifically and leave the rest: a fourth message
+  written to a vaguer signal is worth less than three written to sharp ones. Say
+  which three you picked and why before you start contacting them.
 
-# Each lead gets its own instance, its own budget, and its own audit trail. This
-# is the only agent it may start.
-spawns:
-  - outreach
+  **Connecting.** Send each one a connection request with a short, specific note,
+  in their words rather than yours. One at a time — each is approved separately,
+  so give whoever is approving a reason to say yes to that particular person.
 
+  **Waiting.** People do not accept straight away, and checking twice in a row
+  tells you nothing. Wait, then check everyone at once. Waiting costs nothing and
+  holds nothing open; asking again immediately costs a turn and tells you what you
+  already knew. If someone has not accepted after several rounds, let them be —
+  some people never do, and that is a normal outcome rather than a failure.
+
+  **Messaging.** Once someone accepts, write them a first message: short, plainly
+  written, about the specific problem they described. No pitch. Send it, and a
+  person signs it off before it goes.
+
+  **Keeping the conversation.** This is the part that matters, and it does not
+  end. After each round of waiting, read every conversation. When someone has
+  replied, write a reply of your own and send it — approved like everything else.
+  Answer what they actually asked. If they asked a question you cannot answer, say
+  so plainly rather than talking around it.
+
+  Do not send a second message to someone who has not answered your first. An
+  unanswered message is not an invitation to follow up, it is someone who has not
+  got to it yet.
+
+  **Stopping.** Keep going while there is anything to wait for: someone who might
+  still accept, or a conversation that might still get a reply. Stop when every
+  person has either gone quiet or reached a natural end, and report what happened
+  with each of them. Report by calling submit_result — writing the summary out as
+  a message is not reporting it, and the run has no result unless you fill in the
+  fields.
+
+# Long, because most of it is spent waiting for people. Waiting is not charged as
+# working time, so this bounds the work rather than the wall clock.
 wait:
-  max: 30m
+  max: 6h
+
+# Without this the agent has no way to answer a question. An approver who rejects
+# with "why this person?" gets silence, and the agent — able only to act or not
+# act — re-proposes, which reads as ignoring them.
+ask_human:
+  timeout_seconds: 86400
 
 mcp:
   - name: net
@@ -48,21 +82,39 @@ mcp:
     tools:
       - tool: search_people
         on_failure: fail
+      - tool: connection_status
+      - tool: conversation
+      # Everything that reaches a person stops for one. The note on a connection
+      # request is as public as the message that follows it.
+      - tool: send_connection_request
+        approval: always
+      - tool: send_message
+        approval: always
+
+gate:
+  timeout_seconds: 86400
+  # An unapproved message simply doesn't go. The rest of the campaign carries on:
+  # one lead you decided against is not a reason to abandon the others.
+  on_reject: continue
 
 response_format:
-  started:
+  contacted:
     type: array
-    description: One entry per outreach agent started.
+    description: One entry per person you contacted.
     items:
       type: object
       properties:
         person:
           type: string
-        task_id:
+        outcome:
           type: string
-        status:
+          description: connected | never_accepted | not_approved
+        exchanged:
+          type: integer
+          description: How many messages went each way.
+        last_reply:
           type: string
-          description: How it was doing when you last checked.
+          description: The last thing they said, if anything.
   summary:
     type: string
-    description: What you found and what is now in flight.
+    description: What happened across the campaign, and what is worth doing next.

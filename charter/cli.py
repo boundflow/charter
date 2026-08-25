@@ -873,12 +873,14 @@ def tasks(agent: str = typer.Argument(...),
             if not runs:
                 ui.dim(f"no matching tasks ({total} total)")
                 return
+            reasons = await _reasons(cp, shown)
             ui.table(["task", "outcome", "started", "took"],
                      [[r.request_id,
                        ui.state((r.run_outcome or r.status).value),
                        r.created_at.strftime("%m-%d %H:%M") if r.created_at else "",
                        _took(r.created_at, r.completed_at)] for r in shown],
-                     notes=[_first_line(r.failure_reason) for r in shown])
+                     notes=[_first_line(reasons.get(r.request_id, r.failure_reason))
+                            for r in shown])
             if len(shown) < len(runs):
                 ui.dim(f"  {len(shown)} of {len(runs)} matching ({total} total) — -n 0 for all")
 
@@ -959,6 +961,34 @@ def _took(started, finished) -> str:
     if not (started and finished):
         return ""
     return _duration(int((finished - started).total_seconds()))
+
+
+async def _reasons(cp, runs: list) -> dict[str, str]:
+    """Why each failed run failed, for the ones that don't say so themselves.
+
+    `failure_reason` is the control plane's field, and it carries platform
+    failures — a timeout, a worker that died. A task Charter itself marked failed
+    publishes its reason in the result instead, so that column comes back empty
+    for exactly the failures Charter is responsible for explaining. Reading the
+    result is the only way to get it.
+
+    One extra call per failed run, and only for the rows about to be printed: a
+    healthy history costs nothing, and a broken one is worth a few round trips to
+    avoid sending someone off to run `charter status` by hand.
+    """
+    out: dict[str, str] = {}
+    for run in runs:
+        outcome = (run.run_outcome.value if run.run_outcome else "")
+        if run.failure_reason or "fail" not in outcome:
+            continue
+        try:
+            info = await cp.get_request_info(run.request_id)
+        except Exception:  # noqa: BLE001 — a listing must not die explaining itself
+            continue
+        reason = (info.result or {}).get("reason")
+        if reason:
+            out[run.request_id] = reason
+    return out
 
 
 def _first_line(reason: str) -> str:
@@ -1321,13 +1351,120 @@ def audit(
 
 
 @app.command()
+def pause(
+    agent: str = typer.Argument(...),
+    tenant: str = TENANT,
+    instance: str = INSTANCE,
+    now: bool = typer.Option(False, "--now", help="Stop the run in flight too"),
+    reason: str = typer.Option("", "--reason", help="Recorded on the hold"),
+) -> None:
+    """Stop an agent taking new work, and hold what is queued.
+
+    The hold is an operator's, not a rule's: nothing about the agent's config or
+    its lifecycle policy changes, and `charter resume` puts it back exactly as it
+    was. Queued tasks are kept, not dropped — see `charter abandon` for that, which
+    is a separate command because it cannot be undone.
+
+    By default a task already running is left to finish, which is usually what you
+    want: it may be mid-conversation, and killing it loses that turn. `--now` asks
+    for it to stop instead, which is best-effort — a run that finishes first
+    finishes.
+    """
+    async def go():
+        async with _cp() as cp:
+            wf = await _workflow_for(cp, agent, tenant, instance, verb="pause")
+            if wf is None:
+                _err(f"{agent!r} has not been applied yet")
+                raise typer.Exit(1)
+
+            full = await cp.get_workflow(wf.id)
+            if full.suspension is not None:
+                ui.dim(f"{agent} is already paused")
+                ui.detail(f"reason: {full.suspension.reason or 'none given'}")
+                return
+
+            await cp.suspend_workflow(wf.id, reason=reason, stop_current_run=now)
+            _ok(f"{ui.ref('agent', agent)} paused")
+            if full.lifecycle_state.value in ("awaiting_approval", "awaiting_input"):
+                # Worth saying now rather than letting it be discovered at resume:
+                # a task parked on a human holds the suspension open indefinitely,
+                # and `--now` does not help, because there is no run to stop.
+                _warn("a task is waiting on you, and the hold can't be released "
+                      "until it's answered")
+                ui.detail(f"charter pending {agent} --instance {short(wf.id)}")
+                return
+            # The hold is recorded immediately; a run in flight drains behind it,
+            # and until that finishes the workflow cannot be resumed. Saying so
+            # here is the difference between "wait a moment" and "resume is broken".
+            ui.detail("the run in flight is being stopped" if now
+                      else "a run already in flight will finish first")
+            ui.detail(f"charter resume {agent}")
+
+    asyncio.run(go())
+
+
+@app.command()
+def abandon(
+    agent: str = typer.Argument(...),
+    tenant: str = TENANT,
+    instance: str = INSTANCE,
+    task: str = typer.Option(None, "--task", help="One queued task id"),
+    all_: bool = typer.Option(False, "--all", help="Every queued task"),
+    yes: bool = typer.Option(False, "--yes", help="Skip the confirmation"),
+) -> None:
+    """Drop queued tasks that have not started. Cannot be undone.
+
+    Only ever touches work that is still waiting: a task already running or
+    scheduled is left alone, so this is safe to call at any moment. Which is also
+    why the count it reports can be lower than what you asked for — anything that
+    started in between stayed.
+
+    Separate from `charter pause` on purpose. Pausing is reversible and abandoning
+    is not, and one flag away from each other is too close for a thing you cannot
+    take back.
+    """
+    if not task and not all_:
+        _err("say which — --task <id>, or --all")
+        raise typer.Exit(1)
+
+    async def go():
+        async with _cp() as cp:
+            wf = await _workflow_for(cp, agent, tenant, instance, verb="abandon work for")
+            if wf is None:
+                _err(f"{agent!r} has not been applied yet")
+                raise typer.Exit(1)
+
+            if not yes:
+                what = "every queued task" if all_ else f"task {short(task)}"
+                typer.confirm(f"abandon {what} for {agent}? this cannot be undone",
+                              abort=True)
+
+            dropped = await cp.abandon_queued_requests(
+                wf.id, request_ids=None if all_ else [task], all=all_)
+            if not dropped:
+                ui.dim("nothing was queued — anything running or scheduled is "
+                       "untouched by this")
+                return
+            _ok(f"abandoned {len(dropped)} queued task(s)")
+            for request_id in dropped:
+                ui.detail(short(request_id))
+
+    asyncio.run(go())
+
+
+@app.command()
 def resume(
     agent: str = typer.Argument(...),
     tenant: str = TENANT,
     instance: str = INSTANCE,
 ) -> None:
-    """Release an agent a lifecycle rule paused. Without this a `pause` rule is a
-    one-way door."""
+    """Let an agent take work again, whatever stopped it.
+
+    Two different things stop an agent and they are released differently: a
+    lifecycle rule pausing it after too many failures, and an operator holding it
+    with `charter pause`. Which one it was is not the caller's problem — this is
+    the verb for "run again" either way.
+    """
     async def go():
         async with _cp() as cp:
             wf = await _workflow_for(cp, agent, tenant, instance)
@@ -1336,6 +1473,34 @@ def resume(
                 raise typer.Exit(1)
             wf = await cp.get_workflow(wf.id)
             state = wf.workflow_state.value
+
+            # An operator hold first: it outranks whatever the lifecycle policy
+            # thinks, and releasing it restores the state the policy calls for
+            # anyway — so activating underneath one would be both wrong and
+            # pointless.
+            if wf.suspension is not None:
+                if wf.suspension.finalized_at is None:
+                    # Two very different reasons it hasn't finalized, and only one
+                    # of them resolves by waiting. A task parked on a human never
+                    # drains on its own, so "try again in a moment" would be advice
+                    # that can't come true.
+                    if wf.lifecycle_state.value in ("awaiting_approval",
+                                                    "awaiting_input"):
+                        _warn(f"{agent} is paused, but a task is still waiting on "
+                              f"you — that has to be answered before the hold can "
+                              f"be released")
+                        ui.detail(f"charter pending {agent} --instance {short(wf.id)}")
+                    else:
+                        _warn(f"{agent} is still finishing the task it was on")
+                        ui.detail("the hold is recorded; it can be released once "
+                                  "that run drains — try again in a moment")
+                    raise typer.Exit(1)
+                await cp.resume_workflow(wf.id, wf.suspension.suspension_id)
+                held = wf.suspension.reason
+                _ok(f"{ui.ref('agent', agent)} released"
+                    + (f"  (held: {held})" if held else ""))
+                ui.detail("anything queued while it was paused runs now")
+                return
 
             if state == "active":
                 ui.dim(f"{agent} is already active")

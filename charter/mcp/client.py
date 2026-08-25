@@ -82,6 +82,116 @@ def _connection(spec: McpServer) -> dict:
     return {"transport": "streamable_http", "url": spec.url}
 
 
+def _leaves(e: BaseException) -> list[str]:
+    """Every real exception inside a group, flattened.
+
+    The stdio transport fails inside a TaskGroup, and `str()` on one of those is
+    "unhandled errors in a TaskGroup (1 sub-exception)" no matter what actually
+    went wrong. The causes are in `.exceptions`, sometimes nested, so this walks
+    down to the leaves. Duck-typed rather than `isinstance(e, BaseExceptionGroup)`
+    so it still works on 3.10, which has no such builtin.
+    """
+    inner = getattr(e, "exceptions", None)
+    if not inner:
+        return [f"{type(e).__name__}: {e}"]
+    return [leaf for sub in inner for leaf in _leaves(sub)]
+
+
+@dataclass
+class Startup:
+    """Why a declared server didn't come up, in a shape an operator can act on.
+
+    Three parts, deliberately: a `code` that is stable enough to search for and
+    to branch on, the process's own words kept `verbatim`, and a `hint` naming
+    the next thing to try.
+
+    The codes are decided by *how* it failed rather than by what it printed —
+    exec refused, nothing spoke in time, it exited. Reading stderr to guess at a
+    category is the kind of string-matching that goes quietly wrong on the day a
+    dependency changes its wording, and the raw text is carried anyway, so
+    guessing buys nothing.
+    """
+
+    code: str
+    verbatim: str
+    hint: str
+
+
+def _ran(spec: McpServer) -> str:
+    return " ".join([spec.command, *spec.args])
+
+
+async def _startup(spec: McpServer, seconds: float = 5.0) -> Startup:
+    """Run a stdio server on its own and find out what stopped it.
+
+    The transport never surfaces this. It reports `Connection closed`, because
+    from its side that is all that happened — the process exited before speaking
+    the protocol. Whatever explains it went to the subprocess's stderr, which the
+    adapter hands to the worker's own stderr and nobody keeps.
+
+    So on the failure path only, start the thing ourselves and read it.
+    """
+    env = {**os.environ, **{n: os.environ[n] for n in spec.env if n in os.environ}}
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            spec.command, *spec.args,
+            stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE, env=env)
+    except FileNotFoundError:
+        return Startup(
+            "command_not_found", f"no {spec.command!r} on PATH",
+            f"the worker runs `{_ran(spec)}` from its own working directory, with "
+            f"its own PATH — check both are what you expect")
+    except Exception as e:  # noqa: BLE001 — diagnosing must not raise
+        return Startup("command_not_runnable", f"{type(e).__name__}: {e}",
+                       f"the worker could not execute `{spec.command}`")
+
+    try:
+        _, err = await asyncio.wait_for(proc.communicate(), timeout=seconds)
+    except TimeoutError:
+        proc.kill()
+        return Startup(
+            "no_handshake", f"still running after {seconds:g}s, having said nothing",
+            f"`{_ran(spec)}` started but never spoke MCP — check it is an MCP "
+            f"server and that it uses stdio rather than http")
+    finally:
+        if proc.returncode is None:
+            proc.kill()
+
+    text = (err or b"").decode("utf-8", "replace").strip()
+    if not text:
+        return Startup(
+            "exited_silently", f"exited with code {proc.returncode}, saying nothing",
+            f"run `{_ran(spec)}` yourself — it fails the same way outside Charter")
+    # Its last line names the failure; everything above is traceback.
+    return Startup(
+        "startup_failed", text.splitlines()[-1].strip(),
+        f"run `{_ran(spec)}` yourself to see all of it. A server that imports "
+        f"fine for you and not for the worker is usually a different interpreter")
+
+
+async def _why_it_failed(spec: McpServer, e: Exception) -> str:
+    """The most useful thing available about why a server didn't connect.
+
+    An operator should not have to go and find the worker's console to learn that
+    a package is missing.
+    """
+    transport = "; ".join(_leaves(e)) or str(e)
+    if not spec.command:
+        return (f"mcp server {spec.name!r} is unreachable [unreachable]\n"
+                f"  it said: {transport}\n"
+                f"  url:     {spec.url}\n"
+                f"  try:     check the server is up and the url is reachable "
+                f"from the worker")
+
+    found = await _startup(spec)
+    return (f"mcp server {spec.name!r} would not start [{found.code}]\n"
+            f"  it said: {found.verbatim}\n"
+            f"  running: {_ran(spec)}\n"
+            f"  try:     {found.hint}\n"
+            f"  (transport reported: {transport})")
+
+
 @dataclass
 class Server:
     """One declared server, once its tools are loaded."""
@@ -170,7 +280,7 @@ class ToolSet:
             try:
                 tools = await self._client.get_tools(server_name=spec.name)
             except Exception as e:
-                raise QuarantineError(f"mcp server {spec.name!r}: {e}") from e
+                raise QuarantineError(await _why_it_failed(spec, e)) from e
             out[spec.name] = {t.name: t for t in tools}
         return out
 

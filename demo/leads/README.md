@@ -6,24 +6,25 @@ the durability that implies. No LinkedIn: `network.py` is a fake professional
 network with SQLite behind it, so the whole thing runs locally with nothing at
 stake and nobody real on the other end.
 
-It is two agents and a config file. There is no pipeline code.
+It is one agent and a config file. There is no pipeline code.
 
 ## What it exercises
 
-    leads-finder                        outreach (one instance per person)
-    ─────────────                       ──────────────────────────────────
-    search_people                       send_connection_request   ← human signs off
-    start_async_task  ×N  ──────────▶   wait ... connection_status
-    wait                                send_message              ← human signs off
-    check_async_task                    wait ... conversation
-    submit_result                       submit_result
+One agent runs the whole campaign:
 
-Every lead gets its own instance: its own budget, its own lifecycle policy, its
-own audit trail. They run at the same time, they outlive the run that started
-them, and each one parks between checks rather than holding a worker open.
+    search_people
+    send_connection_request   ← you approve each one, with its note
+    wait ... connection_status
+    send_message              ← you approve each one, with its text
+    wait ... conversation
+    send_message (a reply)    ← you approve that too
+    ... and round again while anyone might still answer
 
-Not everyone accepts. `dana` never will, so there is always a branch where an
-agent waits, gives up, and reports that as a normal outcome rather than a failure.
+Everything that reaches a person stops for you. Everything else runs on its own.
+
+The waiting is real: `inbox.py` is where you play the people being contacted, so
+someone accepts when you accept and replies when you write a reply. Nothing moves
+on a timer, which is the only way to see an agent genuinely wait on a person.
 
 ## Running it
 
@@ -40,32 +41,33 @@ Create the instances, then start the worker from this directory — the MCP serv
 is spawned as a subprocess relative to wherever the worker runs:
 
     charter agent create leads-finder --path demo/leads
-    charter agent create outreach     --path demo/leads
     charter apply demo/leads/worker.yaml --all
 
     cd demo/leads && charter worker .
 
 Both gated tools stop for a human, and nothing here routes a notification, so run
-the console in another terminal or the agents will sit at their gates until they
-time out:
+the approval console in a second terminal or the agent sits at its first gate
+until it times out:
 
     python demo/leads/approve.py            # read each one, decide
     python demo/leads/approve.py --auto     # approve everything, hands-off
+
+And the inbox in a third, which is you as the people being contacted:
+
+    python demo/leads/inbox.py
 
 Then, from the repo root:
 
     charter run leads-finder --path demo/leads --topic agent-governance
 
-Watch it: `charter agents` shows an outreach instance appear per lead. The
-conversation is in `network.db` — delete it to start over.
+The conversation is in `network.db` — delete it to start over.
 
 ## Timing
 
-`network.py` accepts connection requests 20s after they're sent and replies 15s
-after a message, so a run takes a couple of minutes rather than a couple of days.
-Both are env vars (`NETWORK_ACCEPT_SECONDS`, `NETWORK_REPLY_SECONDS`).
+Nothing here is on a clock. The agent waits, and someone accepts or replies when
+you do it in `inbox.py`. If you want to see it give up on someone, just never
+accept them.
 
-The agents know this, because `outreach`'s objective tells them people here move
-fast. That is not a fudge — it is the config carrying a fact about the world the
-agent is in. Told nothing, the same agents waited the full 30 minutes their policy
-allowed, which is correct for a real network and unwatchable for a demo.
+The agent doesn't know any of that. It calls `connection_status` and
+`conversation` and gets whatever is true, which is exactly what it would do
+against a real network.

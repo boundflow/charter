@@ -6,18 +6,20 @@ run that started it — with nobody real on the other end.
 
     python demo/leads/network.py     # the worker spawns this itself
 
-Two things here are deliberately not instant, because they are the reason this
-pipeline is interesting. Connection requests are accepted a while after they're
-sent, so an agent has to park and come back rather than poll in a loop. And not
-everyone accepts: `dana` never will, so there is always one branch where the
-agent has to give up gracefully instead of waiting forever.
+Nobody here answers on a timer. You are the other side: `inbox.py` is where you
+accept a connection request or write a reply, and until you do, the agent is
+genuinely waiting on a person. That is the whole point of the pipeline, and a
+canned reply after twenty seconds doesn't exercise it.
 
-State lives in SQLite next to this file rather than in memory, because the parent
-and each outreach agent are separate processes, and a conversation is supposed to
-survive all of them. Delete network.db to start over.
+The agent's view is unchanged either way. It calls `connection_status` and
+`conversation` and gets whatever is true, with no idea a human is typing the
+other half.
+
+State lives in SQLite next to this file rather than in memory, because the server,
+the worker and your inbox are separate processes and a conversation is supposed to
+outlive all of them. Delete network.db to start over.
 """
 
-import os
 import sqlite3
 import time
 from pathlib import Path
@@ -31,10 +33,6 @@ MUTATES = ToolAnnotations(readOnlyHint=False, destructiveHint=False)
 mcp = FastMCP("network")
 
 DB = Path(__file__).parent / "network.db"
-# Short enough to watch, long enough that the agent genuinely has to wait. A real
-# one would be days, which is the same code with a bigger number.
-ACCEPT_AFTER = float(os.environ.get("NETWORK_ACCEPT_SECONDS", "20"))
-REPLY_AFTER = float(os.environ.get("NETWORK_REPLY_SECONDS", "15"))
 
 PEOPLE = [
     ("ade", "Ade Okonkwo", "Staff engineer, fintech",
@@ -65,9 +63,11 @@ def db() -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.executescript("""
         CREATE TABLE IF NOT EXISTS connections (
-            person_id   TEXT PRIMARY KEY,
-            note        TEXT NOT NULL,
-            requested_at REAL NOT NULL
+            person_id    TEXT PRIMARY KEY,
+            note         TEXT NOT NULL,
+            requested_at REAL NOT NULL,
+            -- NULL until you accept in inbox.py. Nothing sets this on a timer.
+            accepted_at  REAL
         );
         CREATE TABLE IF NOT EXISTS messages (
             id        INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -127,22 +127,20 @@ def send_connection_request(person_id: str, note: str) -> str:
 def connection_status(person_id: str) -> str:
     """Whether someone has accepted your request yet.
 
-    Nobody accepts instantly, and some people never do. Both are normal.
+    Nobody accepts instantly, and some people never do. Both are normal, and
+    checking again straight away tells you nothing new.
     """
     who = person(person_id)
     conn = db()
-    row = conn.execute("SELECT requested_at FROM connections WHERE person_id = ?",
-                       (person_id,)).fetchone()
+    row = conn.execute(
+        "SELECT requested_at, accepted_at FROM connections WHERE person_id = ?",
+        (person_id,)).fetchone()
     if row is None:
         return f"No request has been sent to {who['name']}."
-    waited = time.time() - row["requested_at"]
-    if person_id == "dana":
-        # Someone has to not accept, or the happy path is the only path tested.
-        return (f"{who['name']} has not accepted ({int(waited)}s so far). Some "
-                f"people never do.")
-    if waited < ACCEPT_AFTER:
-        return (f"{who['name']} has not accepted yet ({int(waited)}s so far). "
-                f"Give it longer.")
+    waited = int(time.time() - row["requested_at"])
+    if row["accepted_at"] is None:
+        return (f"{who['name']} has not accepted yet ({waited}s since you asked). "
+                f"Some people take days, and some never do.")
     return f"{who['name']} accepted your request. You can message them now."
 
 
@@ -151,11 +149,12 @@ def send_message(person_id: str, text: str) -> str:
     """Message someone who has accepted. This is the one a human signs off."""
     who = person(person_id)
     conn = db()
-    row = conn.execute("SELECT requested_at FROM connections WHERE person_id = ?",
-                       (person_id,)).fetchone()
+    row = conn.execute(
+        "SELECT accepted_at FROM connections WHERE person_id = ?",
+        (person_id,)).fetchone()
     if row is None:
         raise ValueError(f"not connected to {who['name']} — send a request first")
-    if person_id == "dana" or time.time() - row["requested_at"] < ACCEPT_AFTER:
+    if row["accepted_at"] is None:
         raise ValueError(f"{who['name']} has not accepted yet — cannot message")
     with conn:
         conn.execute(
@@ -168,49 +167,21 @@ def send_message(person_id: str, text: str) -> str:
 def conversation(person_id: str) -> str:
     """The whole thread with someone, oldest first.
 
-    Replies arrive a little after you write, so a reply is another thing worth
-    coming back for rather than waiting on.
+    A reply appears when they write one, which may be a while and may be never.
+    An unanswered message is not a failure and it is not a reason to send another.
     """
     who = person(person_id)
-    conn = db()
-    sent = conn.execute(
-        "SELECT text, at FROM messages WHERE person_id = ? AND direction = 'sent' "
-        "ORDER BY at", (person_id,)).fetchall()
-    if not sent:
+    rows = db().execute(
+        "SELECT direction, text FROM messages WHERE person_id = ? ORDER BY at, id",
+        (person_id,)).fetchall()
+    if not rows:
         return f"No messages with {who['name']} yet."
-    lines = []
-    for row in sent:
-        lines.append(f"you: {row['text']}")
-        if time.time() - row["at"] >= REPLY_AFTER:
-            reply = _reply(person_id)
-            _record_reply(conn, person_id, reply)
-            lines.append(f"{who['name']}: {reply}")
+
+    lines = [f"{'you' if r['direction'] == 'sent' else who['name']}: {r['text']}"
+             for r in rows]
+    if rows[-1]["direction"] == "sent":
+        lines.append(f"({who['name']} has not replied to that yet.)")
     return "\n".join(lines)
-
-
-def _reply(person_id: str) -> str:
-    return {
-        "ade": ("That's exactly it — the retries were the part nobody saw. How do "
-                "you bound spend without wrapping every tool yourself?"),
-        "mira": ("Yes. I ended up forking the graph to add an approval node and "
-                 "now I can't upgrade. Is there a version where that's config?"),
-        "tomasz": ("The orphaned subagent thing cost us a weekend. Interested if "
-                   "you can actually stop one mid-run."),
-        "priya": ("We'd need the approval trail exportable for audit. Does that "
-                  "come out of the box?"),
-    }.get(person_id, "Thanks for reaching out.")
-
-
-def _record_reply(conn, person_id: str, reply: str) -> None:
-    already = conn.execute(
-        "SELECT 1 FROM messages WHERE person_id = ? AND direction = 'received'",
-        (person_id,)).fetchone()
-    if already:
-        return
-    with conn:
-        conn.execute(
-            "INSERT INTO messages (person_id, direction, text, at) VALUES (?,?,?,?)",
-            (person_id, "received", reply, time.time()))
 
 
 if __name__ == "__main__":

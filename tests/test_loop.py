@@ -51,8 +51,13 @@ class FakeResult:
 class FakeCtx:
     """Just enough OperationContext for the loop."""
 
+    # The example agent's objective references these, and a task that doesn't
+    # supply them now fails before the harness opens — correctly, but it isn't
+    # what any of these tests are about, so every context starts with them filled.
+    INPUTS = {"ticket_id": "4821", "max_refund_usd": 500}
+
     def __init__(self, context=None, results=None, approval_reason=None):
-        self.context = context if context is not None else {}
+        self.context = {**self.INPUTS, **(context or {})}
         self._results = list(results or [])
         self.budgets = []
         self.failed = False
@@ -355,8 +360,11 @@ class TestAskHuman:
         read as precision that isn't there."""
         _, loop = loop_for()
         loop.cfg = self._cfg("eagerly")
-        prompt = loop._prompt(FakeCtx())
-        assert loop.cfg.objective.split("\n")[0] in prompt
+        ctx = FakeCtx()
+        prompt = loop._prompt(ctx)
+        # The rendered line, not the raw one: the objective references an input, so
+        # comparing against the template only passes while substitution is broken.
+        assert render(loop.cfg.objective, ctx.context).split("\n")[0] in prompt
         assert "When in doubt, ask" in prompt
 
     def test_a_question_parks_for_an_answer_not_a_verdict(self):
@@ -725,3 +733,62 @@ async def test_an_agent_with_no_declared_shape_publishes_its_prose():
     result = await _published(loop, {"messages": [Msg()], "files": {}})
 
     assert result.result == {"answer": "Nothing needs attention today."}
+
+
+# ── inputs the task was never given ──────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_a_missing_input_fails_before_the_harness_opens():
+    """An agent handed `{{ inputs.topic }}` doesn't notice it's a placeholder.
+
+    It reads the unsubstituted template as part of its instructions and asks
+    whoever isn't there to supply the value — burning calls and ending in a
+    failure that names the wrong thing ("stopped without calling submit_result").
+    Caught here it costs nothing and says what to run.
+    """
+    _, loop = loop_for()
+    ctx = FakeCtx()
+    ctx.context = {}          # nothing supplied, unlike the fixture default
+
+    out = await loop.entry(ctx)
+
+    assert isinstance(out, Complete)
+    assert out.result["failed"] is True
+    assert "ticket_id" in out.result["reason"]
+    assert "charter run refund-triage" in out.result["reason"], (
+        "the reason should be the command to run, not a description of one")
+
+
+@pytest.mark.asyncio
+async def test_an_input_the_objective_never_mentions_is_not_demanded():
+    """Only what the objective actually references. A declared input the prompt
+    doesn't use is the author's business, not a reason to refuse the task."""
+    _, loop = loop_for()
+    ctx = FakeCtx()
+    ctx.context = {"ticket_id": "4821"}   # max_refund_usd left out
+
+    missing = loop._unfilled(ctx)
+
+    assert "ticket_id" not in missing
+    if "max_refund_usd" in missing:
+        assert "{{ inputs.max_refund_usd }}" in loop.cfg.objective, (
+            "only demanded because the objective references it")
+
+
+@pytest.mark.asyncio
+async def test_a_declared_default_reaches_the_prompt_however_the_task_arrived():
+    """Defaults used to be applied by `charter run` alone, so a task invoked any
+    other way — a schedule, another service calling invoke_workflow — rendered the
+    objective with a literal `{{ inputs.x }}` in it. The agent then reads the
+    placeholder as an instruction, which is the failure this whole guard exists to
+    stop."""
+    _, loop = loop_for()
+    ctx = FakeCtx()
+    ctx.context = {"ticket_id": "4821"}      # the optional one left out entirely
+
+    prompt = loop._prompt(ctx)
+
+    assert "{{ inputs." not in prompt, "a placeholder survived into the prompt"
+    assert "100" in prompt, "the declared default should be what filled it"
+    assert loop._unfilled(ctx) == [], "a default is a value, not a missing input"

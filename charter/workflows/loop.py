@@ -392,6 +392,14 @@ class Loop:
         """
         from deepagents import create_deep_agent
 
+        if missing := self._unfilled(ctx):
+            # Before the harness opens and before a single call is spent. An agent
+            # handed `{{ inputs.topic }}` doesn't fail — it reads the placeholder as
+            # part of its instructions and asks whoever isn't there what the topic
+            # is, which costs money and ends in a failure that names the wrong
+            # thing.
+            return await self._fail(ctx, self._ask_for(missing))
+
         # Built here rather than when the gate was raised, because the approver's
         # reason doesn't exist yet at that point — and a rejection the agent can't
         # read the reason for is the least useful kind. A timeout lands on the same
@@ -566,6 +574,41 @@ class Loop:
         through `async_tasks`, which is per-thread already."""
         return self.spawner
 
+    def _inputs(self, ctx) -> dict:
+        """What the task was given, with declared defaults filled in.
+
+        Defaults belong here rather than only in `charter run`, because a task can
+        arrive from anywhere — the CLI, a schedule, another service invoking the
+        workflow directly. Applied only in the CLI, an optional input renders as a
+        literal `{{ inputs.x }}` for every caller that isn't a person typing flags.
+        """
+        defaults = {name: spec.default for name, spec in self.cfg.inputs.items()
+                    if spec.default is not None}
+        return {**defaults, **ctx.context}
+
+    def _unfilled(self, ctx) -> list[str]:
+        """Inputs the objective references that this task has no value for.
+
+        A declared default counts as a value; only what nobody can supply is
+        missing.
+        """
+        have = self._inputs(ctx)
+        return [name for name in self.cfg.inputs
+                if name not in have
+                and (f"{{{{ inputs.{name} }}}}" in self.cfg.objective
+                     or f"{{{{inputs.{name}}}}}" in self.cfg.objective)]
+
+    def _ask_for(self, missing: list[str]) -> str:
+        """A reason that says what to do about it.
+
+        The agent's name and its flags are both here, so the message can be the
+        command to run rather than a description of one.
+        """
+        flags = " ".join(f"--{name} <value>" for name in missing)
+        which = ", ".join(missing)
+        return (f"{which} was not given, and the objective needs it. "
+                f"Run: charter run {self.cfg.name} {flags}")
+
     def _prompt(self, ctx) -> str:
         """The objective, plus how readily this agent should interrupt you.
 
@@ -576,7 +619,7 @@ class Loop:
         parts = [self.cfg.objective]
         if self.cfg.ask_human is not None:
             parts.append(self.cfg.ask_human.guidance)
-        return render("\n\n".join(parts), ctx.context)
+        return render("\n\n".join(parts), self._inputs(ctx))
 
     def _fail_fast(self, result) -> str | None:
         """The first declared fail-fast tool that failed this round, if any.

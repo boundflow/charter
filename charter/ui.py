@@ -94,7 +94,7 @@ def kv(pairs: list[tuple[str, object]], indent: str = "") -> None:
 #
 # A paused agent can sit at lifecycle_state "active", so showing only that would
 # report a stopped agent as healthy.
-STOPPED = {"paused", "disabled"}
+STOPPED = {"paused", "disabled", "suspended"}
 NEEDS_ATTENTION = {"awaiting_approval", "awaiting_input", "blocked", "failed",
                    "interrupted", "cooldown"}
 

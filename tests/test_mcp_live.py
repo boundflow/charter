@@ -184,3 +184,57 @@ def test_no_timeout_configured_leaves_the_tool_alone():
         return str(await ts.langchain_tools()[0].ainvoke({"ticket_id": "42"}))
 
     assert "customer wants a refund" in run(go())
+
+
+def test_a_server_that_cannot_start_says_why_not_just_that_it_failed():
+    """The transport reports `Connection closed`, because from its side that is all
+    that happened — the process died before speaking MCP. Whatever explains it went
+    to the subprocess's stderr, which the adapter hands to the worker's own stderr
+    and nobody keeps.
+
+    Found the hard way: a task failed with "mcp server 'net': unhandled errors in a
+    TaskGroup (1 sub-exception)", and the real cause — a `python` on PATH without
+    `mcp` installed — appeared nowhere an operator would look.
+    """
+    from charter.mcp.client import _startup
+    from charter.config.agent import McpServer, ToolSpec
+
+    spec = McpServer(name="broken_one", command=sys.executable,
+                     args=["-c", "import nonexistent_module_xyz"],
+                     tools=[ToolSpec(tool="t")])
+
+    found = run(_startup(spec, seconds=10))
+
+    assert found.code == "startup_failed"
+    assert "nonexistent_module_xyz" in found.verbatim, (
+        "the process's own words, not a paraphrase")
+    assert found.hint, "a code and a cause without a next step is half a message"
+
+
+def test_a_missing_command_is_told_apart_from_a_crashing_one():
+    """Structural, not by reading stderr. Which failure it was is knowable from how
+    it failed — exec refused, versus a process that ran and died — and guessing
+    from output text is what goes quietly wrong when wording changes."""
+    from charter.mcp.client import _startup
+    from charter.config.agent import McpServer, ToolSpec
+
+    spec = McpServer(name="absent_one", command="charter-no-such-binary",
+                     args=[], tools=[ToolSpec(tool="t")])
+
+    found = run(_startup(spec, seconds=5))
+
+    assert found.code == "command_not_found"
+    assert "PATH" in found.hint, "the fix is almost always PATH or cwd"
+
+
+def test_a_task_group_error_is_flattened_to_its_causes():
+    """`str()` on an ExceptionGroup is the same sentence whatever went wrong."""
+    from charter.mcp.client import _leaves
+
+    inner = ValueError("the actual problem")
+    try:
+        raise ExceptionGroup("unhandled errors in a TaskGroup", [inner])
+    except ExceptionGroup as e:
+        leaves = _leaves(e)
+
+    assert leaves == ["ValueError: the actual problem"]
