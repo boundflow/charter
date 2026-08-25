@@ -266,28 +266,36 @@ def test_a_hyphenated_tool_name_is_allowed():
 # ── spawning ────────────────────────────────────────────────────────────────
 
 
-def test_spawns_defaults_to_none_allowed():
+def policy_with(**authority):
+    from charter.config.runtime import RuntimePolicyFile
+    return RuntimePolicyFile.model_validate({
+        "apiVersion": "charter/v1", "kind": "RuntimePolicy",
+        "agent": "leads-finder", "per_run": {"max_llm_calls": 5},
+        "authority": authority})
+
+
+def test_spawning_defaults_to_none_allowed():
     """Silence forbids here, unlike `allowed_capabilities` where it permits. A
     child is a governed unit with a budget of its own, so the risk of a default
     runs the other way."""
-    assert AgentConfig.model_validate(load()).spawns == []
+    assert policy_with().authority.allowed_spawns == []
 
 
 def test_an_agent_cannot_spawn_itself():
     """Each child gets a fresh budget, so the parent's ceiling doesn't bound the
-    recursion — the config is the only place this can be caught."""
+    recursion — policy is the only place it can be caught."""
     with pytest.raises(ValidationError, match="itself"):
-        AgentConfig.model_validate(load(spawns=["refund-triage"]))
+        policy_with(allowed_spawns=["leads-finder"])
 
 
 def test_spawns_rejects_duplicates():
     with pytest.raises(ValidationError, match="same agent twice"):
-        AgentConfig.model_validate(load(spawns=["outreach", "outreach"]))
+        policy_with(allowed_spawns=["outreach", "outreach"])
 
 
 def test_starting_a_child_can_be_gated():
-    """Spawning commits money nobody has approved, so it belongs in the same
-    vocabulary as the other harness tools an operator can put a signature on."""
-    cfg = AgentConfig.model_validate(
-        load(spawns=["outreach"], gate={"tools": ["start_async_task"]}))
+    """Spawning commits money nobody has approved, so it stays in the same
+    vocabulary as the other harness tools an operator can put a signature on —
+    and that one is versioned, because it changes what stops for a human."""
+    cfg = AgentConfig.model_validate(load(gate={"tools": ["start_async_task"]}))
     assert "start_async_task" in cfg.gate.tools

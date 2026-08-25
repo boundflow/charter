@@ -18,6 +18,11 @@ limits:
   max_tool_seconds: 30
 
 authority:
+  # A day, because the approver is a person who may not be at a terminal. The
+  # agent's own config no longer carries this: how long you have to answer is
+  # about you, not about what the agent does.
+  approval_timeout_seconds: 86400
+  question_timeout_seconds: 86400
   # Default-deny over the harness's own tools. It reads its skill and nothing
   # else: no reason to write files, run commands, or start other agents. Declared
   # MCP tools are permitted regardless of what is listed here.

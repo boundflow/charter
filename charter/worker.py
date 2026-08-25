@@ -156,7 +156,8 @@ class CharterWorker:
             for version in versions:
                 key = (bundle.name, version)
                 cfg = bundle.versions[version]
-                missing = [a for a in cfg.spawns if a not in self.project.agents]
+                allowed = bundle.runtime.authority.allowed_spawns
+                missing = [a for a in allowed if a not in self.project.agents]
                 tools = ToolSet().with_timeout(
                     bundle.runtime.limits.max_tool_seconds)
                 served = Served(bundle, version, tools,
@@ -164,7 +165,7 @@ class CharterWorker:
                                      self._chat_model,
                                      resolve(self.project.manifest.store.url),
                                      skills=bundle.skills.get(version),
-                                     spawner=self._spawner(cp, cfg)))
+                                     spawner=self._spawner(cp, allowed)))
                 try:
                     if missing:
                         # Caught at boot rather than the first time the model tries
@@ -226,12 +227,12 @@ class CharterWorker:
                 return w
         return None
 
-    def _spawner(self, cp: ControlPlaneClient, cfg) -> Spawner | None:
+    def _spawner(self, cp: ControlPlaneClient, allowed: list[str]) -> Spawner | None:
         """None unless this version declares `spawns`, which is what keeps the
         async tools off the model's list for agents that shouldn't delegate."""
-        if not cfg.spawns:
+        if not allowed:
             return None
-        return Spawner(cp, self._tenant_id, self.project.agents, cfg.spawns)
+        return Spawner(cp, self._tenant_id, self.project.agents, allowed)
 
     # ── registration ────────────────────────────────────────────────────────
 

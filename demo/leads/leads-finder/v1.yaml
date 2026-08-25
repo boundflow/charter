@@ -80,9 +80,6 @@ wait:
 # Without this the agent has no way to answer a question. An approver who rejects
 # with "why this person?" gets silence, and the agent — able only to act or not
 # act — re-proposes, which reads as ignoring them.
-ask_human:
-  timeout_seconds: 86400
-
 mcp:
   - name: net
     command: python
@@ -100,7 +97,6 @@ mcp:
         approval: always
 
 gate:
-  timeout_seconds: 86400
   # An unapproved message simply doesn't go. The rest of the campaign carries on:
   # one lead you decided against is not a reason to abandon the others.
   on_reject: continue

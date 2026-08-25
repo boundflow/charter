@@ -152,6 +152,31 @@ class Authority(Base):
         "read | write | execute | spawn. Empty means unrestricted."))
     file_rules: list[FileRule] = Field(default_factory=list)
 
+    # Which agents this one may hand long-running work to. An allowlist, like the
+    # capabilities above, and policy for the same reason: a child is a governed
+    # unit with a budget of its own, and deciding who may mint one should not wait
+    # for a release. Empty forbids — unlike `allowed_capabilities`, silence here
+    # denies rather than permits, because the risk runs the other way.
+    allowed_spawns: list[str] = Field(default_factory=list, description=(
+        "Agent names this one may start as durable background tasks."))
+
+    # How long a person has. Operational knobs: an approver's window is a fact
+    # about your team, not about what the agent does, and shortening it should not
+    # mint a version.
+    approval_timeout_seconds: int = Field(default=1800, gt=0)
+    question_timeout_seconds: int = Field(default=1800, gt=0, description=(
+        "For `ask_human`. Whether the agent *can* ask stays versioned — that "
+        "changes its tool list — but how long it waits is yours to tune."))
+    max_wait_seconds: int = Field(default=0, ge=0, description=(
+        "Ceiling on a single `wait`. 0 leaves the version's own `wait.max` as the "
+        "only bound."))
+
+    @model_validator(mode="after")
+    def _check_spawns(self) -> Authority:
+        if len(set(self.allowed_spawns)) != len(self.allowed_spawns):
+            raise ValueError("`allowed_spawns` lists the same agent twice")
+        return self
+
 
 class RuntimePolicyFile(Base):
     apiVersion: Literal["charter/v1"]
@@ -161,6 +186,20 @@ class RuntimePolicyFile(Base):
     per_run: PerRun
     limits: Limits = Field(default_factory=Limits)
     authority: Authority = Field(default_factory=Authority)
+
+    @model_validator(mode="after")
+    def _check_authority(self) -> RuntimePolicyFile:
+        """An agent that may spawn itself recurses with no bound.
+
+        Each child gets a fresh budget, so nothing downstream stops it — this file
+        is the only place it can be caught, and only here, because Authority alone
+        does not know whose policy it is.
+        """
+        if self.agent in self.authority.allowed_spawns:
+            raise ValueError(
+                f"`allowed_spawns` includes {self.agent!r} itself. Each child gets "
+                f"its own budget, so a self-spawning agent has nothing to stop it.")
+        return self
 
     @property
     def operation_timeout_seconds(self) -> int:

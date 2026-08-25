@@ -342,9 +342,7 @@ class AskHuman(Base):
         default="balanced", description=(
             "How readily it should interrupt you. A posture, not a threshold: a "
             "model's confidence in itself isn't calibrated enough to be a number."))
-    timeout_seconds: int = Field(default=240, gt=0, description=(
-        "How long you have before the agent is told nobody answered and carries "
-        "on with what it has."))
+    # `timeout_seconds` moved to runtime.yaml as `question_timeout_seconds`.
 
     @property
     def guidance(self) -> str:
@@ -415,9 +413,11 @@ class Gate(Base):
     turn it into a durable gate that survives one.
     """
 
-    timeout_seconds: int = Field(default=1800, gt=0, description=(
-        "How long a human has before the action is refused on their behalf. "
-        "A tool may override this with its own `approval_timeout_seconds`."))
+    # `timeout_seconds` moved to runtime.yaml's `authority.approval_timeout_seconds`.
+    # How long your approver has is a fact about your team, not about what the
+    # agent does, and it should be tunable without cutting a version. A tool may
+    # still override it with its own `approval_timeout_seconds`, which is the one
+    # case where the window really is about the action.
     tools: list[str] = Field(default_factory=list, description=(
         "Harness tools that also stop for a human. `submit_result` gates the final "
         "answer itself — the approver sees the result, not a summary of it. "
@@ -506,15 +506,9 @@ class AgentConfig(Base):
     # the one that bound, and the copy in the file did nothing — config that reads
     # as authoritative and is not.
 
-    # Which other agents this one may hand long-running work to. Declared, because
-    # an agent that can create workflows freely can mint governed units nobody
-    # budgeted for — each child gets its own budget, and the parent's ceiling does
-    # not bound them. Empty means it may spawn none, and the async tools are not
-    # offered at all; unlike `allowed_capabilities`, silence here forbids rather
-    # than permits, because the risk runs the other way.
-    spawns: list[str] = Field(default_factory=list, description=(
-        "Agent names this one may start as durable background tasks, via "
-        "start_async_task. Each runs as its own instance with its own budget."))
+    # `spawns` moved to runtime.yaml as `authority.allowed_spawns`. It is an
+    # allowlist like `allowed_capabilities`, and deciding who may mint a governed
+    # unit with a budget of its own should not have to wait for a release.
 
     # Skills are not declared here. Anything under `v<N>/skills/` is shipped to the
     # agent's store and handed to the harness's own loader, so an author's existing
@@ -525,21 +519,9 @@ class AgentConfig(Base):
     @model_validator(mode="after")
     def _check(self) -> AgentConfig:
         self._check_servers_unique()
-        self._check_spawns()
         self._check_templates()
         self._check_schedule()
         return self
-
-    def _check_spawns(self) -> None:
-        """An agent that may spawn itself recurses with no bound. Each child gets a
-        fresh budget, so nothing downstream stops it — the config is the only place
-        it can be caught."""
-        if self.name in self.spawns:
-            raise ValueError(
-                f"`spawns` includes {self.name!r} itself. Each child gets its own "
-                f"budget, so a self-spawning agent has nothing to stop it.")
-        if len(set(self.spawns)) != len(self.spawns):
-            raise ValueError("`spawns` lists the same agent twice.")
 
     def _check_schedule(self) -> None:
         if self.schedule and self.inputs:

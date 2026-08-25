@@ -197,7 +197,7 @@ def test_a_pending_action_parks_the_task():
     assert "stripe__create_refund" in out.justification
     assert "Refund $40 to the customer" in out.justification
     assert out.metadata["tool"] == "stripe__create_refund"
-    assert out.timeout == cfg.gate.timeout_seconds
+    assert out.timeout == loop.runtime.authority.approval_timeout_seconds
     assert ctx.context[K_GATES] == 1
 
 
@@ -379,7 +379,7 @@ class TestAskHuman:
         out = run(loop.entry(FakeCtx(results=[FakeResult(interrupt)])))
         assert isinstance(out, AwaitInput)
         assert "Which charge?" in out.prompt
-        assert out.timeout == loop.cfg.ask_human.timeout_seconds
+        assert out.timeout == loop.runtime.authority.question_timeout_seconds
 
     def test_an_unanswered_question_tells_the_agent_rather_than_failing(self, _stub_harness):
         """AwaitInput has a real timeout branch, unlike approval — so silence means
@@ -503,9 +503,11 @@ class TestWorkingTime:
     def test_gate_timeouts_are_a_different_clock(self):
         """A human's allowance and the agent's are independent — one bounds waiting,
         the other bounds working."""
-        cfg = load_agent(EXAMPLES / "refund-triage").latest
-        assert cfg.gate.timeout_seconds == 1800
         loop = self._loop(60)
+        # The approver's window is policy — a fact about your team. The agent's
+        # working ceiling is policy too, but a different number for a different
+        # clock: one bounds waiting, the other bounds working.
+        assert loop.runtime.authority.approval_timeout_seconds == 1800
         assert loop.runtime.per_run.max_seconds == 60
 
 

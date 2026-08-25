@@ -63,6 +63,3 @@ response_format:
 
 # How long an approver has. An unanswered gate is a rejection — the agent is told
 # and carries on without that action, rather than the task dying.
-gate:
-  timeout_seconds: 1800
-

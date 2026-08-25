@@ -680,7 +680,12 @@ class Loop:
         real duration so it doesn't assume otherwise.
         """
         args = action.get("args") or {}
+        # The version says how long this agent may ever sleep; policy may shorten
+        # that without a release. Tighten only — a ceiling that could be raised
+        # from outside the version would not be a ceiling.
         cap = self.cfg.wait.max_seconds
+        if tighter := self.runtime.authority.max_wait_seconds:
+            cap = min(cap, tighter)
         try:
             wanted = duration_seconds(str(args.get("duration", "")), "wait")
         except ValueError:
@@ -700,15 +705,18 @@ class Loop:
     def _gate_timeout(self, tool: str) -> int:
         """How long this tool's approver has.
 
-        Per tool where it's declared, falling back to the agent's default: a refund
+        Per tool where it's declared, falling back to the policy's window: a refund
         can wait half an hour, a production deploy might need someone in five
         minutes, and one number for both is the wrong shape.
+
+        The default is policy rather than versioned config, because how long your
+        approver has is a fact about your team and not about what the agent does.
         """
         for server in self.cfg.mcp:
             for spec in server.tools:
                 if server.qualified(spec.tool) == tool and spec.approval_timeout_seconds:
                     return spec.approval_timeout_seconds
-        return self.cfg.gate.timeout_seconds
+        return self.runtime.authority.approval_timeout_seconds
 
     def _question(self, ctx, action: dict, resume):
         """The agent asked something, so park for an answer rather than a verdict.
@@ -719,11 +727,12 @@ class Loop:
         """
         asked = (action.get("args") or {}).get("question", "")
         log.info("question: agent=%s", self.cfg.name)
-        ask = self.cfg.ask_human
         return AwaitInput(
             on_answer=resume("answer"),
             on_timeout=resume("unanswered"),
-            timeout=ask.timeout_seconds,
+            # Whether it can ask is versioned — that changes its tool list. How
+            # long it waits for you is not.
+            timeout=self.runtime.authority.question_timeout_seconds,
             prompt=f"{self.cfg.name} asks: {asked}" if asked else f"{self.cfg.name} has a question",
             metadata={"question": asked},
         )

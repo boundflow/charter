@@ -48,5 +48,3 @@ response_format:
     type: number
     description: Amount refunded, or 0 if none.
 
-gate:
-  timeout_seconds: 1800

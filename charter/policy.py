@@ -26,6 +26,10 @@ MAX_TOOL_SECONDS = "max_tool_seconds"
 MAX_TOTAL_SUBAGENTS = "max_total_subagents"
 MAX_PARALLEL_SUBAGENTS = "max_parallel_subagents"
 OPERATION_TIMEOUT_SECONDS = "operation_timeout_seconds"
+ALLOWED_SPAWNS = "allowed_spawns"
+APPROVAL_TIMEOUT_SECONDS = "approval_timeout_seconds"
+QUESTION_TIMEOUT_SECONDS = "question_timeout_seconds"
+MAX_WAIT_SECONDS = "max_wait_seconds"
 FILE_RULES = "file_rules"
 ALLOWED_CAPABILITIES = "allowed_capabilities"
 ALLOWED_TOOLS = "allowed_tools"
@@ -59,6 +63,13 @@ def build(cfg, per_run, limits, authority, operation_timeout: int) -> dict[str, 
             {"capability": l.capability, "max_calls": l.max_calls}
             for l in per_run.capability_call_limits]
 
+    if authority.allowed_spawns:
+        custom[ALLOWED_SPAWNS] = list(authority.allowed_spawns)
+    custom[APPROVAL_TIMEOUT_SECONDS] = authority.approval_timeout_seconds
+    custom[QUESTION_TIMEOUT_SECONDS] = authority.question_timeout_seconds
+    if authority.max_wait_seconds:
+        custom[MAX_WAIT_SECONDS] = authority.max_wait_seconds
+
     if authority.file_rules:
         custom[FILE_RULES] = [
             {"operations": list(r.operations), "paths": list(r.paths), "mode": r.mode}
@@ -87,6 +98,24 @@ def worker_limits(policy) -> dict[str, Any]:
         "max_total_subagents": c.get(MAX_TOTAL_SUBAGENTS, 0),
         "max_parallel_subagents": c.get(MAX_PARALLEL_SUBAGENTS, 0),
         "operation_timeout_seconds": c.get(OPERATION_TIMEOUT_SECONDS, 0),
+    }
+
+
+def allowed_spawns(policy) -> list[str]:
+    return list(_of(policy).get(ALLOWED_SPAWNS) or [])
+
+
+def timeouts(policy) -> dict[str, int]:
+    """How long people have, and how long an agent may sleep.
+
+    Defaults match what the versioned blocks used to carry, so an agent whose
+    runtime.yaml says nothing behaves exactly as it did.
+    """
+    c = _of(policy)
+    return {
+        "approval": c.get(APPROVAL_TIMEOUT_SECONDS, 1800),
+        "question": c.get(QUESTION_TIMEOUT_SECONDS, 1800),
+        "max_wait": c.get(MAX_WAIT_SECONDS, 0),
     }
 
 
@@ -126,7 +155,7 @@ def runtime_file(agent: str, policy) -> Any:
     mutable thing look immutable. So the numbers come back the way they went out,
     and the loop reads the same object either way.
     """
-    from .config.runtime import Limits, PerRun, RuntimePolicyFile
+    from .config.runtime import Authority, Limits, PerRun, RuntimePolicyFile
 
     typed = policy if not isinstance(policy, dict) else None
     def get(name, default=0):
@@ -135,6 +164,7 @@ def runtime_file(agent: str, policy) -> Any:
         return (policy or {}).get(name, default) or default
 
     mine = worker_limits(policy)
+    windows = timeouts(policy)
     failures = get("tool_failure_limits", []) or []
     per_tool = [f.max_failures if not isinstance(f, dict) else f["max_failures"]
                 for f in failures]
@@ -156,5 +186,13 @@ def runtime_file(agent: str, policy) -> Any:
             max_tokens_per_call=get("max_tokens_per_call", 1024),
             max_call_seconds=get("max_call_seconds", 60.0),
             max_tool_seconds=mine["max_tool_seconds"],
+        ),
+        authority=Authority(
+            allowed_capabilities=sorted(allowed_capabilities(policy)),
+            file_rules=file_rules(policy),
+            allowed_spawns=allowed_spawns(policy),
+            approval_timeout_seconds=windows["approval"],
+            question_timeout_seconds=windows["question"],
+            max_wait_seconds=windows["max_wait"],
         ),
     )
