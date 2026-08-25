@@ -21,3 +21,11 @@ per_run:
 limits:
   max_tokens_per_call: 1024
   max_call_seconds: 60
+
+# What the agent may reach, as opposed to how much it may spend. Not versioned:
+# tightening this should not require cutting a release, and it has to be
+# changeable on an agent that is already running.
+authority:
+  # The harness brings its own filesystem. This agent has no business writing to
+  # it, so it gets read only; declared MCP tools are always permitted regardless.
+  allowed_capabilities: [read]

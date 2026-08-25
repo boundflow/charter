@@ -66,6 +66,3 @@ response_format:
 gate:
   timeout_seconds: 1800
 
-# The harness brings its own filesystem. This agent has no business writing to it,
-# so it gets read only; declared MCP tools are always permitted regardless.
-allowed_capabilities: [read]

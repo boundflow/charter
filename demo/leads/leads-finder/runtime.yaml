@@ -16,3 +16,9 @@ per_run:
 
 limits:
   max_tool_seconds: 30
+
+authority:
+  # Default-deny over the harness's own tools. It reads its skill and nothing
+  # else: no reason to write files, run commands, or start other agents. Declared
+  # MCP tools are permitted regardless of what is listed here.
+  allowed_capabilities: [read]

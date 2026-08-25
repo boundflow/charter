@@ -146,7 +146,9 @@ def _warnings(bundle: AgentBundle, notifications: Notifications | None) -> list[
             f"(max_cost_usd={per_run.max_cost_usd}, "
             f"max_tool_failures={per_run.max_tool_failures})")
 
-    if cfg.gated_tools or cfg.file_rules_interrupt:
+    interrupting = any(r.mode == "interrupt"
+                       for r in bundle.runtime.authority.file_rules)
+    if cfg.gated_tools or interrupting:
         if notifications is None or notifications.resolve(agent, "approval_requested") is None:
             out.append(
                 "gates on approval but no notification route resolves — an approval "

@@ -172,50 +172,56 @@ class TestWireToolNames:
             AgentConfig.model_validate(raw)
 
 
-class TestFileRules:
-    """The harness ships a filesystem, so these bound it. Versioned rather than
-    runtime policy, because they change what the agent can reach."""
+class TestAuthority:
+    """What the agent may reach, declared in runtime.yaml rather than the version.
+
+    It used to live on AgentConfig, which was wrong twice over: tightening what an
+    agent can touch had to wait for a release, and once versions became artifacts
+    the value was sealed into one *and* compiled into the policy — where the policy
+    copy is the one that binds and the sealed one does nothing.
+    """
+
+    def policy(self, **authority):
+        from charter.config.runtime import RuntimePolicyFile
+        return RuntimePolicyFile.model_validate({
+            "apiVersion": "charter/v1", "kind": "RuntimePolicy",
+            "agent": "refund-triage", "per_run": {"max_llm_calls": 5},
+            "authority": authority})
 
     def test_paths_must_be_absolute(self):
         with pytest.raises(ValidationError, match="must start with"):
-            AgentConfig.model_validate(load(file_rules=[
-                {"operations": ["write"], "paths": ["secrets/**"], "mode": "deny"}]))
+            self.policy(file_rules=[
+                {"operations": ["write"], "paths": ["secrets/**"], "mode": "deny"}])
 
     def test_traversal_rejected(self):
         with pytest.raises(ValidationError, match=r"must not contain"):
-            AgentConfig.model_validate(load(file_rules=[
-                {"operations": ["write"], "paths": ["/data/../etc"], "mode": "deny"}]))
-
-    def test_an_interrupt_rule_needs_an_approval_route(self):
-        """Same question `gated_tools` asks, so it wants the same warning."""
-        cfg = AgentConfig.model_validate(load(file_rules=[
-            {"operations": ["write"], "paths": ["/prod/**"], "mode": "interrupt"}]))
-        assert cfg.file_rules_interrupt
+            self.policy(file_rules=[
+                {"operations": ["write"], "paths": ["/data/../etc"], "mode": "deny"}])
 
     def test_allow_is_the_default(self):
-        cfg = AgentConfig.model_validate(load(file_rules=[
-            {"operations": ["read"], "paths": ["/data/**"]}]))
-        assert cfg.file_rules[0].mode == "allow"
-        assert not cfg.file_rules_interrupt
+        rules = self.policy(file_rules=[
+            {"operations": ["read"], "paths": ["/data/**"]}]).authority.file_rules
+        assert rules[0].mode == "allow"
 
+    def test_an_interrupt_rule_is_visible_to_the_approval_warning(self):
+        """Same question `gated_tools` asks, so it wants the same warning: a stop
+        for a human that nobody is told about is just a slow timeout."""
+        rules = self.policy(file_rules=[
+            {"operations": ["write"], "paths": ["/prod/**"], "mode": "interrupt"}
+        ]).authority.file_rules
+        assert any(r.mode == "interrupt" for r in rules)
 
-class TestCapabilities:
-    def test_allowlist_is_optional(self):
-        """Empty means no allowlist, not "nothing allowed" — a field that silently
-        forbade everything the moment someone added it would be a bad default."""
-        cfg = AgentConfig.model_validate(load(allowed_capabilities=[]))
-        assert cfg.allowed_capabilities == []
+    def test_an_empty_allowlist_means_unrestricted(self):
+        """Not "nothing allowed". A field that silently forbade everything the
+        moment someone added it would be a bad default."""
+        assert self.policy().authority.allowed_capabilities == []
 
-    def test_vocabulary_is_closed(self):
+    def test_it_matches_the_harness_vocabulary(self):
+        """deepagents' own words, so a cap and a permission cannot disagree about
+        what `write` means."""
+        assert self.policy(allowed_capabilities=["read", "write", "execute", "spawn"])
         with pytest.raises(ValidationError):
-            AgentConfig.model_validate(load(allowed_capabilities=["network"]))
-
-    def test_matches_the_harness_vocabulary(self):
-        """Ours must equal deepagents' filesystem operations plus the two it ships
-        without classifying, or a cap and a file rule could disagree about `write`."""
-        cfg = AgentConfig.model_validate(
-            load(allowed_capabilities=["read", "write", "execute", "spawn"]))
-        assert cfg.allowed_capabilities == ["read", "write", "execute", "spawn"]
+            self.policy(allowed_capabilities=["delete"])
 
 
 class TestResponseFormat:

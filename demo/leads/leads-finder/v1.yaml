@@ -99,11 +99,6 @@ mcp:
       - tool: send_message
         approval: always
 
-# Default-deny over the harness's own tools. It reads its skill and nothing else:
-# it has no reason to write files, run commands, or start other agents, and the
-# declared MCP tools are permitted regardless of what is listed here.
-allowed_capabilities: [read]
-
 gate:
   timeout_seconds: 86400
   # An unapproved message simply doesn't go. The rest of the campaign carries on:

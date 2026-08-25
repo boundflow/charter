@@ -496,15 +496,15 @@ class AgentConfig(Base):
     gate: Gate = Field(default_factory=Gate)
     ask_human: AskHuman | None = None
 
-    # What the agent may do beyond the tools it declared. The harness ships its own
-    # filesystem, so these bound it. Empty `allowed_capabilities` means no allowlist
-    # rather than "nothing allowed" — a field that silently forbade everything the
-    # moment someone added it would be a bad default.
-    allowed_capabilities: list[Capability] = Field(default_factory=list, description=(
-        "Default-deny allowlist over the harness's own tools. read | write | "
-        "execute | spawn. Empty means unrestricted; declared MCP tools are always "
-        "permitted."))
-    file_rules: list[FileRule] = Field(default_factory=list)
+    # `allowed_capabilities` and `file_rules` used to be declared here. They are
+    # authority — what the agent may reach — and authority is policy: tightening it
+    # should not require cutting a version, and it needs to be changeable on an
+    # agent already running. They live in runtime.yaml's `authority:` block now.
+    #
+    # Keeping them here was worse than untidy. They were compiled into the runtime
+    # policy *and* sealed into the version's artifact, the control plane's copy was
+    # the one that bound, and the copy in the file did nothing — config that reads
+    # as authoritative and is not.
 
     # Which other agents this one may hand long-running work to. Declared, because
     # an agent that can create workflows freely can mint governed units nobody
@@ -574,11 +574,6 @@ class AgentConfig(Base):
         """Every declared tool, namespaced."""
         return [t for s in self.mcp for t in s.tool_names]
 
-    @property
-    def file_rules_interrupt(self) -> bool:
-        """Whether any file rule stops for a human. Same question as `gated_tools`
-        asks of MCP tools, and it needs the same notification route."""
-        return any(r.mode == "interrupt" for r in self.file_rules)
 
     @property
     def gated_tools(self) -> list[str]:

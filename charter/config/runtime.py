@@ -14,7 +14,7 @@ from typing import Literal
 
 from pydantic import Field, model_validator
 
-from .agent import AGENT_NAME, Base, Capability
+from .agent import AGENT_NAME, Base, Capability, FileRule
 
 
 class ToolCallLimit(Base):
@@ -135,6 +135,24 @@ class Limits(Base):
 MIN_OPERATION_SECONDS, MAX_OPERATION_SECONDS = 60, 3600
 
 
+class Authority(Base):
+    """What the agent may reach, as opposed to how much it may spend.
+
+    Not versioned, and that is the point: tightening what an agent can touch
+    should not require cutting a release, and an approval signed in March should
+    be checkable against the authority in force then — which the control plane
+    snapshots per run — rather than against a number sealed into an artifact.
+    """
+
+    # Default-deny over the harness's own tools. Empty means no allowlist rather
+    # than "nothing allowed": a field that silently forbade everything the moment
+    # someone added it would be a bad default. Declared MCP tools are always
+    # permitted regardless.
+    allowed_capabilities: list[Capability] = Field(default_factory=list, description=(
+        "read | write | execute | spawn. Empty means unrestricted."))
+    file_rules: list[FileRule] = Field(default_factory=list)
+
+
 class RuntimePolicyFile(Base):
     apiVersion: Literal["charter/v1"]
     kind: Literal["RuntimePolicy"]
@@ -142,6 +160,7 @@ class RuntimePolicyFile(Base):
     agent: str = Field(pattern=AGENT_NAME)
     per_run: PerRun
     limits: Limits = Field(default_factory=Limits)
+    authority: Authority = Field(default_factory=Authority)
 
     @property
     def operation_timeout_seconds(self) -> int:

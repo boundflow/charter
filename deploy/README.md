@@ -37,6 +37,61 @@ serve the same agents are a pool; `--scale` is the whole mechanism.
 | the agent's files and conversation | approval gates and the audit trail |
 | this Postgres | scheduling and waking parked tasks |
 
+## Serving agents from a registry
+
+`serves:` takes either a directory or an OCI reference:
+
+    serves:
+      - agent: leads-finder     # from the mounted project — how you develop
+        versions: [1]
+      - ref: ghcr.io/acme/agents/leads-finder:v1   # how you deploy
+
+A reference is pulled at boot. The artifact names its own agent and version, so
+neither is repeated here, and the worker needs no checkout at all.
+
+Credentials are whatever `docker login` already wrote: the compose file mounts
+your Docker config read-only and points `DOCKER_CONFIG` at it. Nothing is
+Charter-specific, which is the point — a Docker config holds several registries at
+once and carries credential helpers, which is what makes ECR and GCR work at all,
+since a static password there expires within the day.
+
+On Kubernetes the same secret serves twice — as the `imagePullSecret` the kubelet
+uses for this image, and mounted as a file for the worker to read:
+
+    volumes:
+      - name: registry
+        secret:
+          secretName: ghcr-creds
+          items: [{key: .dockerconfigjson, path: config.json}]
+    env:
+      - name: DOCKER_CONFIG
+        value: /etc/registry
+
+They are not interchangeable by default: `imagePullSecrets` is for the kubelet
+pulling the worker image, and the worker pulling an agent artifact is an ordinary
+HTTPS request from inside the process. It needs its own copy.
+
+## Tools the artifact does not carry
+
+An agent that declares a stdio MCP server — `command: python, args: [thing.py]` —
+depends on that process existing on the worker. The artifact carries the config,
+not the tool, and `charter push` says so when you publish one.
+
+Two ways to satisfy it:
+
+    FROM ghcr.io/boundflow/charter-worker:1.2
+    COPY thing.py /opt/mcp/            # the tool ships in your worker image
+
+or run the server as its own container and declare it by url, which is what a
+sidecar is:
+
+    mcp:
+      - name: net
+        url: http://localhost:8080/mcp
+
+Loopback is allowed for exactly this reason — a sidecar shares the pod's network
+namespace, so the traffic never leaves it. Anything else must be https.
+
 ## Changing an agent
 
 The project is mounted read-only, not baked into the image, so editing an

@@ -49,10 +49,18 @@ services:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
       # The store above, by service name. Every worker gets the same one.
       CHARTER_STORE_URL: postgres://charter:${POSTGRES_PASSWORD:-charter}@postgres:5432/charter
+      # Where the worker looks for registry credentials when an agent is served by
+      # reference. A Docker config, because that is what the ecosystem settled on:
+      # it holds several registries at once and it carries credential helpers, which
+      # matters for ECR and GCR where a static password expires within the day.
+      DOCKER_CONFIG: /etc/registry
     volumes:
       # Your agents, read-only: a worker has no business editing the config it is
       # serving, and mounting it read-only makes that true rather than assumed.
       - ${CHARTER_PROJECT:-../playground}:/project:ro
+      # Whatever `docker login` already wrote. Only read when `serves:` names a
+      # private registry — serving from a directory needs nothing here.
+      - ${DOCKER_CONFIG_DIR:-~/.docker}:/etc/registry:ro
     restart: unless-stopped
 
 volumes:

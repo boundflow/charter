@@ -31,7 +31,7 @@ ALLOWED_CAPABILITIES = "allowed_capabilities"
 ALLOWED_TOOLS = "allowed_tools"
 
 
-def build(cfg, per_run, limits, operation_timeout: int) -> dict[str, Any]:
+def build(cfg, per_run, limits, authority, operation_timeout: int) -> dict[str, Any]:
     """Charter's policy vocabulary, as plain JSON-able data.
 
     Plain dicts rather than models: this crosses a wire that treats it as a struct,
@@ -59,13 +59,13 @@ def build(cfg, per_run, limits, operation_timeout: int) -> dict[str, Any]:
             {"capability": l.capability, "max_calls": l.max_calls}
             for l in per_run.capability_call_limits]
 
-    if cfg.file_rules:
+    if authority.file_rules:
         custom[FILE_RULES] = [
             {"operations": list(r.operations), "paths": list(r.paths), "mode": r.mode}
-            for r in cfg.file_rules]
+            for r in authority.file_rules]
 
-    if cfg.allowed_capabilities:
-        custom[ALLOWED_CAPABILITIES] = list(cfg.allowed_capabilities)
+    if authority.allowed_capabilities:
+        custom[ALLOWED_CAPABILITIES] = list(authority.allowed_capabilities)
         # Declared MCP tools are always permitted, so the allowlist only has to name
         # what the *harness* brings. Empty means no allowlist, not "nothing" — which
         # is why this is only set alongside a capability allowlist.

@@ -109,7 +109,7 @@ def compile_runtime_policy(cfg: AgentConfig, runtime: RuntimePolicyFile) -> Runt
         # Declared here, enforced by Charter and the harness it wires up — which is
         # why it rides in `custom` rather than as a typed field. BoundFlow stores it
         # and hands it back; nothing over there reads it. See charter/policy.py.
-        custom=policy.build(cfg, per_run, runtime.limits,
+        custom=policy.build(cfg, per_run, runtime.limits, runtime.authority,
                             runtime.operation_timeout_seconds),
     )
 
