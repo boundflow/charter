@@ -24,7 +24,6 @@ objective: |
 # So a scout can sit on something slow — waiting on a reply, a rate limit — without
 # holding a worker open. Its parent may well finish first, and that is fine.
 wait:
-  max: 6h
 
 response_format:
   finding:

@@ -19,6 +19,7 @@ from boundflow import ENTRY_OPERATION, AwaitApproval, AwaitInput, Complete, Next
 from boundflow.llm import AgentPolicyLimitExceeded
 
 from charter.config.loader import load_agent
+from charter.policy import MAX_WAIT_SECONDS
 from charter.workflows.loop import (
     K_COST,
     K_DECISION,
@@ -56,12 +57,17 @@ class FakeCtx:
     # what any of these tests are about, so every context starts with them filled.
     INPUTS = {"ticket_id": "4821", "max_refund_usd": 500}
 
-    def __init__(self, context=None, results=None, approval_reason=None):
+    def __init__(self, context=None, results=None, approval_reason=None,
+                 policy_custom=None):
         self.context = {**self.INPUTS, **(context or {})}
         self._results = list(results or [])
         self.budgets = []
         self.failed = False
         self._approval_reason = approval_reason
+        # What the control plane ships with this request. `custom` is where
+        # Charter's own policy vocabulary lives, so this is how a test says
+        # "the operator has applied a tighter ceiling".
+        self._policy_custom = policy_custom or {}
 
     @property
     def approval_reason(self):
@@ -82,7 +88,9 @@ class FakeCtx:
 
     def agent_governor(self, name):
         if self._governor is None:
-            self._governor = type("Gov", (), {"cost_usd": 0.0, "llm_calls": 0})()
+            policy = type("Policy", (), {"custom": self._policy_custom})()
+            self._governor = type(
+                "Gov", (), {"cost_usd": 0.0, "llm_calls": 0, "policy": policy})()
         return self._governor
 
     async def run_governed(self, name, invoke, *, chat_model, tools, model=None,
@@ -608,15 +616,23 @@ class TestGatingAnything:
             Gate(tools=["submit_reslt"])
 
 
+def _raises(_name):
+    raise RuntimeError("governor unavailable")
+
+
 class TestWaiting:
     """The harness cannot park for time — that needs a scheduler, and it is a
     library. So it names the moment by stopping on a tool call, and BoundFlow does
     the waiting. Same split as approvals and questions."""
 
-    def _loop(self, max="7d"):
+    def _loop(self, fallback=None):
         from charter.config.agent import Wait
         bundle = load_agent(EXAMPLES / "refund-triage")
-        bundle.latest.wait = Wait(max=max)
+        # The block is an existence switch now — it carries no ceiling, because
+        # how long an agent may sleep is the operator's number, not the version's.
+        bundle.latest.wait = Wait()
+        if fallback is not None:
+            bundle.runtime.authority.max_wait_seconds = fallback
         empty = type("NoTools", (), {"langchain_tools": lambda self: []})()
         return Loop(bundle.latest, bundle.runtime, tools=empty,
                     chat_model=lambda m: object(), store_url="postgresql://unused")
@@ -646,9 +662,31 @@ class TestWaiting:
     def test_a_longer_wait_is_clamped_not_refused(self):
         """The agent asked to wait; waiting less is closer to what it wanted than
         not waiting at all."""
-        loop = self._loop(max="6h")
-        out = run(loop.entry(FakeCtx(results=[FakeResult(self._asks_to_wait("30d"))])))
+        loop = self._loop()
+        out = run(loop.entry(FakeCtx(
+            results=[FakeResult(self._asks_to_wait("30d"))],
+            policy_custom={MAX_WAIT_SECONDS: 6 * 3600})))
         assert out.delay_seconds == 6 * 3600
+
+    def test_the_ceiling_is_read_per_operation_not_at_boot(self):
+        """The point of the ceiling being policy. An operator who applies a tighter
+        number gets it on the next round; if this read the copy loaded at boot they
+        would have to redeploy the worker, and `charter diff` would meanwhile show
+        the new number armed on the control plane — a limit that looks applied and
+        isn't."""
+        loop = self._loop(fallback=6 * 3600)   # what boot would have said
+        out = run(loop.entry(FakeCtx(
+            results=[FakeResult(self._asks_to_wait("30d"))],
+            policy_custom={MAX_WAIT_SECONDS: 900})))
+        assert out.delay_seconds == 900
+
+    def test_an_unreadable_governor_falls_back_rather_than_sleeping_unbounded(self):
+        """A ceiling we can't read is no reason to sleep for a month."""
+        loop = self._loop(fallback=1800)
+        ctx = FakeCtx(results=[FakeResult(self._asks_to_wait("30d"))])
+        ctx.agent_governor = _raises
+        out = run(loop.entry(ctx))
+        assert out.delay_seconds == 1800
 
     def test_a_mangled_duration_does_not_end_the_task(self):
         loop = self._loop()

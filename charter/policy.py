@@ -115,7 +115,7 @@ def timeouts(policy) -> dict[str, int]:
     return {
         "approval": c.get(APPROVAL_TIMEOUT_SECONDS, 1800),
         "question": c.get(QUESTION_TIMEOUT_SECONDS, 1800),
-        "max_wait": c.get(MAX_WAIT_SECONDS, 0),
+        "max_wait": c.get(MAX_WAIT_SECONDS, 604800),
     }
 
 

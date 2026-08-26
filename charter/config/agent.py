@@ -389,23 +389,13 @@ class Wait(Base):
     has spent none of its `max_seconds`.
 
     Off unless declared. The model chooses how long, because only it knows whether
-    it's waiting on a person, a rate limit, or nothing; `max` is the ceiling, so a
-    confused agent can't sleep for a year.
+    it's waiting on a person, a rate limit, or nothing.
     """
-
-    max: str = Field(default="7d", description=(
-        "Longest single wait. 30s, 15m, 1h, 7d. A longer request is clamped to "
-        "this rather than refused — the agent asked to wait, and waiting less is "
-        "closer to what it wanted than not waiting at all."))
-
-    @property
-    def max_seconds(self) -> int:
-        return duration_seconds(self.max, "wait.max")
-
-    @model_validator(mode="after")
-    def _check(self) -> Wait:
-        self.max_seconds  # raises with the readable message
-        return self
+    # `max` moved to runtime.yaml as `max_wait_seconds`. Whether the agent can wait
+    # is versioned — that changes its tool list — but how long it may sleep is an
+    # operator's number, the same split `ask_human` already has. It never protected
+    # anything the version promised, either: a longer sleep grants no capability, it
+    # just holds a slot, which is exactly the kind of cost policy exists to tune.
 
 
 class Subagent(Base):
@@ -534,6 +524,24 @@ class AgentConfig(Base):
     subagents: list[Subagent] = Field(default_factory=list)
     gate: Gate = Field(default_factory=Gate)
     ask_human: AskHuman | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _bare_blocks_are_on(cls, data):
+        """`wait:` with nothing under it means on, not off.
+
+        These two blocks say *whether* the agent gets a tool, and both now hold
+        settings that are all optional — `wait` holds none at all. So the natural
+        way to switch one on is a bare key, which YAML reads as null, which would
+        otherwise mean absent, which means off. The agent would quietly lose a tool
+        it plainly asked for, and the file would look right.
+
+        Absent still means off. Only present-and-null is read as an empty block.
+        """
+        if not isinstance(data, dict):
+            return data
+        return {k: ({} if k in ("wait", "ask_human") and v is None else v)
+                for k, v in data.items()}
 
     # `allowed_capabilities` and `file_rules` used to be declared here. They are
     # authority — what the agent may reach — and authority is policy: tightening it

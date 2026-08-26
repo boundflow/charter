@@ -670,6 +670,24 @@ class Loop:
             metadata={"tool": action.get("name", ""), "args": action.get("args", {})},
         )
 
+    def _max_wait(self, ctx) -> int:
+        """The live ceiling on one `wait`, in seconds.
+
+        From the governor's policy, which the control plane ships with every
+        request, rather than from the copy loaded at boot. The two agree until
+        someone runs `charter apply`, and the whole point of policy living on the
+        control plane is that they stop agreeing then.
+
+        Falls back to the configured copy if the governor can't be reached, because
+        a ceiling we can't read is no reason to sleep unbounded.
+        """
+        from .. import policy as charter_policy
+        try:
+            live = ctx.agent_governor(self.cfg.name).policy
+        except Exception:  # noqa: BLE001
+            return self.runtime.authority.max_wait_seconds
+        return charter_policy.timeouts(live)["max_wait"]
+
     def _sleep(self, ctx, action: dict, c: dict):
         """Park until the time has passed, holding nothing open.
 
@@ -682,12 +700,11 @@ class Loop:
         real duration so it doesn't assume otherwise.
         """
         args = action.get("args") or {}
-        # The version says how long this agent may ever sleep; policy may shorten
-        # that without a release. Tighten only — a ceiling that could be raised
-        # from outside the version would not be a ceiling.
-        cap = self.cfg.wait.max_seconds
-        if tighter := self.runtime.authority.max_wait_seconds:
-            cap = min(cap, tighter)
+        # How long it may sleep is policy, and read per operation rather than at
+        # boot, so `charter apply` lands on the next round instead of the next
+        # deploy. There is no version-level ceiling to tighten against: a longer
+        # sleep grants no capability, so the version has nothing to protect.
+        cap = self._max_wait(ctx)
         try:
             wanted = duration_seconds(str(args.get("duration", "")), "wait")
         except ValueError:

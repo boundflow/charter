@@ -77,7 +77,6 @@ objective: |
   fields.
 
 wait:
-  max: 6h
 
 mcp:
   - name: net

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import datetime as dt
 from contextlib import asynccontextmanager
+from dataclasses import replace
 
 import pytest
 
@@ -32,6 +33,7 @@ from boundflow.control_plane import (
     RequestInfo,
     Run,
     Tenant,
+    Suspension,
     WorkflowInfo,
     WorkflowMetrics,
 )
@@ -44,12 +46,25 @@ NOW = dt.datetime(2026, 8, 18, 3, 47, tzinfo=dt.timezone.utc)
 
 
 def workflow(name="refund-demo", *, workflow_state=WorkflowState.ACTIVE,
-             lifecycle_state=LifecycleState.ACTIVE, config=None, pending=None):
+             lifecycle_state=LifecycleState.ACTIVE, config=None, pending=None,
+             suspension=None):
     return WorkflowInfo(
         id=f"wf_{name}", workflow_type=name, tenant_id="tnt_1",
         lifecycle_state=lifecycle_state, workflow_state=workflow_state,
         version=1, last_interrupted_request_id="", last_policy_decision_request_id="",
-        config=config, pending_approval=pending, pending_input=None)
+        config=config, pending_approval=pending, pending_input=None,
+        suspension=suspension)
+
+
+def held(sid="sus_theirs", reason="incident", stop_current=False, finalized=True):
+    """A workflow under an operator hold, ready to drain."""
+    from datetime import datetime
+    return workflow(
+        workflow_state=WorkflowState.SUSPENDED,
+        suspension=Suspension(
+            suspension_id=sid, reason=reason, stop_current=stop_current,
+            requested_at=datetime(2026, 1, 1),
+            finalized_at=datetime(2026, 1, 1) if finalized else None))
 
 
 class FakeCp:
@@ -64,6 +79,8 @@ class FakeCp:
             total_llm_calls=7, total_latency_seconds=12.0,
             total_approval_rejections=0, tool_failure_counts={})
         self.approved = []
+        self.resumed: list = []
+        self.suspended: list = []
 
     async def list_tenants(self):
         return [Tenant(id="tnt_1", name="default", tenant_group_id="tg_1",
@@ -97,6 +114,14 @@ class FakeCp:
 
     async def approve_workflow(self, workflow_id, approval_id, actor="", reason=""):
         self.approved.append((approval_id, actor, reason))
+
+    async def resume_workflow(self, workflow_id, suspension_id):
+        self.resumed.append((workflow_id, suspension_id))
+
+    async def suspend_workflow(self, workflow_id, reason="", stop_current_run=False,
+                               suspension_id=""):
+        self.suspended.append((workflow_id, reason, stop_current_run, suspension_id))
+        return suspension_id or "sus_new"
 
 
 @pytest.fixture
@@ -376,3 +401,86 @@ def test_no_command_references_an_option_it_never_declared():
                 problems.append(f"{fn.name}: uses {node.id!r}, never declared")
 
     assert not problems, "\n".join(sorted(set(problems)))
+
+
+# ── the control plane's record, not our summary of it ───────────────────────
+
+
+class TestTheHoldIsVisibleAndOwned:
+    """A suspension_id says whose hold it is. Charter used to discard the one
+    `suspend_workflow` returns and read whatever hold the server reported, so
+    `charter resume` released someone else's pause without either operator being
+    able to tell afterwards."""
+
+    def test_describe_shows_whose_hold_it_is_and_whether_it_drained(self, cp):
+        cp.workflows = [held(sid="sus_abc", reason="incident 4821", finalized=False)]
+        out = invoke("describe", "refund-demo").output
+        assert "sus_abc" in out
+        assert "incident 4821" in out
+        # The question you actually have at 3am, and the reason resume refuses.
+        assert "cannot be resumed yet" in out
+
+    def test_resume_will_not_release_a_hold_you_did_not_name(self, cp):
+        cp.workflows = [held(sid="sus_theirs", reason="incident")]
+        result = invoke("resume", "refund-demo")
+        assert result.exit_code == 1
+        assert cp.resumed == []
+        assert "sus_theirs" in result.output
+
+    def test_resume_releases_the_hold_you_named(self, cp):
+        cp.workflows = [held(sid="sus_mine")]
+        result = invoke("resume", "refund-demo", "--suspension", "sus_mine")
+        assert result.exit_code == 0
+        assert cp.resumed == [("wf_refund-demo", "sus_mine")]
+
+    def test_resume_refuses_when_the_hold_is_not_the_one_you_placed(self, cp):
+        """Yours was released and another placed since. Releasing this one anyway
+        would undo a stranger's pause while you believed you were undoing your own."""
+        cp.workflows = [held(sid="sus_theirs")]
+        result = invoke("resume", "refund-demo", "--suspension", "sus_mine")
+        assert result.exit_code == 1
+        assert cp.resumed == []
+
+    def test_force_is_the_way_to_release_it_anyway(self, cp):
+        cp.workflows = [held(sid="sus_theirs")]
+        result = invoke("resume", "refund-demo", "--force")
+        assert result.exit_code == 0
+        assert cp.resumed == [("wf_refund-demo", "sus_theirs")]
+
+    def test_pause_hands_back_the_id_so_it_can_be_named_later(self, cp):
+        out = invoke("pause", "refund-demo").output
+        assert "sus_new" in out
+
+    def test_now_escalates_an_existing_hold_rather_than_reporting_it(self, cp):
+        """`--now` on an already-paused agent is asking for the run to stop, which a
+        graceful pause never did. Reporting "already paused" would make the second,
+        more urgent command do strictly less than the first."""
+        cp.workflows = [held(sid="sus_abc", stop_current=False, finalized=False)]
+        invoke("pause", "refund-demo", "--now")
+        # Retargeted, not a second hold — resume has one id to release.
+        assert cp.suspended == [("wf_refund-demo", "incident", True, "sus_abc")]
+
+    def test_deletion_pending_is_not_hidden(self, cp):
+        from datetime import datetime
+        wf = workflow()
+        cp.workflows = [replace(wf, deletion_requested_at=datetime(2026, 1, 1))]
+        assert "deletion requested" in invoke("describe", "refund-demo").output
+
+
+def test_no_two_top_level_definitions_share_a_name():
+    """A second `def _when` silently replaced the first, so the caller expecting
+    full timestamps got clock time and the new function was dead. Python does not
+    warn, and neither did anything else here — the same gap that let `charter
+    answer` ship a NameError."""
+    import ast
+    import inspect
+    from collections import Counter
+    from pathlib import Path
+
+    import charter.cli as cli
+
+    tree = ast.parse(Path(inspect.getfile(cli)).read_text())
+    names = Counter(n.name for n in tree.body
+                    if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)))
+    dupes = {n: c for n, c in names.items() if c > 1}
+    assert not dupes, f"defined more than once: {dupes}"

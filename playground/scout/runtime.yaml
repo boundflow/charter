@@ -9,3 +9,6 @@ per_run:
   max_llm_calls: 8
   max_cost_usd: 0.50
   max_seconds: 3600
+
+authority:
+  max_wait_seconds: 21600

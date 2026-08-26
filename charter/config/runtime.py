@@ -167,9 +167,12 @@ class Authority(Base):
     question_timeout_seconds: int = Field(default=1800, gt=0, description=(
         "For `ask_human`. Whether the agent *can* ask stays versioned — that "
         "changes its tool list — but how long it waits is yours to tune."))
-    max_wait_seconds: int = Field(default=0, ge=0, description=(
-        "Ceiling on a single `wait`. 0 leaves the version's own `wait.max` as the "
-        "only bound."))
+    max_wait_seconds: int = Field(default=604800, gt=0, description=(
+        "Ceiling on a single `wait`, so a confused agent can't sleep for a year. "
+        "Whether the agent *can* wait stays versioned — that changes its tool "
+        "list — but how long it may sleep is yours to tune. A longer request is "
+        "clamped to this rather than refused: the agent asked to wait, and waiting "
+        "less is closer to what it wanted than not waiting at all."))
 
     @model_validator(mode="after")
     def _check_spawns(self) -> Authority:

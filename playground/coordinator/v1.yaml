@@ -19,11 +19,7 @@ objective: |
 
 # Nothing else may be started. An agent that could name any workflow type could
 # mint governed units nobody budgeted for.
-spawns:
-  - scout
-
 wait:
-  max: 1h
 
 response_format:
   finding:

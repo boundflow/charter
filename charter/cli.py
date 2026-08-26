@@ -816,6 +816,39 @@ def describe(
                    ("activity", ui.state(ui.activity(wf.lifecycle_state.value))),
                    ("workflow", wf.id)], indent="  ")
 
+            # The control plane records more about a held or dying workflow than
+            # "paused" conveys, and this is the screen you run when you get paged.
+            # Leaving it out means the two questions you actually have — whose hold
+            # is this, and can I release it yet — are answerable only by reading the
+            # API directly, which is the opposite of what this command promises.
+            if wf.deletion_requested_at:
+                typer.echo()
+                ui.err("deletion requested")
+                ui.detail(f"at {_stamp(wf.deletion_requested_at)}")
+                ui.detail("it is going away; work started now may not survive")
+
+            if wf.suspension is not None:
+                held = wf.suspension
+                typer.echo()
+                typer.secho("hold", fg=typer.colors.BRIGHT_BLACK)
+                ui.kv([("id", held.suspension_id),
+                       ("reason", held.reason or "none given"),
+                       ("placed", _stamp(held.requested_at)),
+                       ("stopping the run", "yes" if held.stop_current else "no"),
+                       # Why this line is here rather than only discovered at
+                       # resume: until it drains, `charter resume` refuses, and
+                       # "resume is broken" is the wrong conclusion to reach alone
+                       # at 3am.
+                       ("drained", "yes" if held.finalized_at else
+                        "no — cannot be resumed yet")], indent="  ")
+                ui.detail(f"charter resume {agent} --suspension {held.suspension_id}")
+
+            if wf.last_interrupted_request_id:
+                typer.echo()
+                ui.err("a run was interrupted by the platform")
+                ui.detail(f"task {short(wf.last_interrupted_request_id)}")
+                ui.detail(f"charter resume {agent}  # resolves it")
+
             typer.echo()
             typer.secho("configuration", fg=typer.colors.BRIGHT_BLACK)
             ui.kv(_config_lines(wf.config), indent="  ")
@@ -1008,6 +1041,13 @@ def _config_lines(cfg) -> list[tuple[str, object]]:
             # point of replacing max_iterations with drafts/questions/tool-failures
             # was that nobody should have to know what one is.
             ("cancelled after", _duration(cfg.invoke_timeout_seconds))]
+
+
+def _stamp(ts) -> str:
+    """A timestamp to the second, date included — `_when` gives clock time only,
+    which is ambiguous for a hold placed yesterday. "-" for None, because "never"
+    and "midnight 1970" are not the same thing."""
+    return ts.isoformat(sep=" ", timespec="seconds") if ts else "-"
 
 
 def _snake(key: str) -> str:
@@ -1452,13 +1492,45 @@ def pause(
                 raise typer.Exit(1)
 
             full = await cp.get_workflow(wf.id)
-            if full.suspension is not None:
-                ui.dim(f"{agent} is already paused")
-                ui.detail(f"reason: {full.suspension.reason or 'none given'}")
+            held = full.suspension
+            if held is not None:
+                # `--now` on an existing hold is an escalation, not a repeat: a
+                # graceful pause left the run alone, and this is asking for it to
+                # stop. Reporting "already paused" and returning would drop that
+                # request on the floor — the operator's second, more urgent command
+                # doing strictly less than their first.
+                if not now or held.stop_current:
+                    ui.dim(f"{agent} is already paused")
+                    ui.detail(f"reason: {held.reason or 'none given'}")
+                    if now and held.stop_current:
+                        ui.detail("the run in flight is already being stopped")
+                    return
+                if held.finalized_at is not None:
+                    ui.dim(f"{agent} is already paused, and nothing is running")
+                    ui.detail("--now has nothing to stop")
+                    return
+                # Retarget the hold rather than opening a second one, so `resume`
+                # still has one suspension_id to release. Last-write-wins, so the
+                # existing reason has to be carried or it would be overwritten with
+                # the empty string.
+                await cp.suspend_workflow(wf.id, reason=reason or held.reason,
+                                          stop_current_run=True,
+                                          suspension_id=held.suspension_id)
+                _ok(f"{ui.ref('agent', agent)} hold escalated")
+                ui.detail(f"hold {held.suspension_id}")
+                ui.detail("the run in flight is being stopped")
+                ui.detail(f"charter resume {agent} --suspension "
+                          f"{held.suspension_id}")
                 return
 
-            await cp.suspend_workflow(wf.id, reason=reason, stop_current_run=now)
+            sid = await cp.suspend_workflow(wf.id, reason=reason,
+                                            stop_current_run=now)
             _ok(f"{ui.ref('agent', agent)} paused")
+            # The id identifies *your* hold, and is the whole reason the call
+            # returns one. Printing it is what lets you later release the hold you
+            # placed rather than whichever one the server happens to report — which
+            # may be someone else's, placed for a reason you can't see.
+            ui.detail(f"hold {sid}")
             if full.lifecycle_state.value in ("awaiting_approval", "awaiting_input"):
                 # Worth saying now rather than letting it be discovered at resume:
                 # a task parked on a human holds the suspension open indefinitely,
@@ -1472,7 +1544,7 @@ def pause(
             # here is the difference between "wait a moment" and "resume is broken".
             ui.detail("the run in flight is being stopped" if now
                       else "a run already in flight will finish first")
-            ui.detail(f"charter resume {agent}")
+            ui.detail(f"charter resume {agent} --suspension {sid}")
 
     asyncio.run(go())
 
@@ -1531,6 +1603,11 @@ def resume(
     agent: str = typer.Argument(...),
     tenant: str = TENANT,
     instance: str = INSTANCE,
+    suspension: str = typer.Option("", "--suspension", help=(
+        "The hold to release — the id `charter pause` printed. It identifies the "
+        "hold as yours rather than whichever one the server currently reports.")),
+    force: bool = typer.Option(False, "--force", help=(
+        "Release the hold that is there, whoever placed it")),
 ) -> None:
     """Let an agent take work again, whatever stopped it.
 
@@ -1568,6 +1645,27 @@ def resume(
                         _warn(f"{agent} is still finishing the task it was on")
                         ui.detail("the hold is recorded; it can be released once "
                                   "that run drains — try again in a moment")
+                    raise typer.Exit(1)
+                # Releasing whatever hold happens to be there is how you silently
+                # undo someone else's pause: they stopped the agent for a reason you
+                # cannot see, and afterwards nothing records that their hold existed.
+                # BoundFlow returns an id per hold precisely so that is answerable,
+                # so name the one you placed.
+                if suspension and suspension != wf.suspension.suspension_id:
+                    _err(f"{agent} is held by a different suspension "
+                         f"({short(wf.suspension.suspension_id)}), not "
+                         f"{short(suspension)}")
+                    ui.detail(f"reason: {wf.suspension.reason or 'none given'}")
+                    ui.detail("your hold was released and another placed since, "
+                              "or this id belongs to a different agent")
+                    raise typer.Exit(1)
+                if not suspension and not force:
+                    _warn(f"{agent} is held, and you have not said which hold")
+                    ui.detail(f"hold {wf.suspension.suspension_id}")
+                    ui.detail(f"reason: {wf.suspension.reason or 'none given'}")
+                    ui.detail(f"charter resume {agent} --suspension "
+                              f"{wf.suspension.suspension_id}")
+                    ui.detail("or --force to release it whoever placed it")
                     raise typer.Exit(1)
                 await cp.resume_workflow(wf.id, wf.suspension.suspension_id)
                 held = wf.suspension.reason
