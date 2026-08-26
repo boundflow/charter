@@ -8,6 +8,15 @@ per_run:
   max_llm_calls: 80
   max_seconds: 7200
   max_tool_failures: 3
+  # max_queue_depth: 100
+  # max_total_subagents: 5
+  # max_parallel_subagents: 2
+  # tool_call_limits:
+  #   - tool: net__send_message
+  #     max_calls: 10
+  # capability_call_limits:
+  #   - capability: read
+  #     max_calls: 40
 
 limits:
   max_tokens_per_call: 1024
@@ -18,3 +27,12 @@ authority:
   allowed_capabilities: [read]
   approval_timeout_seconds: 86400
   question_timeout_seconds: 86400
+  # allowed_spawns: [outreach]
+  # max_wait_seconds: 3600
+  # file_rules:
+  #   - operations: [read]
+  #     paths: ["/skills/**"]
+  #     mode: allow
+  #   - operations: [write]
+  #     paths: ["/**"]
+  #     mode: deny

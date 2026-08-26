@@ -13,6 +13,10 @@ inputs:
     required: true
     description: What kind of person to look for, e.g. agent-governance.
 
+# schedule:
+#   every: 1d
+#   manual: true
+
 objective: |
   Find people worth reaching out to about {{ inputs.topic }}, get a conversation
   started with each of them, and keep those conversations going.
@@ -79,6 +83,13 @@ mcp:
   - name: net
     command: python
     args: ["network.py"]
+    # env: [NETWORK_TOKEN]
+    # url: http://localhost:8080/mcp
+    # headers:
+    #   Authorization: "Bearer ${NET_TOKEN}"
+    # approval:
+    #   read_only: never
+    #   default: always
     tools:
       - tool: search_people
         on_failure: fail
@@ -88,12 +99,22 @@ mcp:
         approval: always
       - tool: send_message
         approval: always
+        # approval_timeout_seconds: 900
+        # on_failure: continue
 
 ask_human:
   when: balanced
 
+# subagents:
+#   - name: researcher
+#     description: Reads a lead's history and reports back.
+#     prompt: Be terse. Report only what you found.
+#     tools: [net__search_people, net__conversation]
+#     model: claude-haiku-4-5
+
 gate:
   on_reject: continue
+  # tools: [execute, write_file, submit_result, task, start_async_task]
 
 response_format:
   contacted:

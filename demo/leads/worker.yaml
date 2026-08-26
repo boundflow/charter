@@ -6,6 +6,7 @@ control_plane:
   endpoint: ${BOUNDFLOW_SERVER_ADDRESS}
   api_key: ${BOUNDFLOW_API_KEY}
   tenant: default
+  # tenant_id: ""
 
 llm:
   provider: anthropic
@@ -19,6 +20,30 @@ agents_dir: ./
 serves:
   - agent: leads-finder
     versions: [1]
+  # - ref: ghcr.io/acme/agents/leads-finder:v1
+  #   insecure: false
+
+# notifications:
+#   channels:
+#     - name: terminal
+#       kind: webhook
+#       url: http://localhost:8899
+#       secret: ${WEBHOOK_SECRET}
+#       timeout_seconds: 5
+#       max_attempts: 3
+#     - name: ops
+#       kind: telegram
+#       url: https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage
+#       chat_id: "-1001234567890"
+#   routes:
+#     - channel: terminal
+#       agent: leads-finder
+#       events: [approval_requested, input_requested]
+
+# trace_sink:
+#   kind: jsonl
+#   path: ./traces.jsonl
+#   endpoint: http://localhost:4318
 
 model_pricing:
   claude-haiku-4-5:

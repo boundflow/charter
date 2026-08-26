@@ -18,3 +18,30 @@ rules:
       cooldown:
         window: 20
         seconds: 3600
+
+  # - when:
+  #     metric: cost
+  #     threshold: 25.0
+  #   then:
+  #     set_version:
+  #       target: 1
+  # - when:
+  #     metric: num_llm_calls
+  #     threshold: 500
+  #   then:
+  #     pause:
+  #       window: 20
+  # - when:
+  #     metric: latency
+  #     threshold: 600
+  #   then:
+  #     cooldown:
+  #       window: 10
+  #       seconds: 900
+  # - when:
+  #     metric: tool_failures
+  #     tool: net__send_message
+  #     threshold: 5
+  #   then:
+  #     pause:
+  #       window: 20
