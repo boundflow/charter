@@ -441,10 +441,15 @@ class TestTheHoldIsVisibleAndOwned:
         assert result.exit_code == 1
         assert cp.resumed == []
 
-    def test_force_is_the_way_to_release_it_anyway(self, cp):
+    def test_reading_the_id_is_the_only_way_through(self, cp):
+        """There is no --force. BoundFlow makes suspension_id a required positional
+        on `workflow resume`, and nothing enforces ownership anywhere — the id is
+        explicitness, not permission. A flag meaning "whoever placed it" would be
+        the same call with the deliberation removed."""
         cp.workflows = [held(sid="sus_theirs")]
-        result = invoke("resume", "refund-demo", "--force")
-        assert result.exit_code == 0
+        assert "--force" not in invoke("resume", "--help").output
+        assert invoke("resume", "refund-demo", "--suspension",
+                      "sus_theirs").exit_code == 0
         assert cp.resumed == [("wf_refund-demo", "sus_theirs")]
 
     def test_pause_hands_back_the_id_so_it_can_be_named_later(self, cp):
@@ -484,3 +489,88 @@ def test_no_two_top_level_definitions_share_a_name():
                     if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)))
     dupes = {n: c for n, c in names.items() if c > 1}
     assert not dupes, f"defined more than once: {dupes}"
+
+
+def test_every_workflow_field_is_shown_or_deliberately_left_out():
+    """The audit that found `describe` rendering 6 of WorkflowInfo's 13 fields,
+    turned into something that fails a build.
+
+    Curation is the point of `describe` — it is the screen you read at 3am, not a
+    field dump. But curation drifts silently: BoundFlow adds a field, nobody here
+    notices, and the command that claims to show everything about an agent quietly
+    stops doing so. So a new field has to be either rendered or named below, and
+    `--json` reaches the whole record either way.
+    """
+    import ast
+    import dataclasses as dc
+    import inspect
+    from pathlib import Path
+
+    from boundflow.control_plane import WorkflowInfo
+
+    import charter.cli as cli
+
+    # Deliberately absent from the curated view, with the reason.
+    OMITTED = {
+        # The agent's name is the header; its id is already shown as "workflow".
+        "workflow_type", "id",
+        # You addressed this agent by tenant to get here.
+        "tenant_id",
+        # Shown by `charter status` against a task, where it means something.
+        "last_policy_decision_request_id",
+    }
+
+    tree = ast.parse(Path(inspect.getfile(cli)).read_text())
+    fn = next(n for n in tree.body
+              if isinstance(n, ast.FunctionDef) and n.name == "describe")
+    body = ast.unparse(fn)
+
+    missing = [f.name for f in dc.fields(WorkflowInfo)
+               if f.name not in body and f.name not in OMITTED]
+    assert not missing, (
+        f"`charter describe` never mentions {missing}. Render them, or add them to "
+        f"OMITTED here with the reason.")
+
+
+def test_json_renders_records_not_reprs(cp):
+    """`output()` converts the object it is handed, not ones nested inside it, so a
+    composite view has to be flattened first or the JSON carries Python reprs."""
+    import json
+
+    cp.workflows = [held(sid="sus_abc")]
+    doc = json.loads(invoke("--json", "describe", "refund-demo").output)
+    assert doc["workflow"]["suspension"]["suspension_id"] == "sus_abc"
+    assert doc["workflow"]["workflow_state"] == "suspended"   # enum, not repr
+
+
+def test_the_cli_reads_the_manifest_for_its_connection(tmp_path, monkeypatch):
+    """`charter worker` used the control_plane block in worker.yaml and every other
+    command ignored it, so a key written into config connected the worker and
+    nothing else. One place to put it."""
+    monkeypatch.setenv("CHARTER_PROJECT", "examples/worker.yaml")
+
+    manifest = cli._manifest()
+    assert manifest is not None
+    assert manifest.control_plane.endpoint
+    # The tenant comes from the file when nothing more specific says otherwise.
+    monkeypatch.delenv("CHARTER_TENANT", raising=False)
+    assert cli._tenant_name(None) == manifest.control_plane.tenant
+
+
+def test_a_broken_manifest_says_so_rather_than_silently_using_the_environment(
+        tmp_path, monkeypatch, capsys):
+    """The file names a control plane. If it cannot be read, using whatever the
+    environment had — without a word — is how you act on the wrong one."""
+    monkeypatch.setenv("CHARTER_PROJECT", str(tmp_path / "worker.yaml"))
+    (tmp_path / "worker.yaml").write_text(
+        "apiVersion: charter/v1\nkind: Worker\nname: w\nserves: []\n")
+
+    assert cli._manifest() is None
+    assert "could not be read" in capsys.readouterr().out
+
+
+def test_no_manifest_is_not_an_error(tmp_path, monkeypatch):
+    """Most commands work without a checkout — on call you have credentials and an
+    agent name, not the repo."""
+    monkeypatch.setenv("CHARTER_PROJECT", str(tmp_path / "nothing.yaml"))
+    assert cli._manifest() is None

@@ -6,7 +6,7 @@ agent: leads-finder
 per_run:
   max_cost_usd: 3.00
   max_llm_calls: 80
-  max_seconds: 7200
+  max_seconds: 120
   max_tool_failures: 3
   # max_queue_depth: 100
   # max_total_subagents: 5

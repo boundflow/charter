@@ -32,6 +32,8 @@ import typer
 from . import ui
 from .compile import compile_agent
 from .config.agent import split_qualified
+from boundflow.cli.output import is_json, output, set_json
+
 from .config.loader import ConfigError, load_agent, load_project
 
 app = typer.Typer(
@@ -47,6 +49,49 @@ app = typer.Typer(
          "  charter describe <agent>     state, limits, rules, what's waiting\n"
          "  charter diff .               is what's running what you declared?\n",
 )
+
+@app.callback()
+def _root(
+    json_output: bool = typer.Option(
+        False, "--json", help="Raw JSON, for scripting"),
+) -> None:
+    """Charter's own rendering is curated: it shows what an operator on call needs
+    and leaves the rest out. `--json` is the escape hatch — BoundFlow's renderer,
+    which derives its fields from the record itself, so anything the control plane
+    knows is reachable without us having remembered to print it."""
+    set_json(json_output)
+
+
+def _plain(value):
+    """Dataclasses to dicts, recursively through lists.
+
+    `output()` converts the object it is handed, not objects nested inside it — so
+    a dict of records renders each value through `str()` and you get a repr in your
+    JSON. Assembling a composite view means flattening first.
+    """
+    import dataclasses as dc
+
+    if dc.is_dataclass(value) and not isinstance(value, type):
+        return dc.asdict(value)
+    if isinstance(value, list):
+        return [_plain(v) for v in value]
+    return value
+
+
+def _dump(data) -> bool:
+    """In --json mode, print the whole record and report that we did.
+
+        if _dump(wf):
+            return
+
+    Callers put this above their curated rendering, so the complete record is one
+    flag away from every view rather than a thing we re-derive per command.
+    """
+    if is_json():
+        output(data)
+        return True
+    return False
+
 
 ENV_REF = re.compile(r"\$\{([A-Z][A-Z0-9_]*)\}")
 
@@ -394,9 +439,57 @@ def _apply_single(bundle, *, dry_run: bool) -> None:
 # checked out; they got a webhook with an approval_id.
 
 
+def _manifest():
+    """The worker manifest for the project we're standing in, or None.
+
+    `CHARTER_PROJECT`, else `worker.yaml` here. Never an error: most commands work
+    without a checkout at all — whoever is on call has credentials and an agent
+    name, not the repo — so a missing or unreadable manifest just means we fall
+    back to the environment.
+    """
+    where = os.environ.get("CHARTER_PROJECT") or "worker.yaml"
+    path = Path(where)
+    if path.is_dir():
+        path = path / "worker.yaml"
+    if not path.is_file():
+        return None
+    try:
+        project = load_project(path)
+    except Exception as e:  # noqa: BLE001 — a broken file is not a dead command
+        # Falling back silently is how you end up pointed at the wrong control
+        # plane: the file names an endpoint, it doesn't parse, and the command
+        # quietly uses whatever the environment had. Say so and carry on.
+        ui.warn(f"{path} could not be read — using the environment instead")
+        ui.detail(str(e).strip().splitlines()[0] if str(e).strip() else type(e).__name__)
+        ui.detail("charter validate  # for the whole list")
+        return None
+    return getattr(project, "manifest", None)
+
+
 def _cp():
+    """A control-plane client, configured the same way the worker configures its own.
+
+    The manifest wins where it says something. Without it, `ControlPlaneClient()`
+    reads the environment, which is what an on-call operator with no checkout has.
+
+    This used to be bare `ControlPlaneClient()`, so a key written into worker.yaml
+    worked for `charter worker` and not for any other command — the config file
+    said where the control plane was and every read command ignored it.
+    """
     from boundflow import ControlPlaneClient
-    return ControlPlaneClient()
+    from .worker import resolve
+
+    manifest = _manifest()
+    if manifest is None:
+        return ControlPlaneClient()
+    try:
+        return ControlPlaneClient(resolve(manifest.control_plane.endpoint),
+                                  resolve(manifest.control_plane.api_key))
+    except RuntimeError:
+        # A ${VAR} the manifest names and the environment doesn't have. The
+        # environment may still carry BOUNDFLOW_* directly, so this is not fatal
+        # here — it is `charter worker` that must refuse.
+        return ControlPlaneClient()
 
 
 # An agent is identified by (tenant, name) — a workflow's tenant is fixed at
@@ -412,10 +505,13 @@ TENANT = typer.Option(None, "--tenant", "-t",
 def _tenant_name(explicit: str | None) -> str:
     """No default. Which tenant an agent belongs to is permanent, so it's named
     rather than assumed."""
-    name = explicit or os.environ.get("CHARTER_TENANT")
+    manifest = _manifest()
+    name = (explicit or os.environ.get("CHARTER_TENANT")
+            or (manifest.control_plane.tenant if manifest else ""))
     if not name:
         ui.err("no tenant given")
-        ui.detail("--tenant <name>, or export CHARTER_TENANT")
+        ui.detail("--tenant <name>, export CHARTER_TENANT, or name one in "
+                  "worker.yaml")
         ui.detail("charter tenant list")
         raise typer.Exit(1)
     return name
@@ -746,6 +842,8 @@ def agents(tenant: str = TENANT) -> None:
 
             mine = [w for w in await cp.list_workflows()
                     if w.tenant_id == tenant_id and w.lifecycle_state.value != "deleted"]
+            if _dump(mine):
+                return
             if not mine:
                 ui.dim(f"no agents in {name} — charter apply .")
                 return
@@ -807,6 +905,19 @@ def describe(
                 ui.detail("charter agents  # what's there")
                 raise typer.Exit(1)
             wf = await cp.get_workflow(wf.id)
+
+            if is_json():
+                # Everything the control plane holds about this agent, assembled
+                # rather than summarised. The curated view below is the one to read
+                # at 3am; this is the one to pipe into something.
+                output({
+                    "workflow": _plain(wf),
+                    "runtime_policy": await cp.get_agent_runtime_policy(wf.id, agent),
+                    "lifecycle_rules": _plain(
+                        await cp.get_workflow_lifecycle_policy(wf.id)),
+                    "metrics": _plain(await cp.get_workflow_metrics(wf.id)),
+                })
+                return
 
             typer.secho(f"{agent}", bold=True)
             ui.kv([("version", f"v{wf.version}"),
@@ -971,6 +1082,8 @@ def tasks(agent: str = typer.Argument(...),
             # so this narrows locally. Correct, but it fetches the whole history to
             # show twenty rows; see the `limit`/cursor ask on the BoundFlow side.
             runs = await cp.list_workflow_runs(wf.id)
+            if _dump(runs):
+                return
             total = len(runs)
             runs = _filter_runs(runs, failed=failed, status=status, since=since)
             shown = runs if limit == 0 else runs[:limit]
@@ -1157,6 +1270,8 @@ def status(task_id: str = typer.Argument(..., help="The id `charter run` printed
     async def go():
         async with _cp() as cp:
             info = await cp.get_request_info(task_id)
+            if _dump(info):
+                return
             outcome = info.run_outcome.value if info.run_outcome else info.status.value
             ui.kv([("task", task_id),
                    ("outcome", ui.state(outcome)),
@@ -1606,8 +1721,6 @@ def resume(
     suspension: str = typer.Option("", "--suspension", help=(
         "The hold to release — the id `charter pause` printed. It identifies the "
         "hold as yours rather than whichever one the server currently reports.")),
-    force: bool = typer.Option(False, "--force", help=(
-        "Release the hold that is there, whoever placed it")),
 ) -> None:
     """Let an agent take work again, whatever stopped it.
 
@@ -1659,13 +1772,13 @@ def resume(
                     ui.detail("your hold was released and another placed since, "
                               "or this id belongs to a different agent")
                     raise typer.Exit(1)
-                if not suspension and not force:
+                if not suspension:
                     _warn(f"{agent} is held, and you have not said which hold")
                     ui.detail(f"hold {wf.suspension.suspension_id}")
                     ui.detail(f"reason: {wf.suspension.reason or 'none given'}")
                     ui.detail(f"charter resume {agent} --suspension "
                               f"{wf.suspension.suspension_id}")
-                    ui.detail("or --force to release it whoever placed it")
+                    ui.detail("charter describe " + agent + "  # if you need the id")
                     raise typer.Exit(1)
                 await cp.resume_workflow(wf.id, wf.suspension.suspension_id)
                 held = wf.suspension.reason
