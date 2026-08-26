@@ -267,6 +267,110 @@ $ charter audit refund-triage
 The agent isn't just a loop that ran. It's an operational resource with a current
 version, state, history, authority, and behavior over time.
 
+## Getting started
+
+Assumes a BoundFlow control plane you can reach and an API key for it.
+
+```bash
+pip install charter
+```
+
+### Credentials
+
+`worker.yaml` is committed, so nothing secret is written in it. Every credential
+is a `${VAR}` reference resolved from the environment when the worker starts:
+
+```yaml
+control_plane:
+  endpoint: ${BOUNDFLOW_SERVER_ADDRESS}
+  api_key: ${BOUNDFLOW_API_KEY}
+  tenant: default
+
+llm:
+  provider: anthropic
+  api_key: ${ANTHROPIC_API_KEY}
+
+store:
+  url: ${CHARTER_STORE_URL}
+```
+
+```bash
+export BOUNDFLOW_SERVER_ADDRESS=http://localhost:50051
+export BOUNDFLOW_API_KEY=...      # the control plane
+export ANTHROPIC_API_KEY=...      # inference — never reaches the control plane
+export CHARTER_STORE_URL=postgresql://...   # the agent's checkpoints and files
+```
+
+The CLI reads the same block, from `worker.yaml` in the working directory or
+wherever `CHARTER_PROJECT` points. So the control plane is configured once, and
+`charter describe` talks to the same one `charter worker` does. With no manifest
+to hand — on call, with credentials and an agent name but no checkout — it falls
+back to `BOUNDFLOW_*` from the environment.
+
+### A project
+
+```
+.
+├── worker.yaml               # which agents this worker serves, pricing, channels
+└── leads-finder/
+    ├── v1.yaml               # objective, tools, gates — versioned, immutable
+    ├── runtime.yaml          # budgets, limits, authority — policy, not versioned
+    └── lifecycle.yaml        # pause, cooldown and rollback rules
+```
+
+Only `v1.yaml` is required.
+
+### First run
+
+```bash
+charter validate .                    # parse and cross-check every file
+charter agent create leads-finder     # bring one instance into existence
+charter apply .                       # arm config, policy and pricing
+```
+
+`create` and `apply` are separate on purpose. An instance owns state — its own
+store, budget and lifecycle history — so bringing one into existence is a decision
+someone makes, not something re-running config in CI does on their behalf. `apply`
+is then safe to run as often as you like, and is what arms model pricing from
+`worker.yaml`. **Skip it and runs cost $0.00**, so cost limits never trigger.
+
+Then start a worker, and give it something to do:
+
+```bash
+charter worker .                              # its own terminal; this is the process
+charter run leads-finder --topic "..."        # declared inputs become --flags
+```
+
+### While it runs
+
+```bash
+charter agents                   # every agent and what it is doing
+charter describe <agent>         # authority, armed limits, rules, any hold
+charter tasks <agent> [--failed] # task history
+charter status <task-id>         # result, cost, and why it stopped
+charter pending <agent>          # the open gate, if it is parked on one
+charter approve <id> / reject <id> / answer <id> "..."
+```
+
+Add `--json` to any of these for the complete record rather than the curated view.
+
+### Changing things
+
+Edit `runtime.yaml` and `charter apply` — limits are read per operation, so a
+tightened budget lands on the next round without restarting a worker. Behaviour is
+versioned instead: add a `v2.yaml` and apply, and existing tasks finish on the
+version they started. `charter diff .` compares what is armed against your files.
+
+### Deploying
+
+Locally, `charter worker .` is the whole thing — which is what you want while
+iterating, since the agent's MCP servers and your own logs are in front of you.
+
+For anything long-lived, run the worker as a container. The reason is isolation
+rather than packaging: an agent declares MCP servers as commands, and the worker
+executes them. [deploy/](deploy/) has a Dockerfile that mounts the project rather
+than baking it in, so changing an objective is a restart and not a rebuild.
+
 ## Configuration
 
 Charter separates the agent itself from the operational policy around it:
@@ -286,20 +390,44 @@ as needed.
 
 ## CLI
 
+Configuration, and the agent artifact — Charter's own:
+
 ```bash
 charter validate .               # parse and cross-check configuration
 charter diff .                   # compare declared and deployed state
-charter apply .                  # create/update agents and policy
+charter apply .                  # update config, policy and pricing
+charter push <agent> <ref>       # publish a version to an OCI registry
 charter worker .                 # run agents in this environment
+charter schema                   # JSON Schema for the config files
+```
 
+Operating an agent. These address agents by name and delegate to the control
+plane, so anything here can also be done with `boundflow` against a workflow id:
+
+```bash
+charter agent create <agent>     # bring an instance into existence
 charter run <agent> [--flags]    # start a task
 charter agents                   # list agents and current activity
-charter describe <agent>         # inspect authority, limits and rules
+charter describe <agent>         # authority, limits, rules, any hold
 charter tasks <agent> [--failed] # task history
-charter status <task-id>         # result, cost and actions
-charter pending <agent>          # pending human interaction
-charter resume <agent>           # resume an agent paused by policy
+charter status <task-id>         # result, cost and why it stopped
+charter audit <agent>            # every governance decision recorded
+
+charter pending <agent>                  # the open gate, if parked on one
+charter approve <id> [--reason ...]      # approve a parked gate
+charter reject <id> [--reason ...]       # reject one
+charter answer <id> "..."                # answer a question
+
+charter pause <agent> [--now]            # stop it taking work; prints a hold id
+charter resume <agent> --suspension <id> # release that hold
+charter abandon <agent> [--all]          # drop queued tasks, irreversibly
+charter agent delete <agent>             # destroy an instance and its history
 ```
+
+`--json` on any read command prints the complete record instead of the curated
+view. `charter pause` prints the id identifying the hold as yours, and `resume`
+requires it — releasing whichever hold happens to be there is how one operator
+silently undoes another's.
 
 ## Architecture
 
