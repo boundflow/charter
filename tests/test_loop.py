@@ -794,3 +794,46 @@ async def test_a_declared_default_reaches_the_prompt_however_the_task_arrived():
     assert "{{ inputs." not in prompt, "a placeholder survived into the prompt"
     assert "100" in prompt, "the declared default should be what filled it"
     assert loop._unfilled(ctx) == [], "a default is a value, not a missing input"
+
+
+# ── a gate is per tool, not per agent ───────────────────────────────────────
+
+
+class TestPerToolGates:
+    """One answer for every gate is the wrong shape. Turning down an outreach
+    message should leave the rest of the run going; turning down a deploy should
+    stop it, and an agent reporting success having not deployed is lying."""
+
+    def _loop(self, tools):
+        import yaml
+        cfg_raw = yaml.safe_load((EXAMPLES / "refund-triage" / "v1.yaml").read_text())
+        cfg_raw["mcp"][0]["tools"] = tools
+        from charter.config.agent import AgentConfig
+        bundle = load_agent(EXAMPLES / "refund-triage")
+        cfg = AgentConfig.model_validate(cfg_raw)
+        empty = type("NoTools", (), {"langchain_tools": lambda s: []})()
+        return Loop(cfg, bundle.runtime, tools=empty,
+                    chat_model=lambda m: object(), store_url="x")
+
+    def test_a_tool_may_override_what_its_rejection_means(self):
+        server = load_agent(EXAMPLES / "refund-triage").latest.mcp[0]
+        first = server.tools[0].tool
+        loop = self._loop([{"tool": first, "approval": "always", "on_reject": "fail"}])
+
+        assert loop._on_reject(server.qualified(first)) == "fail"
+
+    def test_a_tool_that_says_nothing_uses_the_agents_answer(self):
+        server = load_agent(EXAMPLES / "refund-triage").latest.mcp[0]
+        first = server.tools[0].tool
+        loop = self._loop([{"tool": first, "approval": "always"}])
+
+        assert loop._on_reject(server.qualified(first)) == loop.cfg.gate.on_reject
+
+    def test_an_unknown_tool_falls_back_rather_than_raising(self):
+        """The gated tool comes back from context on resume, and a version that
+        dropped the tool between the gate and the answer should not crash the
+        resume."""
+        server = load_agent(EXAMPLES / "refund-triage").latest.mcp[0]
+        loop = self._loop([{"tool": server.tools[0].tool, "approval": "always"}])
+
+        assert loop._on_reject("gone__vanished") == loop.cfg.gate.on_reject

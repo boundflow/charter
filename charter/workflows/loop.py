@@ -409,7 +409,7 @@ class Loop:
         if verdict == "approve":
             decision = approve()
         elif verdict == "reject":
-            if self.cfg.gate.on_reject == "fail":
+            if self._on_reject(ctx.context.get(K_GATED_TOOL, "")) == "fail":
                 # The gated action was the point, so finishing without it would be
                 # a task that reports success having done nothing. Covers a timeout
                 # too — the control plane resolves an unanswered gate as a
@@ -719,6 +719,20 @@ class Loop:
                 if server.qualified(spec.tool) == tool and spec.approval_timeout_seconds:
                     return spec.approval_timeout_seconds
         return self.runtime.authority.approval_timeout_seconds
+
+    def _on_reject(self, tool: str) -> str:
+        """What a refusal of this tool means, per tool where it says.
+
+        Mirrors `_gate_timeout`: one answer for every gate is the wrong shape.
+        Turning down an outreach message should leave the rest of the campaign
+        running; turning down a deploy should stop the task, and an agent that
+        finished "successfully" having not deployed would be reporting a lie.
+        """
+        for server in self.cfg.mcp:
+            for spec in server.tools:
+                if server.qualified(spec.tool) == tool and spec.on_reject:
+                    return spec.on_reject
+        return self.cfg.gate.on_reject
 
     def _question(self, ctx, action: dict, resume):
         """The agent asked something, so park for an answer rather than a verdict.

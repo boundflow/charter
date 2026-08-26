@@ -120,6 +120,10 @@ class ToolSpec(Base):
     on_failure: Literal["continue", "fail"] = Field(default="continue", description=(
         "continue: the model is told and carries on. fail: the task stops, "
         "checked at the next round boundary."))
+    on_reject: Literal["continue", "fail"] | None = Field(default=None, description=(
+        "What a refusal of THIS tool means, overriding the agent's `gate.on_reject`. "
+        "Rejecting an outreach message should let the rest of the run continue; "
+        "rejecting a production deploy usually should not."))
 
     @property
     def gated(self) -> bool:

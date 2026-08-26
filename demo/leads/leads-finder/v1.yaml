@@ -101,6 +101,7 @@ mcp:
         approval: always
         # approval_timeout_seconds: 900
         # on_failure: continue
+        # on_reject: fail
 
 ask_human:
   when: balanced
