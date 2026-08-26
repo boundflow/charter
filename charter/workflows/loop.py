@@ -439,8 +439,10 @@ class Loop:
         action = None
         spawner = self._task_spawner(ctx)
         try:
+            agent_tools = self._tools()
             async with durable_harness(ctx, self.cfg.name, self.store_url,
-                                       resume=decision) as h:
+                                       resume=decision, cfg=self.cfg,
+                                       tools=agent_tools) as h:
                 skills = await self._ship_skills(h)
                 prompt = self._prompt(ctx)
                 result = await ctx.run_governed(

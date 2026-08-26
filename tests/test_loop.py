@@ -123,7 +123,7 @@ def _stub_harness(monkeypatch):
     Wiring.discarded = False
 
     @asynccontextmanager
-    async def fake(ctx, agent_name, store_url, *, resume=None):
+    async def fake(ctx, agent_name, store_url, *, resume=None, cfg=None, tools=None):
         fake.resume = resume
         fake.wiring = Wiring()
         yield fake.wiring

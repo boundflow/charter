@@ -103,3 +103,97 @@ def test_a_failed_call_still_spends_its_slot():
         break
 
     assert spent["write"] == 1, "the failed attempt kept its slot"
+
+
+# ── declared specialists ────────────────────────────────────────────────────
+
+
+def agent_with(subagents):
+    import yaml
+    from charter.config.agent import AgentConfig
+    from pathlib import Path
+    raw = yaml.safe_load(
+        (Path(__file__).parent.parent / "demo/leads/leads-finder/v1.yaml").read_text())
+    raw["subagents"] = subagents
+    return AgentConfig.model_validate(raw)
+
+
+def fake_tools(*names):
+    from langchain_core.tools import StructuredTool
+    return [StructuredTool.from_function(func=lambda: "", name=n, description="t")
+            for n in names]
+
+
+def test_a_declared_subagent_carries_the_same_bounds():
+    """The whole reason this exists rather than letting deepagents default it: a
+    specialist that escaped the parent's policy would be a hole you opened on
+    purpose."""
+    from charter.harness.durable import declared_subagents
+
+    cfg = agent_with([{"name": "researcher", "description": "Reads."}])
+    gov = governor(allowed_capabilities=["read", "spawn"], allowed_tools=[])
+
+    spec = declared_subagents(cfg, fake_tools("net__search_people"), gov, {})[0]
+
+    assert offer(spec["middleware"], "write_file") == "refused"
+    assert offer(spec["middleware"], "read_file") == "allowed"
+
+
+def test_a_narrower_tool_list_is_honoured():
+    from charter.harness.durable import declared_subagents
+
+    cfg = agent_with([{"name": "researcher", "description": "Reads.",
+                       "tools": ["net__search_people"]}])
+    tools = fake_tools("net__search_people", "net__send_message")
+
+    spec = declared_subagents(cfg, tools, governor(), {})[0]
+
+    assert [t.name for t in spec["tools"]] == ["net__search_people"]
+
+
+def test_declaring_no_tools_means_the_parents_whole_set():
+    """Which is what general-purpose already is — so declaring one this way only
+    makes sense alongside a different model or a standing prompt."""
+    from charter.harness.durable import declared_subagents
+
+    cfg = agent_with([{"name": "drafter", "description": "Writes.",
+                       "model": "claude-haiku-4-5"}])
+
+    spec = declared_subagents(cfg, fake_tools("a", "b"), governor(), {})[0]
+
+    assert "tools" not in spec
+    assert spec["model"] == "claude-haiku-4-5"
+
+
+def test_a_subagent_cannot_reach_further_than_its_parent():
+    import pytest as _pytest
+    from pydantic import ValidationError
+
+    with _pytest.raises(ValidationError, match="does not declare"):
+        agent_with([{"name": "researcher", "description": "Reads.",
+                     "tools": ["net__nonexistent"]}])
+
+
+def test_general_purpose_cannot_be_redeclared():
+    """It would replace the harness's own silently — including the one Charter
+    supplies to carry the parent's policy."""
+    import pytest as _pytest
+    from pydantic import ValidationError
+
+    with _pytest.raises(ValidationError, match="harness's own"):
+        agent_with([{"name": "general-purpose", "description": "Mine now."}])
+
+
+def test_every_subagent_shares_one_capability_allowance():
+    """Per-graph counters would mean a cap of two admitting two per specialist."""
+    from charter.harness.durable import bounded_subagent, declared_subagents
+
+    cfg = agent_with([{"name": "researcher", "description": "Reads."}])
+    gov = governor(capability_call_limits=[{"capability": "write", "max_calls": 1}])
+    spent: dict[str, int] = {}
+
+    general = bounded_subagent(gov, spent)["middleware"]
+    specialist = declared_subagents(cfg, [], gov, spent)[0]["middleware"]
+
+    assert offer(general, "write_file") == "allowed"
+    assert offer(specialist, "write_file") == "refused"

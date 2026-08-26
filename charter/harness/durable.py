@@ -82,6 +82,42 @@ class DurableHarness:
         return self._resume if self._resume is not None else payload
 
 
+def declared_subagents(cfg, tools: list, governor, spent: dict[str, int]) -> list[dict]:
+    """The agent's own specialists, held to the same policy as everything else.
+
+    Each declared subagent becomes a deepagents `SubAgent`, and gets the same
+    treatment `general-purpose` does: the parent's middleware and file permissions,
+    and the parent's capability counter. A narrower tool list here narrows what the
+    subagent may *reach*; it does not widen what it may *do*, because the policy
+    that bounds the parent is the policy compiled into the child.
+
+    `tools` is the parent's whole toolset. A subagent naming none of them gets all
+    of them, which is what general-purpose already is — declaring one that way only
+    makes sense alongside a different model or a standing prompt.
+    """
+    by_name = {getattr(t, "name", ""): t for t in tools}
+    out = []
+    for sub in cfg.subagents:
+        spec: dict = {
+            "name": sub.name,
+            "description": sub.description,
+            "middleware": harness_middleware(governor, spent),
+            "permissions": file_permissions(governor.policy),
+        }
+        if sub.prompt:
+            spec["system_prompt"] = sub.prompt
+        if sub.model:
+            spec["model"] = sub.model
+        if sub.tools:
+            # Validated against the parent's declarations at load, so a name that
+            # is missing here is a tool the worker failed to connect rather than a
+            # config error — and handing over a shorter list is better than a
+            # KeyError at boot.
+            spec["tools"] = [by_name[n] for n in sub.tools if n in by_name]
+        out.append(spec)
+    return out
+
+
 def bounded_subagent(governor, spent: dict[str, int]) -> dict:
     """deepagents' general-purpose subagent, held to the same policy as its parent.
 
@@ -107,11 +143,16 @@ def bounded_subagent(governor, spent: dict[str, int]) -> dict:
 
 
 @asynccontextmanager
-async def durable_harness(ctx, agent_name: str, store_url: str, *, resume: Any = None):
+async def durable_harness(ctx, agent_name: str, store_url: str, *, resume: Any = None,
+                          cfg: Any = None, tools: list | None = None):
     """Open the durable stores for this task and yield its wiring.
 
     `resume` is the decision from a gate — see `harness_gates` — and is what makes
     `h.first()` return a `Command` instead of a fresh message.
+
+    `cfg` and `tools` are the agent's versioned config and its whole toolset, used
+    to build the subagents it declares. Both optional: without them the agent still
+    gets `general-purpose`, which is what deepagents would have given it anyway.
     """
     from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
     from langgraph.store.postgres.aio import AsyncPostgresStore
@@ -157,7 +198,12 @@ async def durable_harness(ctx, agent_name: str, store_url: str, *, resume: Any =
                 # no way to inherit the parent's — so a defaulted one runs outside
                 # the tool allowlist and the per-tool caps. An agent allowed to
                 # spawn could then do through a child what it may not do itself.
-                "subagents": [bounded_subagent(governor, spent)],
+                # general-purpose always, plus whatever this version declares.
+                # Built here rather than passed in because both need the governor
+                # and the shared counter, and neither exists outside this scope.
+                "subagents": [bounded_subagent(governor, spent),
+                              *(declared_subagents(cfg, tools or [], governor, spent)
+                                if cfg is not None else [])],
             },
             config={
                 "configurable": {"thread_id": task_id},

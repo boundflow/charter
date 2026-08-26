@@ -404,6 +404,40 @@ class Wait(Base):
         return self
 
 
+class Subagent(Base):
+    """A specialist this agent may delegate to, in-process.
+
+    The harness always offers `general-purpose`: same tools as the parent, told
+    what to do per call. A declared subagent is for when that is too much — a
+    narrower tool list so it cannot wander, a cheaper model for grunt work, a
+    standing prompt that says how to behave rather than repeating it in every
+    description.
+
+    Versioned rather than policy, because all three change what the agent *is*
+    rather than bounding it. The bounds still come from policy: a subagent runs
+    under the same `allowed_capabilities`, the same file rules, and the same
+    capability allowances as its parent, and shares them rather than getting its
+    own.
+
+    It delegates in-process, so it cannot outlive the run or wait for a human.
+    That is `start_async_task` and a separate agent.
+    """
+
+    name: str = Field(pattern=r"^[a-z][a-z0-9-]{2,62}$")
+    description: str = Field(min_length=1, description=(
+        "What it is for. The parent reads this to decide when to delegate, so it "
+        "should say when *not* to as well."))
+    prompt: str | None = Field(default=None, description=(
+        "Its standing instructions. Omit and it uses the harness's default."))
+    tools: list[str] = Field(default_factory=list, description=(
+        "Qualified names — `server__tool`. Must be tools this agent declares; a "
+        "subagent cannot reach further than its parent. Empty means the parent's "
+        "whole toolset, which is what general-purpose already gives you."))
+    model: str | None = Field(default=None, description=(
+        "Defaults to the agent's own. A cheaper one here is the usual reason to "
+        "declare a subagent at all."))
+
+
 class Gate(Base):
     """How long a human has, and what happens if nobody answers.
 
@@ -493,6 +527,7 @@ class AgentConfig(Base):
     # agent answers in prose, which is what most agents want.
     response_format: dict[str, FieldSpec] | None = None
     wait: Wait | None = None
+    subagents: list[Subagent] = Field(default_factory=list)
     gate: Gate = Field(default_factory=Gate)
     ask_human: AskHuman | None = None
 
@@ -519,9 +554,27 @@ class AgentConfig(Base):
     @model_validator(mode="after")
     def _check(self) -> AgentConfig:
         self._check_servers_unique()
+        self._check_subagents()
         self._check_templates()
         self._check_schedule()
         return self
+
+    def _check_subagents(self) -> None:
+        names = [s.name for s in self.subagents]
+        if len(set(names)) != len(names):
+            raise ValueError("two subagents share a name")
+        if "general-purpose" in names:
+            raise ValueError(
+                "`general-purpose` is the harness's own subagent — declaring one "
+                "by that name would replace it silently. Pick another name.")
+        declared = set(self.all_tools)
+        for sub in self.subagents:
+            unknown = sorted(set(sub.tools) - declared)
+            if unknown:
+                raise ValueError(
+                    f"subagent {sub.name!r} names tools this agent does not "
+                    f"declare: {', '.join(unknown)}. A subagent cannot reach "
+                    f"further than its parent.")
 
     def _check_schedule(self) -> None:
         if self.schedule and self.inputs:
