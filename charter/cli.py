@@ -1253,6 +1253,7 @@ def answer(
     agent: str = typer.Option(..., "--agent", "-a"),
     actor: str = typer.Option("", "--actor"),
     tenant: str = TENANT,
+    instance: str = INSTANCE,
 ) -> None:
     """Answer an agent's question."""
     async def go():
@@ -1599,6 +1600,7 @@ def delete(
     agent: str = typer.Argument(...),
     yes: bool = typer.Option(False, "--yes", help="Skip the confirmation"),
     tenant: str = TENANT,
+    instance: str = INSTANCE,
 ) -> None:
     """Delete an agent's workflow and its history. Mostly for iterating locally."""
     if not yes:

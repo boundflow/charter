@@ -324,3 +324,55 @@ class TestInstances:
         import inspect
         src = inspect.getsource(mod.apply_agent)
         assert "create_workflow" not in src
+
+
+# ── the bodies actually run ─────────────────────────────────────────────────
+
+
+def test_no_command_references_an_option_it_never_declared():
+    """`charter answer` raised NameError: instance — it used `instance` to pick the
+    workflow but never took the flag. `charter delete` had it too, which is worse,
+    because that one deletes.
+
+    Neither was caught by anything: the suite exercises argument parsing and the
+    control-plane calls, and a name resolved at runtime inside `go()` is invisible
+    to both until a person runs the command. This is a cheap static stand-in for
+    running all of them.
+    """
+    import ast
+    import inspect
+    from pathlib import Path
+
+    import charter.cli as cli
+
+    source = Path(inspect.getfile(cli)).read_text()
+    tree = ast.parse(source)
+    module_level = {n.id for stmt in tree.body for n in ast.walk(stmt)
+                    if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store)}
+    module_level |= {n.name for n in tree.body
+                     if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))}
+    module_level |= {a.asname or a.name.split(".")[0]
+                     for n in tree.body if isinstance(n, ast.Import) for a in n.names}
+    module_level |= {a.asname or a.name
+                     for n in tree.body if isinstance(n, ast.ImportFrom) for a in n.names}
+
+    # The options a command forgets to declare, which is the whole failure mode.
+    flags = {"instance", "tenant", "agent", "all_", "yes", "actor", "dry_run"}
+    problems = []
+    for fn in tree.body:
+        if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        params = {a.arg for a in fn.args.args} | {a.arg for a in fn.args.kwonlyargs}
+        bound = set(params)
+        for node in ast.walk(fn):
+            if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+                bound.add(node.id)
+            elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node is not fn:
+                bound |= {a.arg for a in node.args.args}
+        for node in ast.walk(fn):
+            if (isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)
+                    and node.id in flags and node.id not in bound
+                    and node.id not in module_level):
+                problems.append(f"{fn.name}: uses {node.id!r}, never declared")
+
+    assert not problems, "\n".join(sorted(set(problems)))
