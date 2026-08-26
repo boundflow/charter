@@ -574,3 +574,32 @@ def test_no_manifest_is_not_an_error(tmp_path, monkeypatch):
     agent name, not the repo."""
     monkeypatch.setenv("CHARTER_PROJECT", str(tmp_path / "nothing.yaml"))
     assert cli._manifest() is None
+
+
+def test_every_command_the_readme_names_exists():
+    """A README is the one place a command name goes stale without anything
+    failing. Renaming a command leaves the docs confidently wrong, and the person
+    who finds out is someone following them for the first time."""
+    import re
+    from pathlib import Path
+
+    import typer
+
+    names = set()
+    for group in (cli.app, ):
+        for command in group.registered_commands:
+            names.add(command.name or command.callback.__name__.replace("_", "-"))
+    for sub in cli.app.registered_groups:
+        for command in sub.typer_instance.registered_commands:
+            names.add(f"{sub.name} {command.name}")
+
+    documented = set()
+    for line in Path("README.md").read_text().splitlines():
+        m = re.match(r"^charter ([a-z-]+)(?: ([a-z-]+))?", line.strip())
+        if not m:
+            continue
+        verb, second = m.group(1), m.group(2)
+        documented.add(f"{verb} {second}" if f"{verb} {second}" in names else verb)
+
+    missing = sorted(d for d in documented if d not in names)
+    assert not missing, f"README names commands that do not exist: {missing}"
