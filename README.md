@@ -334,12 +334,23 @@ someone makes, not something re-running config in CI does on their behalf. `appl
 is then safe to run as often as you like, and is what arms model pricing from
 `worker.yaml`. **Skip it and runs cost $0.00**, so cost limits never trigger.
 
-Then start a worker, and give it something to do:
+`create` prints the instance id. Keep it — every command that acts on an agent
+names one:
 
 ```bash
 charter worker .                              # its own terminal; this is the process
-charter run leads-finder --topic "..."        # declared inputs become --flags
+charter run leads-finder --instance a3f9c012 --topic "..."
 ```
+
+An agent name addresses a *kind* of instance. The instance is the entity that
+holds the state — its conversation, its budget, its lifecycle history — so a name
+alone is never a target, including when there is only one. Charter resolved the
+name in that case for a while, which was pleasant right up until someone created a
+second instance and every command they had learned meant something else. Forget
+the id and the error lists what exists with the flag filled in.
+
+`--all` fans out where that is meaningful — `charter apply --all` is how CI
+reconciles config without knowing ids.
 
 ### While it runs
 
@@ -352,7 +363,8 @@ charter pending <agent>          # the open gate, if it is parked on one
 charter approve <id> / reject <id> / answer <id> "..."
 ```
 
-Add `--json` to any of these for the complete record rather than the curated view.
+All of these take `--instance <id>`, and `--json` for the complete record rather
+than the curated view.
 
 ### Changing things
 
@@ -406,7 +418,7 @@ plane, so anything here can also be done with `boundflow` against a workflow id:
 
 ```bash
 charter agent create <agent>     # bring an instance into existence
-charter run <agent> [--flags]    # start a task
+charter run <agent> --instance <id> [--flags]   # start a task
 charter agents                   # list agents and current activity
 charter describe <agent>         # authority, limits, rules, any hold
 charter tasks <agent> [--failed] # task history
