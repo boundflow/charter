@@ -124,8 +124,6 @@ accumulator enforces the sum. Both defend the same declared number, so whichever
 trips first produces the same ceiling, and a bug in Charter's counter still can't
 blow past it by more than nothing.
 
-`max_iterations` is Charter's alone; BoundFlow has no view of the loop.
-
 Exceeding any per-run limit fails the run, which is what feeds the lifecycle rules
 below.
 
@@ -230,9 +228,8 @@ trace_sink:
 ```
 
 At boot the worker loads each listed config version and calls
-`worker.workflow(agent, version=N)` plus the four fixed operations
-(`execute_act`, `log_rejection`, `log_answer`, and the entry handler) once per
-version. `serves` is what makes a worker fleet-manageable: which process can run
+`worker.workflow(agent, version=N)` once per version. There is one operation —
+the entry handler — re-entered after every park. `serves` is what makes a worker fleet-manageable: which process can run
 which agent is declarative, so you can shard agents across workers, or run a
 canary worker holding only `v2` while the fleet stays on `v1`.
 
@@ -353,7 +350,7 @@ Tools run in two different places, so there are four cases:
 | | `on_failure: continue` | `on_failure: fail` |
 |---|---|---|
 | `approval: never` (inline) | Orchestrator catches, counts, hands the error to the model, loop continues. Pure BoundFlow. | Same, then `entry` checks `result.tool_failure_counts` after `run_agent` → `mark_failed()` + `Complete()` |
-| `approval: always` (`execute_act`) | Charter catches, records, folds the error into history, `Next(entry)` so the agent can react | Charter catches, records, `mark_failed()` + `Complete()` |
+| `approval: always` (after approval) | Charter catches, records, folds the error into history, `Next(entry)` so the agent can react | Charter catches, records, `mark_failed()` + `Complete()` |
 
 The bottom row has no orchestrator and no `run_agent` call, so Charter writes the
 metrics snapshot by hand into `ctx.agent_state_updates[agent]` — same shape
@@ -390,10 +387,9 @@ invoke the same agent without Charter in the path — `charter run` adds validat
 and a name, not a new mechanism.
 
 A Charter agent already has everything a task primitive needs — typed inputs, a
-bounded budget, a declared deliverable, a terminal `Complete(result=...)`. So
+bounded budget, a declared result shape, a terminal `Complete(result=...)`. So
 "task" is what we *call* a run, not a new construct to build: one invoke = one
-task = one BoundFlow request, and `max_iterations` is how many times the agent may
-think before the task is declared failed.
+task = one BoundFlow request, and the budgets in `per_run` are what bound it.
 
 That naming is what makes "just trust the agent to go do stuff" coherent rather
 than alarming. Unbounded trust has no scope to be bounded by; trust *within a
@@ -407,50 +403,52 @@ why there's no third file.
 
 From a Charter user's point of view, with no BoundFlow vocabulary.
 
-You wrote two things: an **objective** in plain English, and a **menu of tools**
-split into ones the agent may use freely (`read`) and ones it may only ask for
-(`act`). You did not write any steps. Then:
+You wrote two things: an **objective** in plain English, and a **list of tools**,
+some marked `approval: always`. You did not write any steps. Then:
 
 ```bash
-$ charter run refund-triage --ticket-id 4821
-task_id: req_01J8Z...
+$ charter run refund-triage --instance a3f9c012 --ticket-id 4821
+task/req_01J8Z... started
 ```
 
 1. The agent reads the objective and calls `zendesk.get_ticket`, then
-   `stripe.get_charge`. Both are `read` — no gate, no notification, it just works.
-2. It decides a $240 refund is warranted. It **cannot call `create_refund`** —
-   that tool was never handed to it. All it can do is say so:
-   `propose{tool: stripe.create_refund, args: {amount: 240}, why: "..."}`.
-3. The task parks. A webhook hits your finance channel with the justification and
-   an `approval_id`. Nothing has happened to anyone's money.
-4. Someone runs `charter approve apr_...`. Only now does Charter call the tool.
-5. The result folds back in and the agent continues. Seeing the refund succeeded,
-   it proposes `zendesk.close_ticket` — gated the same way, approved the same way.
-6. Finally it submits its **deliverable**: `{resolution: "...", refunded_usd: 240}`.
-   The task is complete, and `charter status req_01J8Z...` shows the result, what
-   it cost, which tools it called, and who approved what.
+   `stripe.get_charge`. Neither is gated, so they just run.
+2. It decides a $240 refund is warranted and calls `stripe.create_refund`. The
+   call is intercepted before it reaches the server: the agent holds the tool, and
+   the gate stops the call rather than hiding the tool.
+3. The task parks. The operation ends, the worker is free, and the pending
+   approval carries the arguments and the agent's reasoning.
+4. Someone runs `charter approve <id>`. The task resumes and the call goes through.
+5. The result folds back into the conversation and the agent continues. Seeing the
+   refund succeeded, it calls `zendesk.close_ticket` — gated the same way.
+6. Finally it fills in its `response_format`: `{resolution: "...",
+   refunded_usd: 240}`. `charter status req_01J8Z...` shows the result, what it
+   cost, which tools it called, and who approved what.
+
+A rejection is not a failure. The agent is told, and carries on without that
+action unless the tool sets `on_reject: fail`.
 
 ### Not every mutation costs a human
 
-The walkthrough above is the strictest setting. Each act tool declares its own
-requirement, and so does the deliverable:
+The walkthrough above is the strictest setting. Each tool declares its own
+requirement:
 
 ```yaml
-act:
+tools:
   - tool: add_internal_note
-    approval: never        # inline, no round trip — the model gets the tool
+    approval: never        # called inline, no round trip
   - tool: close_ticket
     approval: never
   - tool: create_refund
     approval: always       # moves money; a human, every time
 ```
 
-- **`never`** — the tool goes into `AgentDefinition.tools` and the model calls it
-  inline. No proposal, no extra iteration, no notification. Still counted, still
-  subject to `tool_call_limits`, still in the trace.
-- **`always`** — the model never receives the tool. Proposal-only, parks every time.
+- **`never`** — the model calls it inline. No park, no extra round, no
+  notification. Still counted, still subject to `tool_call_limits`, still in the
+  trace.
+- **`always`** — the call is intercepted and parks, every time.
 
-Set every act to `never`, `deliverable_approval: never`, and omit `ask_human`, and
+Set every tool to `never`, omit `gate`, and omit `ask_human`, and
 you have a fully autonomous agent that never asks anyone anything. It is still
 governed: per-task budget, tool limits, the full audit trail, and lifecycle rules
 that pause or roll it back when it starts failing. That's the honest version of
@@ -458,46 +456,42 @@ that pause or roll it back when it starts failing. That's the honest version of
 
 ### Confidence is a reasoning tool, not a gate
 
-Approval is deliberately binary, and confidence appears in exactly one place:
-`outcome.ask_human.below_confidence`. When set, an agent that rates its own
-submission below the bar is bounced back into the loop and told to ask a question
-or gather more information rather than proceed.
+Approval is binary, and confidence appears in exactly one place:
+`ask_human.when` — `rarely`, `balanced`, or `eagerly`. It is a posture rather than
+a threshold, because a model's confidence in itself is not calibrated well enough
+to be a number.
 
 Authorization is a decision a human makes in advance and writes down. It is never
-delegated to the model's opinion of itself — self-reported confidence is poorly
-calibrated, and a confidently-wrong model reports high. Wiring it to authorization
-would mean miscalibration costs you an unsupervised refund. Wiring it to
-*asking* means miscalibration costs you an unnecessary question, and the failure
-mode where it doesn't ask just lands back on the normal path: it proposes
-something, gated exactly as before.
-
-Same number, same unreliability — pointed somewhere the downside is annoyance
-instead of money.
+delegated to the model's opinion of itself: a confidently-wrong model reports high,
+so wiring self-assessment to authorization would mean miscalibration costs you an
+unsupervised refund. Wiring it to *asking* means miscalibration costs you an
+unnecessary question, and the failure mode where it doesn't ask lands back on the
+normal path — it calls a gated tool, stopped exactly as before.
 
 **Where do you specify the final action? You don't — that's the product.** You
 specify the menu and the objective; the agent chooses which actions to take and in
 what order, and every irreversible one stops for you. If you had to declare the
 final action you'd be writing a workflow, and you'd want BoundFlow's SDK instead.
 
-The deliverable is a *report*, not an action — it's how the agent tells you what it
-did, and it's what `charter status` shows. If you want an outcome to land somewhere
-(post the reply, write the row, page someone), that destination is just another
-`act` tool, gated like the rest. There is deliberately no ungated final side
-effect, because "the last thing it does" is exactly the thing you'd most want to
-approve.
+The result is a *report*, not an action — it's how the agent tells you what it did,
+and it's what `charter status` shows. If you want it to land somewhere (post the
+reply, write the row, page someone), that destination is just another tool, gated
+like the rest. There is deliberately no ungated final side effect, because "the
+last thing it does" is exactly the thing you'd most want to approve.
 
 ## The state machine the generic handler runs
 
-Unchanged from `question_answerer`, with the receipt-specific parts lifted out:
+One operation, re-entered. Every park ends it; nothing is held open.
 
 ```
-entry -> agent -> deliverable   -> Complete
-                \-> propose act -> AwaitApproval -> approved -> execute_act -> entry
-                \                                \-> rejected -> AwaitInput("why?") -> entry
-                \-> ask_human   -> AwaitInput -> entry
+entry -> agent -> result      -> Complete
+                \-> gated tool -> AwaitApproval -> approved -> entry   (the call runs)
+                \                                \-> rejected -> entry (told why)
+                \-> ask_human  -> AwaitInput   -> entry
+                \-> wait       -> Next(delay)  -> entry
 ```
 
-**Only a deliverable ends a task.** An approved act is a step, not a terminus: the
+**Only a result ends a task.** An approved call is a step, not a terminus: the
 tool is called, its result folds into history, and the loop re-enters. That buys
 three things — an agent can take several actions in one task (refund, *then* close
 the ticket), each separately gated; it observes what its action actually returned
@@ -527,8 +521,13 @@ Versioned and immutable once applied.
 | `objective` | string | yes | non-empty; `{{ inputs.<name> }}` only | `AgentDefinition.system_prompt` |
 | `instructions` | list | no | filenames under `v<N>/`, `.md`, no paths | appended to the system prompt |
 | `inputs` | map | no | see below | `invoke_workflow(context=)` |
+| `schedule` | object | no | `every`, `manual` | `WorkflowConfig.repeat_every_seconds`, `.triggerable` |
 | `mcp` | list | no | see below | `AgentDefinition.tools` |
-| `outcome` | object | yes | see below | `AgentDefinition.output_schema` |
+| `response_format` | map | no | field name → `{type, description}` | the harness's response format |
+| `gate` | object | no | `tools`, `on_reject` | harness tools that stop for a human |
+| `ask_human` | object | no | `when` | adds the ask tool; omit and the agent cannot ask |
+| `wait` | object | no | present or absent | adds the wait tool; the ceiling is policy |
+| `subagents` | list | no | `{name, description, prompt, model, tools}` | deepagents subagents |
 
 **`instructions`** are markdown documents the agent works from — a refund policy,
 an escalation matrix, worked examples. They live in `v<N>/` beside `v<N>.yaml`:
@@ -576,7 +575,7 @@ any input makes the agent task-shaped, forcing `invoke_mode: queue`.
 
 | | values | default | meaning |
 |---|---|---|---|
-| `approval` | `never` \| `always` | unset | `never`: handed to the model, called inline. `always`: the model never receives it; it can only propose it, and a human approves before it runs. Unset follows the server's `approval:` rules, or `never` if it has none. |
+| `approval` | `never` \| `always` | unset | `never`: called inline. `always`: the model holds the tool, and the call is intercepted and parked until a human approves it. Unset follows the server's `approval:` rules, or `never` if it has none. |
 | `on_failure` | `continue` \| `fail` | `continue` | `continue`: the model is told and carries on. `fail`: `mark_failed()` + `Complete()`, checked at the next iteration boundary. |
 
 Tools the server exposes but this file does not declare are refused and never
@@ -603,36 +602,30 @@ worst a lying server can do is gate something unnecessarily. `charter import`
 drafts a config from the same hints, which is where they do the most good — a
 review, once, rather than a runtime decision forever.
 
-**`outcome`**:
+**`response_format`** — `<field>: {type, description}`. Omit it and the agent
+answers in prose. Filling it in ends the task.
 
-| field | type | req | notes |
-|---|---|---|---|
-| `deliverable` | map | yes | non-empty. `<field>: {type, description}`. `propose`, `ask_human`, `confidence` are reserved. Submitting it ends the task. |
-| `deliverable_approval` | string | no | `never` (default) \| `always`. Binary, deliberately. |
-| `approval` | object | cond | required iff any tool is `approval: always` or `deliverable_approval: always`; forbidden otherwise |
-| `ask_human` | object | no | omit to forbid the agent from asking |
+**`gate`** — `tools` (harness tools that also stop for a human, e.g.
+`submit_result`) and `on_reject` (`continue` default \| `fail`).
 
-`approval` — `timeout_seconds` (default 1800), `on_timeout` (`reject` default \|
-`fail`), `note` (optional extra context, `{{ inputs.* }}` only).
-
-Charter composes `AwaitApproval.justification` from three sources, so no single
-author or model omission can leave an approver flying blind:
+Charter composes what the approver sees from two sources, so no single author or
+model omission can leave them flying blind:
 
 | shown to the approver | comes from |
 |---|---|
-| the tool and its arguments | `propose.tool`, `propose.args` — the agent's proposal |
-| why the agent wants it | `propose.why` — the agent's own reasoning |
-| what task this is | `outcome.approval.note` — the author, `{{ inputs.* }}` |
+| the tool and its arguments | Charter's rendering of the intercepted call |
+| why the agent wants it | the agent's own reasoning for that call |
 
-Only the last is templatable. The first two are Charter's rendering, so a gate
-cannot be authored with the amount left out. For `deliverable_approval: always`
-it's the same field with the deliverable as subject, plus the note.
+Neither is templatable, so a gate cannot be authored with the amount left out.
 
-`ask_human` — `timeout_seconds` (default 240), `on_timeout` (`continue` default \|
-`fail`), `below_confidence` (optional, 0..1). Setting `below_confidence` injects a
-required `confidence` field into the output schema; a submission rating itself
-below the bar is bounced back into the loop and told to ask or gather more
-information. This is the only place confidence appears in Charter.
+How long an approver has is `authority.approval_timeout_seconds` in
+`runtime.yaml`, not here — the deadline is an operational number, and an
+unanswered gate is a rejection.
+
+`ask_human` — `when` (`rarely` \| `balanced` default \| `eagerly`), a posture for
+how readily the agent interrupts you. This is the only place confidence appears in
+Charter, and it is deliberately not a number. How long the agent waits for an
+answer is `authority.question_timeout_seconds` in `runtime.yaml`.
 
 There is deliberately no `prompt` here: the question is `AwaitInput(prompt=...)`,
 supplied by the agent at runtime from the generated `ask_human.question` field. You
@@ -646,20 +639,34 @@ Charter generates two output-schema branches the file never declares: `propose`
 
 Not versioned. Purely quantitative — nothing here changes the agent's shape.
 
-| field | type | req | notes |
-|---|---|---|---|
-| `agent` | string | yes | matches the config's `name` |
-| `per_run.max_iterations` | int | — | `> 0`. Charter-only; BoundFlow can't see the loop. |
-| `per_run.max_cost_usd` | float | — | `> 0` |
-| `per_run.max_llm_calls` | int | — | `> 0` |
-| `per_run.tool_call_limits[]` | list | no | `{tool, max_calls}`; `tool` must be declared in the config |
-| `limits.max_tokens_per_call` | int | no | default 1024 |
-| `limits.max_call_seconds` | float | no | default 60 |
+| field | type | notes |
+|---|---|---|
+| `agent` | string | matches the config's `name` |
+| `per_run.max_cost_usd` | float | total spend for one task, across every round and retry |
+| `per_run.max_llm_calls` | int | total model calls for one task |
+| `per_run.max_seconds` | float | working time for one task; parked time does not count |
+| `per_run.max_tool_failures` | int | failures of any one tool before the task gives up |
+| `per_run.tool_call_limits[]` | list | `{tool, max_calls}`; `tool` must be declared in the config |
+| `per_run.capability_call_limits[]` | list | `{capability, max_calls}` |
+| `per_run.max_total_subagents` | int | subagents one task may spawn in total |
+| `per_run.max_parallel_subagents` | int | subagents that may run at once |
+| `per_run.max_queue_depth` | int | queued invokes past this are rejected |
+| `limits.max_tokens_per_call` | int | default 1024 |
+| `limits.max_call_seconds` | float | default 60 |
+| `limits.max_tool_seconds` | float | one tool call taking longer is a failure |
+| `authority.allowed_capabilities` | list | `read`, `write`, `execute`, `spawn` |
+| `authority.file_rules[]` | list | `{operations, paths, mode}` |
+| `authority.allowed_spawns` | list | agents this one may start as background tasks |
+| `authority.approval_timeout_seconds` | int | how long an approver has |
+| `authority.question_timeout_seconds` | int | how long `ask_human` waits |
+| `authority.max_wait_seconds` | int | ceiling on a single `wait` |
 
-At least one of the three `per_run` budgets is required. Each is enforced twice
-against the same number: Charter accumulates the real total across iterations, and
-sets BoundFlow's per-invocation `RuntimePolicy` to the same value as an in-worker
-backstop. `limits` are valves against one pathological call, not budgets.
+At least one `per_run` budget is required. Each is enforced twice against the same
+number: Charter accumulates the real total across rounds, and sets BoundFlow's
+per-invocation `RuntimePolicy` to the same value as an in-worker backstop.
+`limits` are valves against one pathological call, not budgets. `authority` is
+what the agent may reach, and tightening it takes effect on the next round rather
+than needing a new version.
 
 ### LifecyclePolicy — `agents/<name>/lifecycle.yaml`
 
@@ -715,8 +722,8 @@ codes.
 
 Charter must cover the whole surface a Charter user needs, because reaching for the
 `boundflow` CLI is not neutral. Reads there technically work — a Charter agent is an
-ordinary workflow — but they show workflow UUIDs and operation names like
-`execute_act`, which mean nothing to someone who wrote YAML. And several writes
+ordinary workflow — but they show workflow UUIDs and workflow types
+rather than agents and instances. And several writes
 break Charter's invariants outright:
 
 | command | what it breaks |
@@ -732,17 +739,27 @@ break Charter's invariants outright:
 |---|---|
 | `charter validate [path]` | parse and cross-check every file; no network |
 | `charter apply [path]` | validate, then create/update workflow, policies, pricing; idempotent |
-| `charter run <agent> [--flags]` | validate inputs, `invoke_workflow`, print the task id |
-| `charter tasks <agent>` | recent tasks with outcome, cost, duration |
+| `charter diff [path]` | compare what is armed against your files |
+| `charter push <agent> <ref>` | publish one version's behaviour to an OCI registry |
+| `charter schema` | JSON Schema for the config files |
+| `charter agent create/delete <agent>` | bring an instance into existence, or destroy one |
+| `charter run <agent> --instance <id> [--flags]` | validate inputs, `invoke_workflow`, print the task id |
+| `charter agents` | every agent in a tenant and what it is doing |
+| `charter describe <agent> --instance <id>` | authority, armed limits, rules, any hold |
+| `charter tasks <agent> --instance <id>` | recent tasks with outcome, cost, duration |
 | `charter status <task-id>` | result, cost, tools called, approvals, why it stopped |
-| `charter pending [agent]` | open approval and input gates |
+| `charter audit <agent> --instance <id>` | every governance decision recorded |
+| `charter pending <agent> --instance <id>` | the open approval or input gate |
 | `charter approve <id> [--reason]` | resolve to workflow + approval id, decide |
 | `charter reject <id> [--reason]` | same |
 | `charter answer <id> <text>` | respond to an `ask_human` gate |
-| `charter pause/resume <agent>` | hold or release the fleet member |
-| `charter rollback <agent> --to N` | manual `set_version`, refusing targets no worker serves |
-| `charter memory <agent>` | print exactly what the agent is shown from the audit log |
-| `charter worker [-f worker.yaml]` | run the generic worker process |
+| `charter pause <agent> --instance <id> [--now]` | hold it; prints the suspension id |
+| `charter resume <agent> --instance <id> --suspension <id>` | release that hold |
+| `charter abandon <agent> --instance <id> [--all]` | drop queued tasks, irreversibly |
+| `charter worker [path]` | run the generic worker process |
+
+Every command that acts on an agent names an instance. `--json` on a read command
+prints the whole record instead of the curated view.
 
 The `boundflow` CLI stays available as a debugging escape hatch, and it's worth
 keeping that true — if `boundflow workflow runs <id>` can't inspect a Charter agent,
