@@ -216,6 +216,12 @@ python -m venv .venv
 .venv/bin/pip install -e charter
 ```
 
+The branch declares the same version as the published `boundflow` on PyPI while
+carrying more API, so `pip install -U boundflow` will silently replace it with a
+release that has neither the governor nor the renderer — same version number,
+different surface. If imports start failing, check that `pip show boundflow` still
+points at your checkout.
+
 ### A project
 
 ```

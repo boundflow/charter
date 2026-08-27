@@ -636,3 +636,25 @@ class TestAnInstanceIsAlwaysNamed:
         result = invoke("describe", "refund-demo", "--instance", "nope")
         assert result.exit_code == 1
         assert "wf_refun" in result.output
+
+
+def test_the_renderer_is_found_under_either_name():
+    """boundflow/boundflow#93 renames `boundflow.cli._output` to `.output`. It is a
+    rename and a docstring — the same three functions — and until it lands in a
+    release, the published branch has the old name. Charter has to run against what
+    is actually installable, so it accepts both.
+
+    Delete this, and the fallback import, once #93 is in a release we can pin.
+    """
+    import importlib
+
+    found = []
+    for name in ("boundflow.cli.output", "boundflow.cli._output"):
+        try:
+            mod = importlib.import_module(name)
+        except ImportError:
+            continue
+        found.append(name)
+        assert all(callable(getattr(mod, f, None))
+                   for f in ("output", "set_json", "is_json")), name
+    assert found, "neither renderer module is importable"

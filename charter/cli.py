@@ -32,7 +32,14 @@ import typer
 from . import ui
 from .compile import compile_agent
 from .config.agent import split_qualified
-from boundflow.cli.output import is_json, output, set_json
+try:
+    from boundflow.cli.output import is_json, output, set_json
+except ImportError:  # pragma: no cover - exercised by the compatibility test
+    # The renderer was private as `_output` until boundflow/boundflow#93, which is
+    # a rename and a docstring — same three functions either way. Charter names
+    # both so it runs against the branch as published today, not only against an
+    # unpushed local merge. Delete this once #93 is in a release Charter can pin.
+    from boundflow.cli._output import is_json, output, set_json
 
 from .config.loader import ConfigError, load_agent, load_project
 
