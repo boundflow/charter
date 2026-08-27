@@ -228,16 +228,17 @@ class TestPendingAndApprove:
             pending=PendingApproval(approval_id="apr_1",
                                     justification="run desk__create_refund\n  amount: 240",
                                     metadata={}, opened_at=NOW, timeout_at=None))]
-        out = invoke("pending", "refund-demo").output
+        out = invoke("pending", "refund-demo", "--instance", "wf_refun").output
         assert "needs approval" in out
         assert "amount: 240" in out
         assert "charter approve apr_1" in out
 
     def test_pending_says_nothing_is_waiting(self, cp):
-        assert "nothing waiting" in invoke("pending", "refund-demo").output
+        assert "nothing waiting" in invoke("pending", "refund-demo", "--instance", "wf_refun").output
 
     def test_approve_passes_the_reason(self, cp):
-        invoke("approve", "apr_1", "--agent", "refund-demo", "--reason", "confirmed")
+        invoke("approve", "apr_1", "--agent", "refund-demo", "--instance",
+               "wf_refun", "--reason", "confirmed")
         assert cp.approved == [("apr_1", "", "confirmed")]
 
 
@@ -248,7 +249,7 @@ class TestTasks:
                        run_outcome=RunOutcome.UNCAUGHT_OPERATION_EXCEPTION,
                        failure_reason="BadRequestError: 400 - " + "x" * 120,
                        created_at=NOW, completed_at=NOW + dt.timedelta(seconds=2))]
-        out = invoke("tasks", "refund-demo").output
+        out = invoke("tasks", "refund-demo", "--instance", "wf_refun").output
         # Whole message, not a column truncated at some number I picked.
         assert "x" * 120 in out
 
@@ -414,7 +415,11 @@ class TestTheHoldIsVisibleAndOwned:
 
     def test_describe_shows_whose_hold_it_is_and_whether_it_drained(self, cp):
         cp.workflows = [held(sid="sus_abc", reason="incident 4821", finalized=False)]
-        out = invoke("describe", "refund-demo").output
+        result = invoke("describe", "refund-demo", "--instance", "wf_refun")
+        # Not just the substring: these once passed while describe crashed on the
+        # next section, because the hold prints before the config does.
+        assert result.exit_code == 0
+        out = result.output
         assert "sus_abc" in out
         assert "incident 4821" in out
         # The question you actually have at 3am, and the reason resume refuses.
@@ -422,14 +427,14 @@ class TestTheHoldIsVisibleAndOwned:
 
     def test_resume_will_not_release_a_hold_you_did_not_name(self, cp):
         cp.workflows = [held(sid="sus_theirs", reason="incident")]
-        result = invoke("resume", "refund-demo")
+        result = invoke("resume", "refund-demo", "--instance", "wf_refun")
         assert result.exit_code == 1
         assert cp.resumed == []
         assert "sus_theirs" in result.output
 
     def test_resume_releases_the_hold_you_named(self, cp):
         cp.workflows = [held(sid="sus_mine")]
-        result = invoke("resume", "refund-demo", "--suspension", "sus_mine")
+        result = invoke("resume", "refund-demo", "--instance", "wf_refun", "--suspension", "sus_mine")
         assert result.exit_code == 0
         assert cp.resumed == [("wf_refund-demo", "sus_mine")]
 
@@ -437,7 +442,7 @@ class TestTheHoldIsVisibleAndOwned:
         """Yours was released and another placed since. Releasing this one anyway
         would undo a stranger's pause while you believed you were undoing your own."""
         cp.workflows = [held(sid="sus_theirs")]
-        result = invoke("resume", "refund-demo", "--suspension", "sus_mine")
+        result = invoke("resume", "refund-demo", "--instance", "wf_refun", "--suspension", "sus_mine")
         assert result.exit_code == 1
         assert cp.resumed == []
 
@@ -448,12 +453,12 @@ class TestTheHoldIsVisibleAndOwned:
         the same call with the deliberation removed."""
         cp.workflows = [held(sid="sus_theirs")]
         assert "--force" not in invoke("resume", "--help").output
-        assert invoke("resume", "refund-demo", "--suspension",
+        assert invoke("resume", "refund-demo", "--instance", "wf_refun", "--suspension",
                       "sus_theirs").exit_code == 0
         assert cp.resumed == [("wf_refund-demo", "sus_theirs")]
 
     def test_pause_hands_back_the_id_so_it_can_be_named_later(self, cp):
-        out = invoke("pause", "refund-demo").output
+        out = invoke("pause", "refund-demo", "--instance", "wf_refun").output
         assert "sus_new" in out
 
     def test_now_escalates_an_existing_hold_rather_than_reporting_it(self, cp):
@@ -461,7 +466,7 @@ class TestTheHoldIsVisibleAndOwned:
         graceful pause never did. Reporting "already paused" would make the second,
         more urgent command do strictly less than the first."""
         cp.workflows = [held(sid="sus_abc", stop_current=False, finalized=False)]
-        invoke("pause", "refund-demo", "--now")
+        invoke("pause", "refund-demo", "--instance", "wf_refun", "--now")
         # Retargeted, not a second hold — resume has one id to release.
         assert cp.suspended == [("wf_refund-demo", "incident", True, "sus_abc")]
 
@@ -469,7 +474,7 @@ class TestTheHoldIsVisibleAndOwned:
         from datetime import datetime
         wf = workflow()
         cp.workflows = [replace(wf, deletion_requested_at=datetime(2026, 1, 1))]
-        assert "deletion requested" in invoke("describe", "refund-demo").output
+        assert "deletion requested" in invoke("describe", "refund-demo", "--instance", "wf_refun").output
 
 
 def test_no_two_top_level_definitions_share_a_name():
@@ -538,7 +543,7 @@ def test_json_renders_records_not_reprs(cp):
     import json
 
     cp.workflows = [held(sid="sus_abc")]
-    doc = json.loads(invoke("--json", "describe", "refund-demo").output)
+    doc = json.loads(invoke("--json", "describe", "refund-demo", "--instance", "wf_refun").output)
     assert doc["workflow"]["suspension"]["suspension_id"] == "sus_abc"
     assert doc["workflow"]["workflow_state"] == "suspended"   # enum, not repr
 
@@ -603,3 +608,31 @@ def test_every_command_the_readme_names_exists():
 
     missing = sorted(d for d in documented if d not in names)
     assert not missing, f"README names commands that do not exist: {missing}"
+
+
+class TestAnInstanceIsAlwaysNamed:
+    """An agent name addresses a *kind* of instance. The instance is what holds the
+    state — the conversation, the budget, the lifecycle history — so a command that
+    acts has to say which one, even when there is only one to pick."""
+
+    def test_one_instance_is_still_not_a_default(self, cp):
+        result = invoke("describe", "refund-demo")
+        assert result.exit_code == 1
+        assert "say which" in result.output
+        # And it hands over the id, so being explicit is a copy-paste.
+        assert "wf_refun" in result.output
+
+    def test_naming_it_works(self, cp):
+        assert invoke("describe", "refund-demo", "--instance",
+                      "wf_refun").exit_code == 0
+
+    def test_a_prefix_is_enough_until_it_is_ambiguous(self, cp):
+        cp.workflows = [workflow(), workflow()]
+        result = invoke("describe", "refund-demo", "--instance", "wf_")
+        assert result.exit_code == 1
+        assert "matches 2 instances" in result.output
+
+    def test_an_unknown_id_lists_the_real_ones(self, cp):
+        result = invoke("describe", "refund-demo", "--instance", "nope")
+        assert result.exit_code == 1
+        assert "wf_refun" in result.output

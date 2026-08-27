@@ -583,14 +583,21 @@ async def _select(cp, agent: str, *, instance: str | None, all_: bool,
 
     if all_:
         return found
-    if len(found) == 1:
-        return found
 
-    ui.err(f"{agent!r} has {len(found)} instances — say which")
+    # Not even when there is only one. An instance is the entity that holds the
+    # state — the conversation, the budget, the lifecycle history — and an agent
+    # name addresses a *kind* of it. Resolving the name whenever the count happens
+    # to be one teaches that the name is the thing, and the lesson expires silently
+    # the day someone creates a second: the same command that worked all year now
+    # means something else, or stops working, depending on which command it was.
+    # Being explicit costs a flag; being implicit costs it exactly when an agent
+    # has become important enough to run twice.
+    ui.err(f"{agent!r} has {len(found)} "
+           f"{'instance' if len(found) == 1 else 'instances'} — say which")
     for w in found:
         ui.detail(f"{short(w.id)}  v{w.version}  {_state_of(w)}")
     typer.echo()
-    ui.detail(f"--instance <id>   {verb} one")
+    ui.detail(f"--instance {short(found[0].id)}   {verb} that one")
     if fans_out:
         ui.detail(f"--all             {verb} every instance")
     raise typer.Exit(1)
@@ -1141,7 +1148,14 @@ def _since(spec: str) -> float:
 def _config_lines(cfg) -> list[tuple[str, object]]:
     """The workflow config as a customer reads it. Shared by `describe`, which reads
     it from the control plane, and `apply --dry-run`, which compiles it from files —
-    so what you're about to apply and what is running are described the same way."""
+    so what you're about to apply and what is running are described the same way.
+
+    None when the control plane has no config for this workflow. That is real —
+    `list_workflows` returns a lighter record without one — and it reached here as
+    an AttributeError on `repeat_every_seconds`, which reads as a Charter crash
+    rather than the absence it is."""
+    if cfg is None:
+        return [("config", "none on the control plane — charter apply")]
     schedule = (f"every {_duration(cfg.repeat_every_seconds)}"
                 if cfg.repeat_every_seconds else "on demand")
     if not cfg.triggerable:
