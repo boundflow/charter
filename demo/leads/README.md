@@ -70,7 +70,7 @@ harness's own state, and a model key:
 Create the instances, then start the worker from this directory — the MCP server
 is spawned as a subprocess relative to wherever the worker runs:
 
-    charter agent create leads-finder --path demo/leads
+    charter agent create leads-finder --path demo/leads   # prints an instance id
     charter apply demo/leads/worker.yaml --all
 
     cd demo/leads && charter worker .
@@ -86,9 +86,12 @@ And the inbox in a third, which is you as the people being contacted:
 
     python demo/leads/inbox.py
 
-Then, from the repo root:
+Then, from the repo root, naming the instance `create` printed:
 
-    charter run leads-finder --path demo/leads --topic agent-governance
+    charter run leads-finder --path demo/leads --instance <id> --topic agent-governance
+
+Every command that acts on an agent names an instance, including when there is
+only one — `charter agents` lists them if you lose the id.
 
 The conversation is in `network.db` — delete it to start over.
 
@@ -97,6 +100,13 @@ The conversation is in `network.db` — delete it to start over.
 Nothing here is on a clock. The agent waits, and someone accepts or replies when
 you do it in `inbox.py`. If you want to see it give up on someone, just never
 accept them.
+
+How long it sleeps between checks is its own choice, bounded by
+`max_wait_seconds` in `runtime.yaml` — 5 minutes here, because a demo you cannot
+watch is not a demo. Left at a production ceiling the agent will happily pick two
+hours, which is correct behaviour and useless to sit through. That limit is policy
+rather than versioned behaviour, so `charter apply` changes it on the next round
+without restarting the worker.
 
 The agent doesn't know any of that. It calls `connection_status` and
 `conversation` and gets whatever is true, which is exactly what it would do

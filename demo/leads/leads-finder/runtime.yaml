@@ -28,7 +28,7 @@ authority:
   approval_timeout_seconds: 86400
   question_timeout_seconds: 86400
   # allowed_spawns: [outreach]
-  max_wait_seconds: 21600
+  max_wait_seconds: 300
   # file_rules:
   #   - operations: [read]
   #     paths: ["/skills/**"]
