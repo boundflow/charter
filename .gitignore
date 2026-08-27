@@ -16,3 +16,6 @@ dist/
 # point is that it accumulates — a committed one would replay someone else's
 # conversations as if they were yours.
 demo/leads/network.db
+
+# Local agent instructions, not part of the project.
+CLAUDE.md

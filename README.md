@@ -56,10 +56,9 @@ mcp:
       - tool: create_refund
         approval: always
 
-outcome:
-  deliverable:
-    resolution: { type: string }
-    refunded_usd: { type: number }
+response_format:
+  resolution: { type: string }
+  refunded_usd: { type: number }
 ```
 
 That file is the whole agent. Budgets and lifecycle rules live in two optional

@@ -179,3 +179,16 @@ def test_a_failure_allowance_is_a_typed_field_because_boundflow_enforces_it():
 
     assert limits, "declared max_tool_failures should reach the policy"
     assert all(l.max_failures == 3 for l in limits)
+
+
+def test_a_dying_worker_hands_the_operation_over_rather_than_stopping_the_agent():
+    """`resumable` exists for exactly Charter's case — BoundFlow's own note says to
+    set it where "a governed harness resumes from its checkpoint", which is what
+    durable_harness is.
+
+    Left off, a worker dying mid-round interrupts the workflow and it waits for a
+    human to clear the interruption. We hit that for real: a TypeError while
+    parking left a task stopped until someone ran `charter resume`. An agent that
+    needs an operator because a process died is not a durable agent.
+    """
+    assert compile_agent(load_agent(EXAMPLES / "refund-triage")).workflow_config.resumable is True

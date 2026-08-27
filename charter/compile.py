@@ -69,6 +69,10 @@ def compile_workflow_config(cfg: AgentConfig, runtime: RuntimePolicyFile) -> Wor
         repeat_every_seconds=cfg.schedule.every_seconds if cfg.schedule else 0,
         triggerable=cfg.schedule.manual if cfg.schedule else True,
         max_queue_depth=runtime.per_run.max_queue_depth,
+        # A dying worker hands the operation to another instead of interrupting the
+        # workflow. At-least-once: a tool call whose side effect landed before its
+        # write committed runs again.
+        resumable=True,
     )
 
 

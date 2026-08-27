@@ -1171,6 +1171,8 @@ def _config_lines(cfg) -> list[tuple[str, object]]:
               else ", server default depth" if cfg.invoke_mode.value == "queue" else "")
     return [("runs", schedule),
             ("piled-up invokes", cfg.invoke_mode.value + queued),
+            ("if a worker dies", "another picks it up" if cfg.resumable
+             else "the workflow is interrupted until someone clears it"),
             # Not "round deadline": `round` is an internal unit, and the whole
             # point of replacing max_iterations with drafts/questions/tool-failures
             # was that nobody should have to know what one is.

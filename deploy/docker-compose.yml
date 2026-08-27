@@ -22,7 +22,7 @@ services:
     image: postgres:16-alpine
     environment:
       POSTGRES_USER: charter
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-charter}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
       POSTGRES_DB: charter
     volumes:
       - store:/var/lib/postgresql/data
@@ -48,7 +48,7 @@ services:
       # Your model provider. This never leaves your side.
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
       # The store above, by service name. Every worker gets the same one.
-      CHARTER_STORE_URL: postgres://charter:${POSTGRES_PASSWORD:-charter}@postgres:5432/charter
+      CHARTER_STORE_URL: postgres://charter:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/charter
       # Where the worker looks for registry credentials when an agent is served by
       # reference. A Docker config, because that is what the ecosystem settled on:
       # it holds several registries at once and it carries credential helpers, which
