@@ -1815,7 +1815,15 @@ def resume(
             # A platform interruption disables the workflow; that needs resolving
             # before it can be activated at all.
             if wf.last_interrupted_request_id:
+                # This clears the interruption *and* re-activates — BoundFlow's own
+                # `workflow resolve` says so. Falling through to activate_workflow
+                # then failed the precondition, because by that point the workflow
+                # was already active: the command did its job and reported a
+                # traceback, which is the worst of both.
                 await cp.resolve_interrupted_workflow(wf.id, wf.last_interrupted_request_id)
+                _ok(f"{ui.ref('agent', agent)} active  (platform interruption cleared)")
+                ui.detail(f"the interrupted task did not resume — charter run {agent}")
+                return
 
             # Activating a paused or cooling-down workflow has to name the policy
             # decision that stopped it — proof you're resuming the thing you looked

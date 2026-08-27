@@ -875,3 +875,30 @@ class TestPerToolGates:
         loop = self._loop([{"tool": server.tools[0].tool, "approval": "always"}])
 
         assert loop._on_reject("gone__vanished") == loop.cfg.gate.on_reject
+
+
+def test_a_policy_sourced_ceiling_parks_as_an_integer():
+    """`custom` travels as protobuf JSON, so every number comes back a float, and
+    BoundFlow's delay_seconds is an integer field. A float reached the wire and
+    raised `TypeError: 'float' object cannot be interpreted as an integer` at the
+    exact moment the task tried to park — the one place nothing else would notice,
+    since the value is correct and only its type is wrong.
+
+    Only a live run found this. The unit tests passed a float straight through.
+    """
+    from charter.config.agent import Wait
+
+    bundle = load_agent(EXAMPLES / "refund-triage")
+    bundle.latest.wait = Wait()
+    empty = type("NoTools", (), {"langchain_tools": lambda self: []})()
+    loop = Loop(bundle.latest, bundle.runtime, tools=empty,
+                chat_model=lambda m: object(), store_url="postgresql://unused")
+
+    asks = {"__interrupt__": [type("I", (), {
+        "value": {"action_requests": [{
+            "name": WAIT_TOOL, "args": {"duration": "1h"}, "description": "d"}]},
+        "id": "i"})()]}
+    out = run(loop.entry(FakeCtx(results=[FakeResult(asks)],
+                                 policy_custom={MAX_WAIT_SECONDS: 300.0})))
+    assert out.delay_seconds == 300
+    assert isinstance(out.delay_seconds, int)

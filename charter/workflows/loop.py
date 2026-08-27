@@ -686,7 +686,13 @@ class Loop:
             live = ctx.agent_governor(self.cfg.name).policy
         except Exception:  # noqa: BLE001
             return self.runtime.authority.max_wait_seconds
-        return charter_policy.timeouts(live)["max_wait"]
+        # int, not whatever the policy round-tripped as. `custom` travels as
+        # protobuf JSON, where every number comes back a float, and BoundFlow's
+        # delay_seconds is an integer field — so a policy-sourced ceiling reached
+        # the wire as 300.0 and raised TypeError at the moment the task tried to
+        # park. It used to come from the version file as an int, which is why
+        # moving it to policy broke a path nothing in the suite covers.
+        return int(charter_policy.timeouts(live)["max_wait"])
 
     def _sleep(self, ctx, action: dict, c: dict):
         """Park until the time has passed, holding nothing open.
@@ -710,7 +716,7 @@ class Loop:
         except ValueError:
             # A model that mangles the duration shouldn't end the task over it.
             wanted = min(3600, cap)
-        seconds = max(1, min(wanted, cap))
+        seconds = int(max(1, min(wanted, cap)))
 
         c[K_WAITED] = c.get(K_WAITED, 0) + seconds
         log.info("waiting: agent=%s for=%ss why=%s",
