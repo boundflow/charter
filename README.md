@@ -2,6 +2,12 @@
 
 **The easiest way to build and manage production-ready agents.**
 
+> **Pre-alpha, and in the open early.** The design is settled enough to read and
+> argue with; the code is not settled enough to run anything you care about.
+> Charter currently needs an unreleased branch of
+> [BoundFlow](https://github.com/boundflow/boundflow) — see
+> [Getting started](#getting-started).
+
 A prototype agent is a prompt and some tools. A production agent needs more: a
 defined responsibility, explicit authority over what it may touch, a budget it
 can't exceed, a way for humans to intervene while it works, and someone watching
@@ -195,8 +201,19 @@ $ charter audit refund-triage
 
 You'll need a BoundFlow control plane you can reach, and an API key for it.
 
+Charter is not on PyPI yet, and it needs BoundFlow's `exp/deepagents-harness`
+branch: the governor it runs agents under (`run_governed`, `agent_governor`) and
+the shared renderer (`boundflow.cli.output`) are both unreleased. Two checkouts
+for now:
+
 ```bash
-pip install charter
+git clone https://github.com/boundflow/boundflow
+git -C boundflow checkout exp/deepagents-harness
+git clone https://github.com/boundflow/charter
+
+python -m venv .venv
+.venv/bin/pip install -e boundflow/sdk/python
+.venv/bin/pip install -e charter
 ```
 
 ### A project

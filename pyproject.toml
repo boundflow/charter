@@ -9,11 +9,13 @@ description = "Declarative, governed agents on BoundFlow — objective, tools, a
 requires-python = ">=3.10"
 
 dependencies = [
-    # Charter needs the governor (run_governed, agent_governor) and the ctx id
-    # properties, which are unreleased — install the SDK from a checkout until they
-    # ship:
-    #     pip install -e ../convergeplane/sdk/python
-    "boundflow>=0.3.0",
+    # The floor is the latest release, but it is not yet sufficient: the governor
+    # Charter runs agents under (run_governed, agent_governor) and the shared
+    # renderer (boundflow.cli.output) are on exp/deepagents-harness and unreleased.
+    # So this pin does not yet mean "pip install works" — install the SDK from a
+    # checkout of that branch until they ship, and raise the floor to the release
+    # that carries them.
+    "boundflow>=0.5.0",
     # The harness, and required rather than optional. Charter is the
     # use-an-existing-harness product: an install that can't run deepagents isn't a
     # smaller Charter, it's a Charter that does nothing. BoundFlow keeps these
