@@ -39,40 +39,43 @@ objective: |
 
 model: claude-haiku-4-5
 
-# Validated by `charter invoke` before the request is created; interpolated into
-# the objective above. Maps onto invoke_workflow(context=...).
+# Validated before the request is created, and interpolated into the objective
+# above. Maps onto invoke_workflow(context=...).
 inputs:
   ticket_id: { type: string, required: true }
   max_refund_usd: { type: number, default: 100 }
 
 mcp:
   - name: zendesk
-    command: npx @zendesk/mcp          # stdio; runs beside the worker
+    command: npx                       # stdio; runs beside the worker
+    args: ["-y", "@zendesk/mcp"]
     env: [ZENDESK_API_TOKEN]           # names only — values come from the worker env
     tools:
-      read: [get_ticket, search_tickets]
-      act:  [close_ticket]
+      - tool: get_ticket
+        on_failure: fail
+      - tool: search_tickets
+      - tool: close_ticket
   - name: stripe
     url: https://mcp.stripe.com        # remote; the worker is still the client
     env: [STRIPE_API_KEY]
     tools:
-      read: [get_charge, list_refunds]
-      act:  [create_refund]
+      - tool: get_charge
+      - tool: list_refunds
+      # Parks the run on an approval gate. The call is made only after someone
+      # approves it.
+      - tool: create_refund
+        approval: always
+        on_reject: continue
 
-# What ends a run successfully. The agent emits exactly one of these.
-outcome:
-  deliverable:
-    resolution: { type: string }
-  # Proposing an `act` tool parks the run on an approval gate; the tool is executed
-  # by a separate operation only on the approved branch. Nothing mutating ever runs
-  # inside the agent loop.
-  approval:
-    prompt: "Refund ${{ propose.args.amount }} on ticket {{ inputs.ticket_id }}?"
-    timeout_seconds: 1800
-  # The agent can ask a human instead of guessing; the answer folds into history
-  # and the loop re-enters.
-  ask_human:
-    timeout_seconds: 240
+# The shape of a successful result. Without it the agent answers in prose.
+response_format:
+  resolution: { type: string }
+  refunded_usd: { type: number }
+
+# The agent can ask a human instead of guessing. The answer folds into the
+# conversation and the loop continues.
+ask_human:
+  when: balanced
 ```
 
 **Version files are immutable.** A `SetVersion` rollback dispatches operations at
@@ -99,7 +102,6 @@ agent: refund-triage
 # in. One run = one task = one BoundFlow request, however many loop iterations it
 # takes internally.
 per_run:
-  max_iterations: 6
   max_cost_usd: 0.30
   max_llm_calls: 40
   tool_call_limits:
@@ -204,12 +206,17 @@ apiVersion: charter/v1
 kind: Worker
 
 control_plane:
-  endpoint: ${BOUNDFLOW_ENDPOINT}
+  endpoint: ${BOUNDFLOW_SERVER_ADDRESS}
   api_key: ${BOUNDFLOW_API_KEY}
+  tenant: default
 
 llm:
   provider: anthropic
   api_key: ${ANTHROPIC_API_KEY}
+
+# Postgres for the harness's own state: checkpoints and the agent's files.
+store:
+  url: ${CHARTER_STORE_URL}
 
 serves:
   - agent: refund-triage

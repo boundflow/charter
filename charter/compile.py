@@ -69,6 +69,18 @@ def compile_workflow_config(cfg: AgentConfig, runtime: RuntimePolicyFile) -> Wor
         repeat_every_seconds=cfg.schedule.every_seconds if cfg.schedule else 0,
         triggerable=cfg.schedule.manual if cfg.schedule else True,
         max_queue_depth=runtime.per_run.max_queue_depth,
+        # Always, because Charter is the case this flag exists for: BoundFlow's own
+        # note says to set it where "a governed harness resumes from its
+        # checkpoint", and that is exactly what `durable_harness` is. Without it, a
+        # worker dying mid-round interrupts the workflow and waits for a human to
+        # clear it — a task parked on an operator because a process died, which is
+        # the opposite of what a durable agent is for.
+        #
+        # The cost is at-least-once: the operation re-runs, so a tool call made
+        # after its checkpoint and before the crash happens twice. That is real for
+        # a tool that sends something. It is still the better default, because the
+        # alternative is not "exactly once" — it is "stopped until someone notices".
+        resumable=True,
     )
 
 
