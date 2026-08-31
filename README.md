@@ -208,11 +208,11 @@ $ charter audit refund-triage
 4. **Configure a worker** — `worker.yaml`: credentials, and which agents and
    versions this process serves.
 5. **Apply it** — `charter apply` arms config and policy on the control plane;
-   `charter agent create` brings an instance into existence.
+   `charter agent create` makes the instance that holds the agent's state.
 6. **Run it** — `charter run` starts a task; `charter status` says how it went.
 7. **Manage it** — the step that doesn't end: approve what it proposes, watch what
-   it spends, ship a `v2.yaml` when it should change, roll it back when it
-   shouldn't have.
+   it spends, add a `v2.yaml` when you want it to behave differently, and roll
+   back to v1 if v2 turns out worse.
 
 You'll need a BoundFlow control plane you can reach, and an API key for it.
 
