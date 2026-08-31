@@ -211,8 +211,7 @@ $ charter audit refund-triage
    `charter agent create` makes the instance that holds the agent's state.
 6. **Run it** — `charter run` starts a task; `charter status` says how it went.
 7. **Manage it** — the step that doesn't end: approve what it proposes, watch what
-   it spends, add a `v2.yaml` when you want it to behave differently, and roll
-   back to v1 if v2 turns out worse.
+   it spends, add a `v2.yaml` when it should behave differently.
 
 You'll need a BoundFlow control plane you can reach, and an API key for it.
 
