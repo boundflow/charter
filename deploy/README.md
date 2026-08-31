@@ -44,10 +44,14 @@ serve the same agents are a pool; `--scale` is the whole mechanism.
     serves:
       - agent: leads-finder     # from the mounted project — how you develop
         versions: [1]
-      - ref: ghcr.io/acme/agents/leads-finder:v1   # how you deploy
+      - agent: leads-finder     # from the registry — how you deploy
+        versions: [1, 2]
+        repository: ghcr.io/acme/agents
 
-A reference is pulled at boot. The artifact names its own agent and version, so
-neither is repeated here, and the worker needs no checkout at all.
+Each version is pulled at boot from `<repository>/<agent>:v<N>`, the address
+`charter push` writes, and the worker needs no checkout at all. Serve every
+version a lifecycle rule can roll back to — a `ref:` names one artifact instead,
+and takes no `versions`.
 
 Credentials are whatever `docker login` already wrote: the compose file mounts
 your Docker config read-only and points `DOCKER_CONFIG` at it. Nothing is

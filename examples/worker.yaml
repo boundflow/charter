@@ -24,6 +24,9 @@ serves:
     versions: [1]
   - agent: ticket-summarizer
     versions: [1, 2]
+    # Add a repository and the same two versions are pulled from
+    # ghcr.io/acme/agents/ticket-summarizer:v1 and :v2 instead of this checkout.
+    # repository: ghcr.io/acme/agents
 
 notifications:
   channels:

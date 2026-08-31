@@ -199,6 +199,21 @@ $ charter audit refund-triage
 
 ## Getting started
 
+The whole shape of the work, in order:
+
+1. **Define the agent** — `v1.yaml`: its objective, the tools it may call, which of
+   them need a human.
+2. **Set its policy** — `runtime.yaml` for budgets and authority, `lifecycle.yaml`
+   for pause, cooldown and rollback rules.
+3. **Package it** — `charter push` seals the version into your registry. Skip it
+   while developing: a worker reads a directory just as well.
+4. **Configure a worker** — `worker.yaml`: credentials, and which agents and
+   versions this process serves.
+5. **Apply it** — `charter apply` arms config and policy on the control plane;
+   `charter agent create` brings an instance into existence.
+6. **Run it** — `charter run`, then `charter agents` and `charter pending` to
+   operate it.
+
 You'll need a BoundFlow control plane you can reach, and an API key for it.
 
 Charter is not on PyPI yet, and it needs BoundFlow's `exp/deepagents-harness`
@@ -229,6 +244,7 @@ points at your checkout.
 ├── worker.yaml               # which agents this worker serves, pricing, channels
 └── leads-finder/
     ├── v1.yaml               # objective, tools, gates — versioned, immutable
+    ├── v1/skills/            # procedures for that version, shipped with it
     ├── runtime.yaml          # budgets, limits, authority — policy, not versioned
     └── lifecycle.yaml        # pause, cooldown and rollback rules
 ```
@@ -237,6 +253,28 @@ Only `v1.yaml` is required; a version file plus credentials is enough to run an
 agent. The split matters: `v1.yaml` is what the agent *does* and is versioned, so
 a rollback restores behavior. Budgets and lifecycle rules are today's guardrails
 and stay in force across one.
+
+Skills are the procedures the agent should follow once it gets there — how your
+refunds policy works, the runbook a new hire would be handed. Drop them in
+`v1/skills/<name>/SKILL.md` and they ship with that version; the layout is
+deepagents' own, so skills you already have work unchanged. They live inside `v1/`
+because rolling back to v1 should restore the instructions v1 was running with.
+
+### Which agents a worker serves
+
+```yaml
+serves:
+  - agent: leads-finder       # from ./leads-finder, while you develop
+    versions: [1]
+  - agent: refund-triage      # from the registry, once it is real
+    versions: [1, 2]
+    repository: ghcr.io/acme/agents
+```
+
+A repository derives one address per version — `<repository>/<agent>:v<N>`, the
+address `charter push` writes. List every version a lifecycle rule can roll back
+to: a worker that cannot build the old version leaves the control plane
+dispatching work nobody can handle.
 
 ### Credentials
 
