@@ -209,8 +209,10 @@ $ charter audit refund-triage
    versions this process serves.
 5. **Apply it** — `charter apply` arms config and policy on the control plane;
    `charter agent create` brings an instance into existence.
-6. **Run it** — `charter run`, then `charter agents` and `charter pending` to
-   operate it.
+6. **Run it** — `charter run` starts a task; `charter status` says how it went.
+7. **Manage it** — the step that doesn't end: approve what it proposes, watch what
+   it spends, ship a `v2.yaml` when it should change, roll it back when it
+   shouldn't have.
 
 You'll need a BoundFlow control plane you can reach, and an API key for it.
 
