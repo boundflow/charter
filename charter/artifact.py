@@ -50,7 +50,13 @@ class Packed:
 
     def reference(self, repository: str) -> str:
         """`registry/repo/agent:v1` — the ref a worker is pointed at."""
-        return f"{repository.rstrip('/')}/{self.agent}:{self.tag}"
+        return ref_for(repository, self.agent, self.version)
+
+
+def ref_for(repository: str, agent: str, version: int) -> str:
+    """The address of one version: `registry/repo/agent:v<N>`. The same address
+    `charter push` writes, so publishing and pulling agree by construction."""
+    return f"{repository.rstrip('/')}/{agent}:v{version}"
 
 
 def pack(bundle, version: int) -> Packed:
@@ -164,12 +170,15 @@ def pull(ref: str, into: Path, *, insecure: bool = False) -> Path:
 
     import oras.client
 
-    agent = ref.rsplit("/", 1)[-1].split(":")[0]
+    last = ref.rsplit("/", 1)[-1]
+    agent, _, tag = last.partition(":")
     directory = into / agent
     directory.mkdir(parents=True, exist_ok=True)
 
     client = oras.client.OrasClient(insecure=insecure)
-    got = client.pull(target=ref, outdir=str(into / f".{agent}-blob"))
+    # A blob directory per ref: several versions unpack into one tree, and a
+    # shared one could hand back an earlier pull's layer.
+    got = client.pull(target=ref, outdir=str(into / f".{agent}-{tag or 'latest'}-blob"))
     blobs = [Path(p) for p in got if Path(p).is_file()]
     if not blobs:
         raise ValueError(f"{ref} held nothing — is it a Charter agent artifact?")
