@@ -199,8 +199,6 @@ $ charter audit refund-triage
 
 ## Getting started
 
-The whole shape of the work, in order:
-
 1. **Define the agent** — `v1.yaml`: its objective, the tools it may call, which of
    them need a human.
 2. **Set its policy** — `runtime.yaml` for budgets and authority, `lifecycle.yaml`
