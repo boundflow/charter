@@ -3,8 +3,11 @@ from pathlib import Path
 
 import pytest
 import yaml
+from pydantic import ValidationError
 
+from charter import artifact
 from charter.config.loader import ConfigError, load_agent, load_project
+from charter.config.worker import Served
 
 EXAMPLES = Path(__file__).parent.parent / "examples"
 
@@ -309,3 +312,45 @@ class TestChannelKinds:
                           {"event": "approval_requested", "agent": "leads-finder",
                            "approval_id": "apr_1", "justification": "x"})
             assert "charter approve apr_1 --agent leads-finder" in body["text"]
+
+
+class TestRepositoryServing:
+    """`repository` derives one artifact address per version, so a registry-served
+    agent can hold every version a lifecycle rule might roll back to."""
+
+    def test_versions_are_allowed_with_a_repository(self):
+        served = Served(agent="leads-finder", versions=[1, 2],
+                        repository="ghcr.io/acme/agents")
+        assert served.from_registry
+        assert served.versions == [1, 2]
+
+    def test_a_ref_still_refuses_versions(self):
+        with pytest.raises(ValidationError, match="doesn't apply to a `ref`"):
+            Served(ref="ghcr.io/acme/agents/leads-finder:v1", versions=[1])
+
+    def test_ref_and_repository_are_two_answers_to_one_question(self):
+        with pytest.raises(ValidationError, match="both address the artifact"):
+            Served(ref="ghcr.io/acme/agents/leads-finder:v1",
+                   repository="ghcr.io/acme/agents")
+
+    def test_a_tagged_repository_is_rejected(self):
+        """The version is appended, so a tag here would produce `...:v1:v2`."""
+        with pytest.raises(ValidationError, match="carries a tag"):
+            Served(agent="leads-finder", versions=[1],
+                   repository="ghcr.io/acme/agents:v1")
+
+    def test_a_registry_port_is_not_a_tag(self):
+        served = Served(agent="leads-finder", versions=[1],
+                        repository="localhost:5000/acme")
+        assert served.repository == "localhost:5000/acme"
+
+    def test_derived_ref_matches_what_push_writes(self):
+        """`charter push` and a worker pulling must name the same artifact."""
+        packed = artifact.Packed(agent="leads-finder", version=2, tar=b"",
+                                 digest="sha256:x", files=[])
+        assert (artifact.ref_for("ghcr.io/acme/agents", "leads-finder", 2)
+                == packed.reference("ghcr.io/acme/agents"))
+
+    def test_a_trailing_slash_does_not_double(self):
+        assert (artifact.ref_for("ghcr.io/acme/agents/", "leads-finder", 1)
+                == "ghcr.io/acme/agents/leads-finder:v1")

@@ -229,6 +229,20 @@ version. `serves` is what makes a worker fleet-manageable: which process can run
 which agent is declarative, so you can shard agents across workers, or run a
 canary worker holding only `v2` while the fleet stays on `v1`.
 
+An agent served from a registry adds `repository`, and each version is pulled from
+`<repository>/<agent>:v<N>` — the address `charter push` writes to, derived rather
+than typed:
+
+```yaml
+serves:
+  - agent: refund-triage
+    versions: [1, 2]
+    repository: ghcr.io/acme/agents
+```
+
+`ref` names one artifact instead, and takes no `versions`: serving two versions
+that way is two entries, and nothing checks the second was written.
+
 `versions` is a list rather than a single number for the rollback reason above —
 dropping a version from a worker that a lifecycle rule might roll back to leaves
 the control plane dispatching operations nobody can handle.
@@ -689,7 +703,7 @@ Not versioned. Every secret is an `${ENV_VAR}` reference, never a literal.
 | `control_plane` | yes | `endpoint`, `api_key`, `tenant_id` |
 | `llm` | yes | `provider` (`anthropic` \| `langchain`), `api_key` |
 | `agents_dir` | no | default `./agents`, relative to this file |
-| `serves[]` | yes | `{agent, versions: [int]}` — every version any rollback might target |
+| `serves[]` | yes | `{agent, versions: [int], repository?}` or `{ref}` — every version any rollback might target |
 | `notifications.channels[]` | no | `{name, kind: webhook, url, secret?, timeout_seconds=5, max_attempts=3}` |
 | `notifications.routes[]` | no | `{agent?, events?, channel}`, first match wins; omit `agent` for a catch-all |
 | `trace_sink` | no | `{kind: none\|logging\|jsonl\|otel, path?, endpoint?}` |

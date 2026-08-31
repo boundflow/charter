@@ -75,13 +75,20 @@ class Served(Base):
         serves:
           - agent: leads-finder          # from ./leads-finder
             versions: [1]
+          - agent: leads-finder          # from ghcr.io/acme/agents/leads-finder
+            versions: [1, 2]
+            repository: ghcr.io/acme/agents
           - ref: ghcr.io/acme/agents/leads-finder:v1
 
     `versions` is a list, not a single number, because a `set_version` rollback
     dispatches operations at the old version and this process must still be able to
     build that agent. Dropping a version a lifecycle rule can target strands the
-    control plane. A ref names one version — its own — so serving two means two
-    entries, which is honest: they are two artifacts.
+    control plane.
+
+    `repository` derives one address per version, so a registry-served agent takes
+    the same `versions` list a directory does. `ref` names one artifact and cannot:
+    serving two versions that way means two entries, and nothing checks you wrote
+    the second.
     """
 
     agent: str | None = Field(default=None, pattern=AGENT_NAME)
@@ -91,10 +98,14 @@ class Served(Base):
     ref: str | None = Field(default=None, description=(
         "An OCI reference like ghcr.io/acme/agents/leads-finder:v1. The artifact "
         "names its own agent and version, so neither is repeated here."))
+    repository: str | None = Field(default=None, description=(
+        "Where this agent's artifacts live, like ghcr.io/acme/agents. Each served "
+        "version is pulled from `<repository>/<agent>:v<N>` — the same address "
+        "`charter push` writes to."))
 
     @property
     def from_registry(self) -> bool:
-        return self.ref is not None
+        return self.ref is not None or self.repository is not None
 
     @model_validator(mode="after")
     def _check(self) -> Served:
@@ -102,6 +113,17 @@ class Served(Base):
             raise ValueError(
                 "give either `agent` (a directory) or `ref` (a registry artifact), "
                 "not both — an artifact names the agent it holds")
+        if self.ref and self.repository:
+            raise ValueError(
+                "`ref` and `repository` both address the artifact: `ref` names one "
+                "version, `repository` derives every version from the agent name")
+        if self.repository:
+            # Only the last segment is checked: a registry may carry a port,
+            # localhost:5000/acme.
+            if ":" in self.repository.rsplit("/", 1)[-1]:
+                raise ValueError(
+                    f"{self.repository!r} carries a tag — `repository` is the path "
+                    f"agents live under, and the version is appended per entry")
         if self.ref:
             if self.versions:
                 raise ValueError(

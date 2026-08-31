@@ -204,9 +204,28 @@ class CharterWorker:
         from . import artifact, policy as charter_policy
         from .config.loader import load_agent
 
-        directory = artifact.pull(spec.ref, self._pulled, insecure=spec.insecure)
-        bundle = load_agent(directory)
-        version = max(bundle.versions)
+        if spec.repository:
+            # Every version lands in one tree, which is the layout `load_agent`
+            # already reads: v1.yaml beside v2.yaml, each with its own skills.
+            for version in sorted(spec.versions):
+                ref = artifact.ref_for(spec.repository, spec.agent, version)
+                directory = artifact.pull(ref, self._pulled, insecure=spec.insecure)
+                log.info("pulled %s v%d from %s", spec.agent, version, ref)
+            bundle = load_agent(directory)
+            versions = sorted(spec.versions)
+            absent = [v for v in versions if v not in bundle.versions]
+            if absent:
+                # The tag promised a version the artifact doesn't hold. Fatal like
+                # a failed pull, not a quarantine: nothing was served to isolate.
+                raise ValueError(
+                    f"{spec.repository}/{spec.agent} has no "
+                    f"{', '.join(f'v{v}' for v in absent)} — the artifact holds "
+                    f"{', '.join(f'v{v}' for v in sorted(bundle.versions))}")
+        else:
+            directory = artifact.pull(spec.ref, self._pulled, insecure=spec.insecure)
+            bundle = load_agent(directory)
+            versions = [max(bundle.versions)]
+            log.info("pulled %s v%d from %s", bundle.name, versions[0], spec.ref)
 
         wf = await self._workflow_for(cp, bundle.name)
         if wf is not None:
@@ -218,8 +237,7 @@ class CharterWorker:
             # them on the next boot.
             log.warning("%s: no instance on the control plane yet — running on "
                         "default limits until one is applied", bundle.name)
-        log.info("pulled %s v%d from %s", bundle.name, version, spec.ref)
-        return bundle, [version]
+        return bundle, versions
 
     async def _workflow_for(self, cp: ControlPlaneClient, agent: str):
         for w in await cp.list_workflows():
