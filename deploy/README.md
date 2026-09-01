@@ -8,11 +8,6 @@ and your data stay here.
     cp .env.example .env      # fill in your keys and point at your project
     docker compose up
 
-The image installs `boundflow` from PyPI, and the governor Charter runs on
-(`run_governed`, `agent_governor`) is not in a release yet — so the build succeeds
-and the worker exits on import until one ships. Until then, run the worker from a
-checkout with the SDK installed alongside it.
-
 That's a Postgres and one worker. For more:
 
     docker compose up --scale worker=3

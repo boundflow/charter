@@ -4,6 +4,8 @@ name: leads
 
 control_plane:
   endpoint: ${BOUNDFLOW_SERVER_ADDRESS}
+  # Where workers claim tasks — a different address from the control API.
+  worker_endpoint: ${BOUNDFLOW_WORKER_ADDRESS}
   api_key: ${BOUNDFLOW_API_KEY}
   tenant: default
   # tenant_id: ""

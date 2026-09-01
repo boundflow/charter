@@ -20,6 +20,7 @@ real store.
 
     docker compose -f ../convergeplane/docker-compose.dist.yml up -d
     export BOUNDFLOW_API_KEY=... BOUNDFLOW_SERVER_ADDRESS=http://localhost:50051
+    export BOUNDFLOW_WORKER_ADDRESS=http://localhost:50052
     export CHARTER_STORE_URL=postgres://boundflow:boundflow@localhost:5433/boundflow
     pytest tests/e2e
 """
@@ -109,3 +110,11 @@ async def running(worker):
         # model, which is why these pass alone and fail together.
         with contextlib.suppress(Exception):
             await worker.aclose()
+        # `aclose` reaches the MCP subprocesses; nothing reaches the control-plane
+        # session, because BoundFlowWorker has no stop — only a cancellable run().
+        # The server keeps this worker in its dispatch pool until the stream drops,
+        # and dispatch matches on (type, version), which every test shares. That is
+        # why a stale worker occasionally runs the next test's task against the
+        # model this one scripted. Test-only: a real fleet's workers are
+        # interchangeable. Fixed properly by a graceful stop upstream, or by giving
+        # each test a workflow type only its own worker serves.

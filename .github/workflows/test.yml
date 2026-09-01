@@ -1,0 +1,62 @@
+name: Tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    name: Unit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -e ".[dev,ui,otel]"
+      # tests/e2e skips itself without a control plane in the environment.
+      - run: python -m pytest tests -v
+
+  e2e:
+    name: End to end
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # A real control plane from the published image, a real MCP subprocess, a
+      # real store. Only the model is faked, which is the cut tests/e2e documents.
+      - name: Start a control plane
+        run: docker compose -f .github/boundflow.compose.yml up -d --wait
+
+      - name: Wait for both gRPC ports
+        run: timeout 90 bash -c 'until nc -z localhost 50051 && nc -z localhost 50052; do sleep 1; done'
+
+      - name: Provision an API key
+        id: provision
+        run: |
+          key=$(docker compose -f .github/boundflow.compose.yml run --rm server \
+                  -mode=provision -name=ci | awk '/^api_key[[:space:]]+:/{print $NF}')
+          test -n "$key"
+          echo "::add-mask::$key"
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -e ".[dev,ui,otel]"
+
+      - name: Run the e2e suite
+        env:
+          BOUNDFLOW_API_KEY: ${{ steps.provision.outputs.key }}
+          BOUNDFLOW_SERVER_ADDRESS: http://localhost:50051
+          BOUNDFLOW_WORKER_ADDRESS: http://localhost:50052
+          CHARTER_STORE_URL: postgres://charter:charter@localhost:5434/charter
+        run: python -m pytest tests/e2e -v
+
+      - name: Control plane logs on failure
+        if: failure()
+        run: docker compose -f .github/boundflow.compose.yml logs --tail 100 server scheduler worker
