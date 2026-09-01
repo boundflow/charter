@@ -47,6 +47,9 @@ dev = ["pytest", "pytest-asyncio"]
 # `charter ui` serves BoundFlow's console. The extra is theirs — starlette and
 # uvicorn arrive through it, so the two consoles can never want different ones.
 ui = ["boundflow[ui]"]
+# `trace_sink: {kind: otel}` builds an OTLP exporter. Theirs again, so the sink and
+# the exporter can never disagree about the OTel version.
+otel = ["boundflow[otel]"]
 
 [project.scripts]
 charter = "charter.cli:main"

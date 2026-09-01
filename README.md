@@ -259,6 +259,25 @@ refunds policy works, the runbook a new hire would be handed. Drop them in
 deepagents' own, so skills you already have work unchanged. They live inside `v1/`
 because rolling back to v1 should restore the instructions v1 was running with.
 
+### Traces
+
+Every model call and tool call, with its prompts, results and token counts, goes to
+a sink the worker owns:
+
+```yaml
+trace_sink:
+  kind: otel
+  endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT}
+```
+
+`otel` speaks OTLP and follows OpenTelemetry's GenAI conventions, so Jaeger, Tempo,
+Datadog and Langfuse all read it without a translation layer — `jsonl` and
+`logging` are there for when you just want to look. Traces are captured worker-side
+and carry prompts, so they go to your backend and never to the control plane.
+
+That is separate from `store.url`, which holds checkpoints and the agent's files —
+state a parked task resumes from, not telemetry.
+
 ### Which agents a worker serves
 
 ```yaml

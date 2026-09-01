@@ -39,10 +39,11 @@ serves:
 #       agent: leads-finder
 #       events: [approval_requested, input_requested]
 
+# Every model call and tool call, with prompts and results, written where this
+# says. Use kind: otel with an endpoint to send them to your own OTLP backend.
 # trace_sink:
 #   kind: jsonl
 #   path: ./traces.jsonl
-#   endpoint: http://localhost:4318
 
 model_pricing:
   claude-haiku-4-5:

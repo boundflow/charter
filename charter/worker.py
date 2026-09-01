@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 from boundflow import BoundFlowWorker, ControlPlaneClient
 from boundflow.langchain_client import LangChainLlmClient
 
-from . import ui
+from . import trace as charter_trace, ui
 from .config.loader import AgentBundle, Project
 from .config.worker import Channel, WorkerManifest
 from .mcp.client import QuarantineError, ToolSet
@@ -128,6 +128,10 @@ class CharterWorker:
                 # than becoming a second place a key could come from.
                 llm=LangChainLlmClient(lambda name: self._chat_model(name)),
                 api_key=resolve(manifest.control_plane.api_key),
+                # Traces carry prompts and tool arguments, so they go where the
+                # manifest points and never to the control plane.
+                trace_sink=charter_trace.build(
+                    manifest.trace_sink, manifest.name or "charter"),
             )
             notifier = Notifier(manifest.notifications)
 
