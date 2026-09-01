@@ -67,6 +67,16 @@ def runtime(root: Path, agent: str = AGENT, **per_run):
     return load_project(root / "worker.yaml")
 
 
+def authority(root: Path, agent: str = AGENT, **fields):
+    """What the agent may reach. Policy, not versioned config — `file_rules` and
+    `allowed_capabilities` live under runtime.yaml's `authority`."""
+    path = root / agent / "runtime.yaml"
+    raw = yaml.safe_load(path.read_text())
+    raw.setdefault("authority", {}).update(fields)
+    path.write_text(yaml.safe_dump(raw))
+    return load_project(root / "worker.yaml")
+
+
 async def run_with(cp, loaded, tenant, model, agent: str = AGENT, **context):
     wf = await one_instance(cp, loaded, agent, tenant)
     worker = CharterWorker(loaded, chat_model=factory(model))
@@ -83,7 +93,7 @@ async def run_with(cp, loaded, tenant, model, agent: str = AGENT, **context):
 async def test_a_deny_rule_refuses_the_write(cp, project, tenant):
     """The rule is enforced by the harness from policy we translated, so this is
     the whole chain: our yaml, their permission check, the agent's error."""
-    loaded = configure(project, file_rules=[
+    loaded = authority(project, file_rules=[
         {"operations": ["write"], "paths": ["/secrets/**"], "mode": "deny"}])
     model = scripted(
         calls("write_file", file_path="/secrets/keys.txt", content="x"),
@@ -98,7 +108,7 @@ async def test_a_deny_rule_refuses_the_write(cp, project, tenant):
 async def test_an_allowed_path_is_written(cp, project, tenant):
     """The other half. A rule that refused everything would pass the test above
     while making the agent useless."""
-    loaded = configure(project, file_rules=[
+    loaded = authority(project, file_rules=[
         {"operations": ["write"], "paths": ["/secrets/**"], "mode": "deny"}])
     model = scripted(
         calls("write_file", file_path="/work/notes.md", content="hello"),
@@ -119,7 +129,7 @@ async def test_an_allowed_path_is_written(cp, project, tenant):
 async def test_a_capability_outside_the_allowlist_is_refused(cp, project, tenant):
     """Default-deny over the harness's own tools. Nothing upstream does this —
     `permissions` covers filesystem paths, not which capabilities exist at all."""
-    loaded = configure(project, allowed_capabilities=["read"])
+    loaded = authority(project, allowed_capabilities=["read"])
     model = scripted(
         calls("write_file", file_path="/work/notes.md", content="x"),
         submits(summary="could not write", needs_attention=0),
@@ -133,7 +143,7 @@ async def test_a_capability_outside_the_allowlist_is_refused(cp, project, tenant
 
 
 async def test_an_allowed_capability_still_works(cp, project, tenant):
-    loaded = configure(project, allowed_capabilities=["read", "write"])
+    loaded = authority(project, allowed_capabilities=["read", "write"])
     model = scripted(
         calls("write_file", file_path="/work/notes.md", content="allowed"),
         calls("read_file", file_path="/work/notes.md"),

@@ -1,0 +1,84 @@
+# A BoundFlow control plane for CI, from the published image.
+#
+# Charter's own copy rather than the one in the BoundFlow repo: this has to run
+# from a Charter checkout alone, and it pins what the e2e suite needs — the two
+# gRPC ports published, and a second database for the worker's store.
+
+name: charter-ci
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: boundflow
+      POSTGRES_USER: boundflow
+      POSTGRES_PASSWORD: boundflow
+    ports: ["5432:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U boundflow"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  # The agent's checkpoints and files. Charter's side of the split, so it is a
+  # separate database from the control plane's.
+  store:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: charter
+      POSTGRES_USER: charter
+      POSTGRES_PASSWORD: charter
+    ports: ["5434:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U charter"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  migrate:
+    image: ${BOUNDFLOW_IMAGE:-ghcr.io/boundflow/boundflow:latest}
+    command: ["-mode=migrate"]
+    environment:
+      BOUNDFLOW_DATABASE_URL: postgres://boundflow:boundflow@postgres:5432/boundflow?sslmode=disable
+      BOUNDFLOW_NUM_PARTITIONS: "1"
+    depends_on:
+      postgres: { condition: service_healthy }
+
+  server:
+    image: ${BOUNDFLOW_IMAGE:-ghcr.io/boundflow/boundflow:latest}
+    command: ["-mode=server"]
+    environment:
+      BOUNDFLOW_DATABASE_URL: postgres://boundflow:boundflow@postgres:5432/boundflow?sslmode=disable
+      BOUNDFLOW_GRPC_PORT: "50051"
+      BOUNDFLOW_NUM_PARTITIONS: "1"
+      BOUNDFLOW_PERIODIC_POLL_SECONDS: "5"
+      BOUNDFLOW_LOG_LEVEL: info
+    ports: ["50051:50051"]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+
+  scheduler:
+    image: ${BOUNDFLOW_IMAGE:-ghcr.io/boundflow/boundflow:latest}
+    command: ["-mode=scheduler"]
+    environment:
+      BOUNDFLOW_DATABASE_URL: postgres://boundflow:boundflow@postgres:5432/boundflow?sslmode=disable
+      BOUNDFLOW_NUM_PARTITIONS: "1"
+      BOUNDFLOW_MAX_PARTITIONS_PER_SCHEDULER: "1"
+      BOUNDFLOW_WORKFLOW_PURGE_AGE_SECONDS: "3600"
+      # Must match the server's.
+      BOUNDFLOW_PERIODIC_POLL_SECONDS: "5"
+      BOUNDFLOW_LOG_LEVEL: info
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+
+  worker:
+    image: ${BOUNDFLOW_IMAGE:-ghcr.io/boundflow/boundflow:latest}
+    command: ["-mode=worker"]
+    environment:
+      BOUNDFLOW_DATABASE_URL: postgres://boundflow:boundflow@postgres:5432/boundflow?sslmode=disable
+      BOUNDFLOW_WORKER_GRPC_PORT: "50052"
+      BOUNDFLOW_JOB_TIMEOUT_SECS: "300"
+      BOUNDFLOW_LOG_LEVEL: info
+    ports: ["50052:50052"]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
