@@ -202,7 +202,9 @@ async def test_the_agent_can_ask_and_the_answer_reaches_it(cp, project, tenant):
     """The harness only ever stops at a tool call, so asking is a tool. This is the
     whole path: the tool exists, calling it parks on AwaitInput, and the answer
     comes back as the tool's result."""
-    loaded = configure(project, ask_human={"when": "eagerly", "timeout_seconds": 120})
+    # Whether it can ask is versioned; how long it waits is policy.
+    configure(project, ask_human={"when": "eagerly"})
+    loaded = authority(project, question_timeout_seconds=120)
     model = scripted(
         calls("ask_human", question="Which ticket should I start with?"),
         submits(summary="started with 4821 as instructed", needs_attention=1),

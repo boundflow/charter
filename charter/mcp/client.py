@@ -373,8 +373,23 @@ def _bounded(tool, seconds: float):
     two_part = getattr(tool, "response_format", None) == "content_and_artifact"
 
     async def run(*args, **kwargs):
+        # Cancelled by hand rather than by `wait_for`, because the adapter opens a
+        # session per call: cancelling mid-read tears the stdio transport down and
+        # it raises BrokenResourceError while unwinding, which replaced the
+        # TimeoutError below and took the timeout back out of the agent's hands.
+        # Once the deadline has passed the outcome is decided, so whatever the
+        # transport says on the way out is not a new fact.
+        task = asyncio.ensure_future(inner(*args, **kwargs))
+        done, _ = await asyncio.wait({task}, timeout=seconds)
         try:
-            return await asyncio.wait_for(inner(*args, **kwargs), timeout=seconds)
+            if done:
+                return task.result()
+            task.cancel()
+            try:
+                await task
+            except BaseException:  # noqa: BLE001 — see above
+                pass
+            raise TimeoutError
         except TimeoutError:
             # Returned, not raised. A hung tool is a failed tool, and the config
             # already says what to do about one — `on_failure` and

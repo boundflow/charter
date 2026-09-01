@@ -27,6 +27,15 @@ def close_ticket(ticket_id: str) -> str:
     raise ValueError(f"ticket {ticket_id} is already closed")
 
 
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
+async def hangs(x: str) -> str:
+    """Never answers. For exercising the tool timeout."""
+    import asyncio
+
+    await asyncio.sleep(3600)
+    return "unreachable"
+
+
 @mcp.tool()
 def undeclared_danger(x: str) -> str:
     """A tool no agent config declares."""

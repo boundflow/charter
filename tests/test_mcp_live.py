@@ -165,10 +165,12 @@ def test_a_hanging_tool_becomes_a_failure_rather_than_a_dead_round():
     `on_failure: continue` honoured when the tool errored and ignored when it hung.
     """
     async def go():
-        ts = ToolSet().with_timeout(0.001)   # nothing answers this fast
-        await ts.connect(Cfg(spec([ToolSpec(tool="get_ticket")])))
+        # A tool that never answers, and a timeout long enough that it is the call
+        # that runs out rather than the handshake.
+        ts = ToolSet().with_timeout(0.5)
+        await ts.connect(Cfg(spec([ToolSpec(tool="hangs")])))
         tool = ts.langchain_tools()[0]
-        return await tool.ainvoke({"ticket_id": "42"})
+        return await tool.ainvoke({"x": "42"})
 
     answered = str(run(go()))
     assert "no response within" in answered
