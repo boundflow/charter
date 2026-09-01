@@ -112,13 +112,6 @@ def working(workflow_state: str) -> bool:
     return workflow_state == "active"
 
 
-def activity(lifecycle_state: str) -> str:
-    """lifecycle_state 'active' means "idle, no run in flight" — BoundFlow's own
-    docs define it that way. Printed verbatim next to a workflow_state of 'paused'
-    it reads as a contradiction, so it's shown as what it means."""
-    return "idle" if lifecycle_state == "active" else lifecycle_state
-
-
 def gate(agent: str, kind: str, gate_id: str, body: str, actions: list[str],
          timeout: str = "") -> None:
     """The one screen that should slow you down.

@@ -858,8 +858,8 @@ def agents(tenant: str = TENANT) -> None:
 
     Both states, because they answer different questions: `status` is whether a
     rule has stopped it, `activity` is whether it's waiting on you. An agent can be
-    active and blocked on a human, or paused and idle, and only one of those is
-    something you fix by approving something.
+    active and blocked on a human, or paused with nothing in flight, and only one of
+    those is something you fix by approving something.
     """
     async def go():
         from .provisioning.apply import NoSuchTenant, resolve_tenant
@@ -891,7 +891,7 @@ def agents(tenant: str = TENANT) -> None:
                 rows.append([w.workflow_type if w.workflow_type != seen else "",
                              short(w.id), f"v{w.version}",
                              ui.state(w.workflow_state.value),
-                             ui.state(ui.activity(w.lifecycle_state.value))])
+                             ui.state(w.lifecycle_state.value)])
                 seen = w.workflow_type
             # No schedule column: list_workflows returns the lighter view with
             # config unset, and a fleet view that made an extra call per agent to
@@ -957,7 +957,7 @@ def describe(
                    # workflow_state is the one that decides whether tasks start;
                    # lifecycle_state is only where it happens to be right now.
                    ("status", ui.state(wf.workflow_state.value)),
-                   ("activity", ui.state(ui.activity(wf.lifecycle_state.value))),
+                   ("activity", ui.state(wf.lifecycle_state.value)),
                    ("workflow", wf.id)]
                   # A cooldown ends by itself, so the question is when, not whether.
                   + ([("cooldown until", _stamp(wf.cooldown_until))]
@@ -1098,7 +1098,7 @@ def tasks(agent: str = typer.Argument(...),
 
             wf = await cp.get_workflow(wf.id)
             line = (f"{agent}  v{wf.version}  {ui.state(wf.workflow_state.value)}"
-                    f"  {ui.state(ui.activity(wf.lifecycle_state.value))}")
+                    f"  {ui.state(wf.lifecycle_state.value)}")
             typer.echo(line)
             if not ui.working(wf.workflow_state.value):
                 ui.warn(f"  stopped — no new tasks will start")

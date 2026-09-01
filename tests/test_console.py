@@ -34,3 +34,13 @@ def test_no_boundflow_noun_reaches_a_charter_screen():
 
 def test_the_brand_is_ours():
     assert LABELS.brand == "Charter"
+
+
+def test_charter_invents_no_word_the_control_plane_does_not_return():
+    """`idle` was printed for lifecycle_state `active`, so an operator reporting an
+    idle agent could find that word in no log, query or API response — and the
+    console, which renders stored values, disagreed with the CLI on screen."""
+    import charter.ui as ui
+
+    assert not hasattr(ui, "activity")
+    assert "idle" not in {v for v in vars(LABELS).values() if isinstance(v, str)}
