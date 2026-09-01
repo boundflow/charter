@@ -210,7 +210,8 @@ $ charter audit refund-triage
    `charter agent create` instantiates the agent.
 6. **Run it** — `charter run` starts a task; `charter status` says how it went.
 7. **Manage it** — the step that doesn't end: approve what it proposes, watch what
-   it spends, add a `v2.yaml` when it should behave differently.
+   it spends, add a `v2.yaml` when it should behave differently. `charter ui` puts
+   the same thing in a browser, for whoever decides an approval.
 
 You'll need a BoundFlow control plane you can reach, and an API key for it.
 
@@ -354,6 +355,7 @@ charter audit <agent>            # every governance decision recorded
 
 charter pending <agent>          # the open gate, if it's parked on one
 charter approve / reject / answer <id>
+charter ui                       # the same, in a browser
 
 charter pause <agent>            # stop it taking work
 charter resume <agent> --suspension <id>

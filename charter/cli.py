@@ -473,6 +473,25 @@ def _manifest():
     return getattr(project, "manifest", None)
 
 
+def _console_target() -> tuple[str, str]:
+    """Endpoint and key for the console, resolved the way `_cp` resolves a client."""
+    import os
+
+    from boundflow.control_plane import DEFAULT_SERVER_ADDRESS
+
+    from .worker import resolve
+
+    manifest = _manifest()
+    if manifest is not None:
+        try:
+            return (resolve(manifest.control_plane.endpoint),
+                    resolve(manifest.control_plane.api_key))
+        except RuntimeError:
+            pass
+    return (os.environ.get("BOUNDFLOW_SERVER_ADDRESS") or DEFAULT_SERVER_ADDRESS,
+            os.environ.get("BOUNDFLOW_API_KEY", ""))
+
+
 def _cp():
     """A control-plane client, configured the same way the worker configures its own.
 
@@ -839,8 +858,8 @@ def agents(tenant: str = TENANT) -> None:
 
     Both states, because they answer different questions: `status` is whether a
     rule has stopped it, `activity` is whether it's waiting on you. An agent can be
-    active and blocked on a human, or paused and idle, and only one of those is
-    something you fix by approving something.
+    active and blocked on a human, or paused with nothing in flight, and only one of
+    those is something you fix by approving something.
     """
     async def go():
         from .provisioning.apply import NoSuchTenant, resolve_tenant
@@ -872,7 +891,7 @@ def agents(tenant: str = TENANT) -> None:
                 rows.append([w.workflow_type if w.workflow_type != seen else "",
                              short(w.id), f"v{w.version}",
                              ui.state(w.workflow_state.value),
-                             ui.state(ui.activity(w.lifecycle_state.value))])
+                             ui.state(w.lifecycle_state.value)])
                 seen = w.workflow_type
             # No schedule column: list_workflows returns the lighter view with
             # config unset, and a fleet view that made an extra call per agent to
@@ -938,8 +957,11 @@ def describe(
                    # workflow_state is the one that decides whether tasks start;
                    # lifecycle_state is only where it happens to be right now.
                    ("status", ui.state(wf.workflow_state.value)),
-                   ("activity", ui.state(ui.activity(wf.lifecycle_state.value))),
-                   ("workflow", wf.id)], indent="  ")
+                   ("activity", ui.state(wf.lifecycle_state.value)),
+                   ("workflow", wf.id)]
+                  # A cooldown ends by itself, so the question is when, not whether.
+                  + ([("cooldown until", _stamp(wf.cooldown_until))]
+                     if wf.cooldown_until else []), indent="  ")
 
             # The control plane records more about a held or dying workflow than
             # "paused" conveys, and this is the screen you run when you get paged.
@@ -1076,7 +1098,7 @@ def tasks(agent: str = typer.Argument(...),
 
             wf = await cp.get_workflow(wf.id)
             line = (f"{agent}  v{wf.version}  {ui.state(wf.workflow_state.value)}"
-                    f"  {ui.state(ui.activity(wf.lifecycle_state.value))}")
+                    f"  {ui.state(wf.lifecycle_state.value)}")
             typer.echo(line)
             if not ui.working(wf.workflow_state.value):
                 ui.warn(f"  stopped — no new tasks will start")
@@ -1858,6 +1880,33 @@ def delete(
             ui.ok(f"{ui.ref('agent', agent)} deleted")
 
     asyncio.run(go())
+
+
+# Named for the module it isn't: `ui` at module scope is the renderer every other
+# command calls.
+@app.command("ui")
+def console_ui(
+    port: int = typer.Option(8787, "--port", help="Port to serve on (localhost only)"),
+    no_browser: bool = typer.Option(False, "--no-browser", help="Don't open a browser"),
+) -> None:
+    """Serve the operator console: every agent, its gates, and its holds.
+
+    BoundFlow's console in Charter's words, pointed at the control plane this
+    project already configures — so the person who decides an approval needs a
+    browser rather than a checkout and a CLI.
+
+    Read and act only. Authoring stays in the files, where a version is a diff
+    with an author.
+    """
+    from boundflow.ui import serve
+
+    from .console import LABELS
+
+    server, api_key = _console_target()
+    if not api_key:
+        _err("no API key — put one in worker.yaml or set BOUNDFLOW_API_KEY")
+        raise typer.Exit(1)
+    serve(server, api_key, port=port, open_browser=not no_browser, labels=LABELS)
 
 
 @app.command()
