@@ -6,16 +6,24 @@ build-backend = "setuptools.build_meta"
 name = "charter"
 version = "0.0.1"
 description = "Declarative, governed agents on BoundFlow — objective, tools, and policy as YAML."
+readme = "README.md"
 requires-python = ">=3.10"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+keywords = ["agents", "llm", "deepagents", "mcp", "governance", "control-plane"]
+classifiers = [
+    # Pre-alpha, and the configuration format is expected to change.
+    "Development Status :: 2 - Pre-Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Topic :: Software Development :: Libraries :: Application Frameworks",
+]
 
 dependencies = [
-    # The floor is the latest release, but it is not yet sufficient: the governor
-    # Charter runs agents under (run_governed, agent_governor) and the shared
-    # renderer (boundflow.cli.output) are on exp/deepagents-harness and unreleased.
-    # So this pin does not yet mean "pip install works" — install the SDK from a
-    # checkout of that branch until they ship, and raise the floor to the release
-    # that carries them.
-    "boundflow>=0.5.0",
+    # 0.6.0 is the floor: the governor Charter runs agents under (run_governed,
+    # agent_governor), the shared renderer (boundflow.cli.output), and the console
+    # labels `charter ui` sets all arrived in it.
+    "boundflow>=0.6.0",
     # The harness, and required rather than optional. Charter is the
     # use-an-existing-harness product: an install that can't run deepagents isn't a
     # smaller Charter, it's a Charter that does nothing. BoundFlow keeps these
@@ -50,6 +58,11 @@ ui = ["boundflow[ui]"]
 # `trace_sink: {kind: otel}` builds an OTLP exporter. Theirs again, so the sink and
 # the exporter can never disagree about the OTel version.
 otel = ["boundflow[otel]"]
+
+[project.urls]
+Homepage = "https://github.com/boundflow/charter"
+Source = "https://github.com/boundflow/charter"
+Issues = "https://github.com/boundflow/charter/issues"
 
 [project.scripts]
 charter = "charter.cli:main"

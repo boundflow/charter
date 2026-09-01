@@ -30,6 +30,11 @@ class ControlPlane(Base):
     tenant: str = Field(min_length=1)
     # Pins an exact tenant by id, for when a name would be ambiguous. Wins over `tenant`.
     tenant_id: str = ""
+    # Where workers claim operations. A different address from `endpoint`, which is
+    # the control API the CLI reads: BoundFlow serves them on separate ports, and a
+    # hosted control plane puts them on separate hosts. Unset falls back to
+    # BOUNDFLOW_WORKER_ADDRESS, then to BoundFlow's own default.
+    worker_endpoint: str = ""
 
 
 class Llm(Base):

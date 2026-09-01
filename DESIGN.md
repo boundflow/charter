@@ -714,7 +714,7 @@ Not versioned. Every secret is an `${ENV_VAR}` reference, never a literal.
 | field | req | notes |
 |---|---|---|
 | `name` | no | defaults to hostname |
-| `control_plane` | yes | `endpoint`, `api_key`, `tenant_id` |
+| `control_plane` | yes | `endpoint`, `worker_endpoint?`, `api_key`, `tenant` (or `tenant_id`) |
 | `llm` | yes | `provider` (`anthropic` \| `langchain`), `api_key` |
 | `agents_dir` | no | default `./agents`, relative to this file |
 | `serves[]` | yes | `{agent, versions: [int], repository?}` or `{ref}` — every version any rollback might target |

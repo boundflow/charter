@@ -122,6 +122,9 @@ class CharterWorker:
             self._tenant_id = (manifest.control_plane.tenant_id
                                or await resolve_tenant(cp, manifest.control_plane.tenant))
             worker = BoundFlowWorker(
+                # Workers claim operations on a different address from the control
+                # API. Unset here, BoundFlow reads its own env var and default.
+                address=resolve(manifest.control_plane.worker_endpoint) or None,
                 # The harness drives the loop and gets its model per call via
                 # run_governed, so nothing here uses BoundFlow's own client. It's
                 # still required, so it's bridged from the same credential rather

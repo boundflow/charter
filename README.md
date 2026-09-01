@@ -4,9 +4,7 @@
 
 > **Pre-alpha, and in the open early.** The design is settled enough to read and
 > argue with; the code is not settled enough to run anything you care about.
-> Charter currently needs an unreleased branch of
-> [BoundFlow](https://github.com/boundflow/boundflow) — see
-> [Getting started](#getting-started).
+> Expect the configuration format to change.
 
 A prototype agent is a prompt and some tools. A production agent needs more: a
 defined responsibility, explicit authority over what it may touch, a budget it
@@ -213,28 +211,24 @@ $ charter audit refund-triage
    it spends, add a `v2.yaml` when it should behave differently. `charter ui` puts
    the same thing in a browser, for whoever decides an approval.
 
-You'll need a BoundFlow control plane you can reach, and an API key for it.
-
-Charter is not on PyPI yet, and it needs BoundFlow's `exp/deepagents-harness`
-branch: the governor it runs agents under (`run_governed`, `agent_governor`) and
-the shared renderer (`boundflow.cli.output`) are both unreleased. Two checkouts
-for now:
-
 ```bash
-git clone https://github.com/boundflow/boundflow
-git -C boundflow checkout exp/deepagents-harness
-git clone https://github.com/boundflow/charter
-
-python -m venv .venv
-.venv/bin/pip install -e boundflow/sdk/python
-.venv/bin/pip install -e charter
+pip install charter          # add [ui] for the console, [otel] for traces
 ```
 
-The branch declares the same version as the published `boundflow` on PyPI while
-carrying more API, so `pip install -U boundflow` will silently replace it with a
-release that has neither the governor nor the renderer — same version number,
-different surface. If imports start failing, check that `pip show boundflow` still
-points at your checkout.
+### A control plane
+
+Charter needs one to run agents against, and there are two ways to have one:
+
+**BoundFlow Cloud** — managed, early access. Nothing to deploy, and you get two
+addresses and an API key. This is the shorter path and what the rest of this
+assumes; [request access](mailto:hello@boundflow.dev).
+
+**Self-hosted** — the BoundFlow backend is open source and runs as a container.
+Its [deployment docs](https://github.com/boundflow/boundflow/blob/main/docs/deployment.md)
+own that story; Charter only needs the addresses it gives you.
+
+Either way, inference stays yours. The control plane never sees your model key or
+its traffic.
 
 ### A project
 
@@ -301,7 +295,8 @@ references resolved from the environment when the worker starts:
 
 ```yaml
 control_plane:
-  endpoint: ${BOUNDFLOW_SERVER_ADDRESS}
+  endpoint: ${BOUNDFLOW_SERVER_ADDRESS}          # the control API, for the CLI
+  worker_endpoint: ${BOUNDFLOW_WORKER_ADDRESS}   # where workers claim tasks
   api_key: ${BOUNDFLOW_API_KEY}
   tenant: default
 
@@ -312,6 +307,12 @@ llm:
 store:
   url: ${CHARTER_STORE_URL}
 ```
+
+Two addresses, because BoundFlow serves the control API and worker dispatch
+separately — on two ports locally, and on two hosts in Cloud. Leave
+`worker_endpoint` out and workers fall back to `BOUNDFLOW_WORKER_ADDRESS`, then to
+localhost, which is what you want while developing and never what you want against
+a remote control plane.
 
 Inference is bring-your-own: your model key stays in the worker environment and
 model traffic never reaches the control plane. The CLI reads this same file, so
