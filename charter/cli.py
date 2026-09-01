@@ -473,6 +473,25 @@ def _manifest():
     return getattr(project, "manifest", None)
 
 
+def _console_target() -> tuple[str, str]:
+    """Endpoint and key for the console, resolved the way `_cp` resolves a client."""
+    import os
+
+    from boundflow.control_plane import DEFAULT_SERVER_ADDRESS
+
+    from .worker import resolve
+
+    manifest = _manifest()
+    if manifest is not None:
+        try:
+            return (resolve(manifest.control_plane.endpoint),
+                    resolve(manifest.control_plane.api_key))
+        except RuntimeError:
+            pass
+    return (os.environ.get("BOUNDFLOW_SERVER_ADDRESS") or DEFAULT_SERVER_ADDRESS,
+            os.environ.get("BOUNDFLOW_API_KEY", ""))
+
+
 def _cp():
     """A control-plane client, configured the same way the worker configures its own.
 
@@ -939,7 +958,10 @@ def describe(
                    # lifecycle_state is only where it happens to be right now.
                    ("status", ui.state(wf.workflow_state.value)),
                    ("activity", ui.state(ui.activity(wf.lifecycle_state.value))),
-                   ("workflow", wf.id)], indent="  ")
+                   ("workflow", wf.id)]
+                  # A cooldown ends by itself, so the question is when, not whether.
+                  + ([("cooldown until", _stamp(wf.cooldown_until))]
+                     if wf.cooldown_until else []), indent="  ")
 
             # The control plane records more about a held or dying workflow than
             # "paused" conveys, and this is the screen you run when you get paged.
@@ -1858,6 +1880,33 @@ def delete(
             ui.ok(f"{ui.ref('agent', agent)} deleted")
 
     asyncio.run(go())
+
+
+# Named for the module it isn't: `ui` at module scope is the renderer every other
+# command calls.
+@app.command("ui")
+def console_ui(
+    port: int = typer.Option(8787, "--port", help="Port to serve on (localhost only)"),
+    no_browser: bool = typer.Option(False, "--no-browser", help="Don't open a browser"),
+) -> None:
+    """Serve the operator console: every agent, its gates, and its holds.
+
+    BoundFlow's console in Charter's words, pointed at the control plane this
+    project already configures — so the person who decides an approval needs a
+    browser rather than a checkout and a CLI.
+
+    Read and act only. Authoring stays in the files, where a version is a diff
+    with an author.
+    """
+    from boundflow.ui import serve
+
+    from .console import LABELS
+
+    server, api_key = _console_target()
+    if not api_key:
+        _err("no API key — put one in worker.yaml or set BOUNDFLOW_API_KEY")
+        raise typer.Exit(1)
+    serve(server, api_key, port=port, open_browser=not no_browser, labels=LABELS)
 
 
 @app.command()

@@ -44,6 +44,9 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest", "pytest-asyncio"]
+# `charter ui` serves BoundFlow's console. The extra is theirs — starlette and
+# uvicorn arrive through it, so the two consoles can never want different ones.
+ui = ["boundflow[ui]"]
 
 [project.scripts]
 charter = "charter.cli:main"
