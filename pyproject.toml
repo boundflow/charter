@@ -3,7 +3,10 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "charter"
+# The distribution is `boundflow-charter`; the package, the CLI and the config's
+# apiVersion stay `charter`. PyPI refuses the bare name, and the prefix is how this
+# is branded anyway.
+name = "boundflow-charter"
 version = "0.0.1"
 description = "Declarative, governed agents on BoundFlow — objective, tools, and policy as YAML."
 readme = "README.md"

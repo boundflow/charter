@@ -212,8 +212,8 @@ $ charter audit refund-triage
    the same thing in a browser, for whoever decides an approval.
 
 ```bash
-pip install charter          # add [ui] for the console, [otel] for traces
-pip install --pre charter    # or the newest build of main, published on every green run
+pip install boundflow-charter          # add [ui] for the console, [otel] for traces
+pip install --pre boundflow-charter    # or the newest build of main, on every green run
 ```
 
 ### A control plane
