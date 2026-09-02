@@ -213,6 +213,7 @@ $ charter audit refund-triage
 
 ```bash
 pip install charter          # add [ui] for the console, [otel] for traces
+pip install --pre charter    # or whatever main is, published on every green build
 ```
 
 ### A control plane
