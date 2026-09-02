@@ -88,8 +88,14 @@ def scripted(*turns: dict) -> BaseChatModel:
                 # Subagents answer and return, so the script belongs to the parent.
                 turn = {"text": "subagent done"}
             else:
-                turn = turns[self.n] if self.n < len(turns) else {"text": "done"}
-                self.n += 1
+                # Which turn this is, read off the thread rather than counted on
+                # this object. An operation is at-least-once — `resumable=True` — so
+                # a re-dispatched round replays, and a counter would resume partway
+                # through the script and run off the end, answering "done" where the
+                # test expected a tool call.
+                i = sum(1 for m in messages if isinstance(m, AIMessage))
+                turn = turns[i] if i < len(turns) else {"text": "done"}
+                self.n = i + 1
             # Usage is not optional. BoundFlow refuses to run a model that reports
             # none — it cannot price the call, and a cost cap that silently doesn't
             # apply is worse than no cap. So the fake reports it, which is the same
