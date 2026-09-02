@@ -1,0 +1,76 @@
+name: Publish pre-release
+
+# Publishes a PEP 440 dev release from main on every green Tests run, so anyone can
+# install what main is without waiting for a tag.
+#
+# `pip install charter` still resolves to the newest *stable* release and is
+# unaffected. Only `pip install --pre charter` sees this stream, so a customer who
+# wants stability never gets one, and a tag keeps meaning a deliberate release.
+#
+# The version is computed here rather than read from pyproject.toml: a dev build must
+# not claim to be the stable version it branched from, and bumping the file on every
+# merge would be a commit per merge.
+on:
+  workflow_run:
+    workflows: ["Tests"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build-publish:
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      contents: read
+      id-token: write   # Trusted Publishing; no API token stored
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          fetch-depth: 0    # the dev number counts commits since the last tag
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Compute the dev version
+        id: ver
+        run: |
+          set -euo pipefail
+          BASE=$(grep -m1 '^version' pyproject.toml | cut -d'"' -f2)
+          # Numbered against the *next* minor: PEP 440 sorts 0.1.0.dev3 BEFORE 0.1.0,
+          # so dev builds off the current version would lose to the stable release and
+          # `--pre` would never reach them.
+          NEXT=$(python -c 'import sys; a,b,_=sys.argv[1].split(".")[:3]; print(f"{a}.{int(b)+1}.0")' "$BASE")
+          # Monotonic within a base: PyPI rejects a version it has already seen, and
+          # will not accept a re-upload even after a delete.
+          N=$(git rev-list --count "v${BASE}..HEAD" 2>/dev/null || git rev-list --count HEAD)
+          echo "version=${NEXT}.dev${N}" >> "$GITHUB_OUTPUT"
+          echo "publishing ${NEXT}.dev${N} (stable is ${BASE})"
+
+      - name: Stamp the version
+        env:
+          V: ${{ steps.ver.outputs.version }}
+        run: |
+          python - <<'PY'
+          import os, pathlib, re
+          p = pathlib.Path("pyproject.toml")
+          p.write_text(re.sub(r'(?m)^version = ".*"$',
+                              f'version = "{os.environ["V"]}"', p.read_text(), count=1))
+          PY
+
+      - name: Build wheel + sdist
+        run: |
+          python -m pip install --upgrade build
+          python -m build
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          # A re-run, or a merge landing while another is publishing, should not fail
+          # the workflow over a version that is already up.
+          skip-existing: true

@@ -21,6 +21,23 @@ jobs:
       # tests/e2e skips itself without a control plane in the environment.
       - run: python -m pytest tests -v
 
+  # BoundFlow's main publishes a dev release on every green run of its own suite, so
+  # this is the first place its breakage shows. Not required to merge: an upstream
+  # regression should page us, not hold Charter's pull requests hostage.
+  upstream:
+    name: Unit (BoundFlow main)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -e ".[dev,ui,otel]"
+      # Only boundflow, not `--pre` across the whole tree — every other dependency
+      # should stay where the released install puts it.
+      - run: pip install --pre --upgrade boundflow
+      - run: python -m pytest tests -v
+
   e2e:
     name: End to end
     runs-on: ubuntu-latest
