@@ -425,16 +425,25 @@ decisions behind it, and [examples/](examples/) for complete configurations.
 
 ```bash
 python -m venv .venv
-.venv/bin/pip install -e ../boundflow/sdk/python   # your BoundFlow checkout
-.venv/bin/pip install -e '.[dev]'
+.venv/bin/pip install -e '.[dev,ui,otel]'
 .venv/bin/pytest
 ```
 
-End-to-end tests require a BoundFlow control plane and are excluded by default:
+`boundflow` comes from PyPI; add `--pre --upgrade boundflow` to track its main, which
+is what CI's second unit job does.
+
+End-to-end tests need a control plane, and skip themselves without one. The compose
+file CI uses runs the published image:
 
 ```bash
-docker compose -f ../boundflow/docker-compose.dist.yml up -d
-export BOUNDFLOW_API_KEY=<...>
+docker compose -f .github/boundflow.compose.yml up -d --wait
+key=$(docker compose -f .github/boundflow.compose.yml run --rm server \
+        -mode=provision -name=dev | awk '/^api_key/{print $NF}')
+
+export BOUNDFLOW_API_KEY=$key
+export BOUNDFLOW_SERVER_ADDRESS=http://localhost:50051
+export BOUNDFLOW_WORKER_ADDRESS=http://localhost:50052
+export CHARTER_STORE_URL=postgres://charter:charter@localhost:5434/charter
 pytest tests/e2e
 ```
 
