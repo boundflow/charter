@@ -12,6 +12,7 @@ jobs:
   unit:
     name: Unit
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -27,6 +28,7 @@ jobs:
   upstream:
     name: Unit (BoundFlow main)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -41,6 +43,8 @@ jobs:
   e2e:
     name: End to end
     runs-on: ubuntu-latest
+    # The default is six hours. A hung suite should cost minutes and leave a log.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 

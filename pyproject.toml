@@ -54,7 +54,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest", "pytest-asyncio"]
+dev = ["pytest", "pytest-asyncio", "pytest-timeout"]
 # `charter ui` serves BoundFlow's console. The extra is theirs — starlette and
 # uvicorn arrive through it, so the two consoles can never want different ones.
 ui = ["boundflow[ui]"]
@@ -77,5 +77,8 @@ include = ["charter*"]
 # e2e is excluded by default: it needs a running control plane. `pytest tests/e2e`
 # opts in.
 testpaths = ["tests"]
+# No test should take minutes. A control-plane call with no deadline hangs forever
+# otherwise: one did, for 1h46m, until the CI job was cancelled by hand.
+timeout = 180
 addopts = "--ignore=tests/e2e"
 asyncio_mode = "auto"
