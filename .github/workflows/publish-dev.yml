@@ -52,15 +52,29 @@ jobs:
           echo "version=${NEXT}.dev${N}" >> "$GITHUB_OUTPUT"
           echo "publishing ${NEXT}.dev${N} (stable is ${BASE})"
 
-      - name: Stamp the version
+      # Also raises the BoundFlow floor to the matching dev series. A specifier that
+      # names a pre-release makes pre-releases eligible for that package and no
+      # other, so a dev Charter requires a dev BoundFlow while langchain, langgraph
+      # and the rest still resolve to their stable releases. `--pre` cannot express
+      # that: it relaxes every dependency in the install at once.
+      - name: Stamp the version and the BoundFlow floor
         env:
           V: ${{ steps.ver.outputs.version }}
         run: |
           python - <<'PY'
           import os, pathlib, re
+          v = os.environ["V"]
           p = pathlib.Path("pyproject.toml")
-          p.write_text(re.sub(r'(?m)^version = ".*"$',
-                              f'version = "{os.environ["V"]}"', p.read_text(), count=1))
+          text = re.sub(r'(?m)^version = ".*"$', f'version = "{v}"', p.read_text(), count=1)
+
+          # The floor keeps the release it already names — `.dev0` only makes
+          # pre-releases eligible. Deriving it from Charter's own version would
+          # rewrite BoundFlow's floor to Charter's series and lose the guarantee.
+          floor = re.search(r'"boundflow>=([^",]*)"', text)
+          assert floor, "the boundflow requirement moved; the dev floor was not stamped"
+          text = text.replace(floor.group(0), f'"boundflow>={floor.group(1)}.dev0"', 1)
+          p.write_text(text)
+          print(f"version {v}, requires boundflow>={floor.group(1)}.dev0")
           PY
 
       - name: Build wheel + sdist
