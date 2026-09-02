@@ -212,9 +212,12 @@ $ charter audit refund-triage
    the same thing in a browser, for whoever decides an approval.
 
 ```bash
-pip install charter          # add [ui] for the console, [otel] for traces
-pip install --pre charter    # or the newest build of main, published on every green run
+pip install --pre boundflow-charter    # add [ui] for the console, [otel] for traces
 ```
+
+`--pre` is required for now: every green build of main is published, and there is
+no stable release yet. Once one is tagged, `pip install boundflow-charter` gets it
+and `--pre` keeps meaning "whatever main is".
 
 ### A control plane
 
