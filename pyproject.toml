@@ -39,6 +39,11 @@ dependencies = [
     # `langgraph.store.postgres`.
     "langgraph-checkpoint-postgres>=3.1",
     # The only model provider wired up today — `worker.yaml` refuses any other.
+    # `init_chat_model` lives here, and it is how a provider gets built. Declared
+    # rather than inherited from deepagents: we import it directly now.
+    "langchain>=1.0",
+    # Anthropic is the only integration installed by default, because a default has
+    # to be something. Any other provider is an extra, or install its package.
     "langchain-anthropic>=0.3",
     # OCI artifacts: `charter push` publishes an agent version to the customer's
     # own registry, and the worker pulls one. Their registry, their `docker login`,
@@ -61,6 +66,13 @@ ui = ["boundflow[ui]"]
 # `trace_sink: {kind: otel}` builds an OTLP exporter. Theirs again, so the sink and
 # the exporter can never disagree about the OTel version.
 otel = ["boundflow[otel]"]
+# Model providers. `llm.provider` takes anything LangChain can build; these are
+# just the integration packages, so you can name one instead of looking it up.
+openai = ["langchain-openai>=0.2"]
+google = ["langchain-google-genai>=2.0"]
+bedrock = ["langchain-aws>=0.2"]
+ollama = ["langchain-ollama>=0.2"]
+groq = ["langchain-groq>=0.2"]
 
 [project.urls]
 Homepage = "https://github.com/boundflow/charter"
