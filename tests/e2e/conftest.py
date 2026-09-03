@@ -30,7 +30,6 @@ import asyncio
 import contextlib
 import os
 import uuid
-import warnings
 from contextlib import asynccontextmanager
 
 import pytest
@@ -73,9 +72,9 @@ async def tenant(cp):
     thrown away with its database, and a shared or hosted one accumulated a tenant
     per test, forever, until someone noticed.
 
-    Teardown never fails a test. The assertion belongs to whatever the test was
-    checking, and a control plane that refuses the delete has not made the test's
-    subject wrong — it has left rubbish, which the warning says.
+    A failed delete never fails the test that made the tenant — the assertion
+    belongs to what that test was checking. The sweeper fails the session instead,
+    where a leak is the finding rather than a distraction.
     """
     made = await cp.create_tenant(f"charter-e2e-{uuid.uuid4().hex[:8]}")
     try:
@@ -123,6 +122,10 @@ async def _sweep_tenants(boundflow_api_key):
     making every test wait for its own. Against a local control plane none of this
     matters; against a shared or hosted one, a suite that leaks a tenant per test
     fills it up.
+
+    Anything still standing after the retries fails the session. Zero is what this
+    measures today, so a leak means the cleanup stopped working — which is worth a
+    red suite even though the tests themselves passed.
     """
     yield
     if not _made_tenants:
@@ -141,8 +144,12 @@ async def _sweep_tenants(boundflow_api_key):
             left = still
             if left:
                 await asyncio.sleep(3)
-        for t in left:
-            warnings.warn(f"left tenant {t.name} ({t.id}) behind", stacklevel=1)
+        if left:
+            raise AssertionError(
+                "the suite leaked "
+                + ", ".join(f"{t.name} ({t.id})" for t in left)
+                + " — every tenant it made should be gone by now. A warning is how "
+                  "fifty of these accumulated on a hosted control plane unnoticed.")
 
 
 async def wait_for_run(cp, request_id: str, timeout: int = 60):
