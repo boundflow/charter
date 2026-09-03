@@ -101,13 +101,25 @@ class CharterWorker:
         """
         if self.chat_model is not None:
             return self.chat_model(model)
-        from langchain_anthropic import ChatAnthropic
+        from langchain.chat_models import init_chat_model
 
-        manifest = self.project.manifest
-        if manifest.llm.provider != "anthropic":
+        llm = self.project.manifest.llm
+        # LangChain's own factory, so the providers Charter serves are the ones it
+        # serves — and a new one there needs nothing here. BoundFlow still refuses a
+        # model that reports no token usage.
+        extra = {}
+        if llm.api_key:
+            extra["api_key"] = resolve(llm.api_key)
+        if llm.base_url:
+            extra["base_url"] = resolve(llm.base_url)
+        try:
+            return init_chat_model(model, model_provider=llm.provider, **extra)
+        except Exception as e:
             raise RuntimeError(
-                f"llm provider {manifest.llm.provider!r} is declared but not wired up")
-        return ChatAnthropic(model=model, api_key=resolve(manifest.llm.api_key))
+                f"could not build {llm.provider!r} model {model!r}: {e}. "
+                f"Its integration package may not be installed — "
+                f"langchain-{llm.provider.replace('_', '-')} or equivalent"
+            ) from e
 
     async def run(self) -> None:
         manifest = self.project.manifest

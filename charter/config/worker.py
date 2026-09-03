@@ -46,8 +46,16 @@ class Llm(Base):
     comes from and which provider integration to build.
     """
 
-    provider: Literal["anthropic"] = "anthropic"
-    api_key: str = Field(min_length=1)
+    provider: str = Field(default="anthropic", min_length=1, description=(
+        "Any provider LangChain can build: anthropic, openai, google_genai, "
+        "bedrock, ollama, huggingface, groq, mistralai, xai. The list is theirs, "
+        "so it is not enumerated here — an unknown one fails at boot, naming it."))
+    # Optional: a local runtime needs no key, and some providers take credentials
+    # from the environment (bedrock from AWS's chain, vertex from ADC).
+    api_key: str = ""
+    # For an OpenAI-compatible server you host — vLLM, LM Studio, llama.cpp — or a
+    # provider on a non-default host.
+    base_url: str = ""
 
 
 class Store(Base):

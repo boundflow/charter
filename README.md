@@ -319,7 +319,7 @@ control_plane:
   tenant: default
 
 llm:
-  provider: anthropic
+  provider: anthropic          # or openai, google_genai, bedrock, ollama, …
   api_key: ${ANTHROPIC_API_KEY}
 
 store:
@@ -331,6 +331,12 @@ separately — on two ports locally, and on two hosts in Cloud. Leave
 `worker_endpoint` out and workers fall back to `BOUNDFLOW_WORKER_ADDRESS`, then to
 localhost, which is what you want while developing and never what you want against
 a remote control plane.
+
+`provider` is whatever LangChain can build, so a model it supports works here —
+install that integration (`pip install "boundflow-charter[openai]"`) and name it.
+A local runtime needs no `api_key`, and `base_url` reaches an OpenAI-compatible
+server you host. The one requirement is that the model reports token usage:
+BoundFlow refuses to run one that doesn't.
 
 Inference is bring-your-own: your model key stays in the worker environment and
 model traffic never reaches the control plane. The CLI reads this same file, so
