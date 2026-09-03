@@ -241,7 +241,9 @@ Remove it with `docker compose -f deploy/local.compose.yml down -v`.
 For production, either run the BoundFlow backend yourself — its
 [deployment docs](https://github.com/boundflow/boundflow/blob/main/docs/deployment.md)
 own that — or use **BoundFlow Cloud**, managed and in early access
-([request access](mailto:hello@boundflow.dev)).
+([request access](mailto:hello@boundflow.dev)). Cloud hands you an API key and the
+two addresses; export those instead of the local ones and nothing else changes.
+The worker still runs wherever you put it, so `CHARTER_STORE_URL` is still yours.
 
 Whichever you pick, inference stays yours: the control plane never sees your model
 key or its traffic.
