@@ -214,27 +214,40 @@ $ charter audit refund-triage
    the same thing in a browser, for whoever decides an approval.
 
 ```bash
-pip install --pre boundflow-charter    # add [ui] for the console, [otel] for traces
+pip install boundflow-charter          # add [ui] for the console, [otel] for traces
+pip install --pre boundflow-charter    # or whatever main is, published every green build
 ```
-
-`--pre` is required for now: every green build of main is published, and there is
-no stable release yet. Once one is tagged, `pip install boundflow-charter` gets it
-and `--pre` keeps meaning "whatever main is".
 
 ### A control plane
 
-Charter needs one to run agents against, and there are two ways to have one:
+Charter needs one to run agents against. To try it, run a throwaway one — this is
+the same stack Charter's own end-to-end tests run against on every pull request,
+so it works or CI is already red:
 
-**BoundFlow Cloud** — managed, early access. Nothing to deploy, and you get two
-addresses and an API key. This is the shorter path and what the rest of this
-assumes; [request access](mailto:hello@boundflow.dev).
+```bash
+docker compose -f deploy/local.compose.yml up -d --wait
+docker compose -f deploy/local.compose.yml run --rm server -mode=provision -name=me
+```
 
-**Self-hosted** — the BoundFlow backend is open source and runs as a container.
-Its [deployment docs](https://github.com/boundflow/boundflow/blob/main/docs/deployment.md)
-own that story; Charter only needs the addresses it gives you.
+That prints an API key. With it:
 
-Either way, inference stays yours. The control plane never sees your model key or
-its traffic.
+```bash
+export BOUNDFLOW_API_KEY=<the key it printed>
+export BOUNDFLOW_SERVER_ADDRESS=http://localhost:50051
+export BOUNDFLOW_WORKER_ADDRESS=http://localhost:50052
+export CHARTER_STORE_URL=postgres://charter:charter@localhost:5434/charter
+```
+
+Delete it with `docker compose -f deploy/local.compose.yml down -v`. It keeps
+nothing you would miss.
+
+For something that lasts, either run the BoundFlow backend properly — its
+[deployment docs](https://github.com/boundflow/boundflow/blob/main/docs/deployment.md)
+own that — or use **BoundFlow Cloud**, managed and in early access
+([request access](mailto:hello@boundflow.dev)).
+
+Whichever you pick, inference stays yours: the control plane never sees your model
+key or its traffic.
 
 ### A project
 
@@ -438,8 +451,8 @@ End-to-end tests need a control plane, and skip themselves without one. The comp
 file CI uses runs the published image:
 
 ```bash
-docker compose -f .github/boundflow.compose.yml up -d --wait
-key=$(docker compose -f .github/boundflow.compose.yml run --rm server \
+docker compose -f deploy/local.compose.yml up -d --wait
+key=$(docker compose -f deploy/local.compose.yml run --rm server \
         -mode=provision -name=dev | awk '/^api_key/{print $NF}')
 
 export BOUNDFLOW_API_KEY=$key

@@ -51,7 +51,7 @@ jobs:
       # A real control plane from the published image, a real MCP subprocess, a
       # real store. Only the model is faked, which is the cut tests/e2e documents.
       - name: Start a control plane
-        run: docker compose -f .github/boundflow.compose.yml up -d --wait
+        run: docker compose -f deploy/local.compose.yml up -d --wait
 
       - name: Wait for both gRPC ports
         run: timeout 90 bash -c 'until nc -z localhost 50051 && nc -z localhost 50052; do sleep 1; done'
@@ -59,7 +59,7 @@ jobs:
       - name: Provision an API key
         id: provision
         run: |
-          key=$(docker compose -f .github/boundflow.compose.yml run --rm server \
+          key=$(docker compose -f deploy/local.compose.yml run --rm server \
                   -mode=provision -name=ci | awk '/^api_key[[:space:]]+:/{print $NF}')
           test -n "$key"
           echo "::add-mask::$key"
@@ -80,4 +80,4 @@ jobs:
 
       - name: Control plane logs on failure
         if: failure()
-        run: docker compose -f .github/boundflow.compose.yml logs --tail 100 server scheduler worker
+        run: docker compose -f deploy/local.compose.yml logs --tail 100 server scheduler worker

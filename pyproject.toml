@@ -7,7 +7,7 @@ build-backend = "setuptools.build_meta"
 # apiVersion stay `charter`. PyPI refuses the bare name, and the prefix is how this
 # is branded anyway.
 name = "boundflow-charter"
-version = "0.0.1"
+version = "0.1.0"
 description = "Declarative, governed agents on BoundFlow — objective, tools, and policy as YAML."
 readme = "README.md"
 requires-python = ">=3.10"
