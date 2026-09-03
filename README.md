@@ -220,9 +220,7 @@ pip install --pre boundflow-charter    # or whatever main is, published every gr
 
 ### A control plane
 
-Charter needs one to run agents against. To try it, run a throwaway one — this is
-the same stack Charter's own end-to-end tests run against on every pull request,
-so it works or CI is already red:
+Charter needs one to run agents against. To try it, run a throwaway one:
 
 ```bash
 docker compose -f deploy/local.compose.yml up -d --wait
