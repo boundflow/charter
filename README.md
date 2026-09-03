@@ -248,9 +248,9 @@ The worker still runs wherever you put it, so `CHARTER_STORE_URL` is still yours
 Whichever you pick, inference stays yours: the control plane never sees your model
 key or its traffic.
 
-### An agent
+### Your first agent
 
-Two files. `summarize/v1.yaml` is the agent:
+`summarize/v1.yaml`:
 
 ```yaml
 apiVersion: charter/v1
@@ -272,7 +272,7 @@ response_format:
     description: The summary, in two sentences.
 ```
 
-and `worker.yaml` beside it says where to run it:
+`worker.yaml`, beside it:
 
 ```yaml
 apiVersion: charter/v1
@@ -297,10 +297,10 @@ serves:
     versions: [1]
 ```
 
-That agent calls no tools and declares no budget, which is why it fits here. Both
-are optional; the sections below add them.
+It calls no tools and sets no budget. Both are optional, and the sections below
+add them.
 
-### Running it
+### Run it
 
 ```bash
 charter tenant create default        # once per control plane
