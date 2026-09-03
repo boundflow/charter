@@ -129,7 +129,7 @@ below.
 
 ## 3. Lifecycle policy — `agents/refund-triage/lifecycle.yaml`
 
-How the agent reacts to its own history across tasks. Not versioned; always live.
+How the agent reacts to its own history across tasks. Not versioned, and always live.
 
 Rules act on the workflow. Charter does not expose BoundFlow's *agent* lifecycle
 policy, so a rule never changes the model or the caps: those are declared in the
@@ -207,12 +207,12 @@ plane.
 `provider` is whatever LangChain can build, so a model it supports works here —
 install that integration and name it. A local runtime needs no `api_key`, and
 `base_url` reaches an OpenAI-compatible server you host. The model must report
-token usage; BoundFlow refuses to run one that doesn't.
+token usage. BoundFlow refuses to run one that doesn't.
 
 `trace_sink` takes every model call and tool call, with its prompts, results and
 token counts, to a sink the worker owns. `otel` speaks OTLP and follows
 OpenTelemetry's GenAI conventions, so Jaeger, Tempo, Datadog and Langfuse read it
-without a translation layer; `jsonl` and `logging` are there for when you just want
+without a translation layer. `jsonl` and `logging` are there for when you just want
 to look. Traces carry prompts, so they go to your backend and never to the control
 plane — which is what makes them different from `store.url`, holding the checkpoints
 and files a parked task resumes from.
@@ -271,7 +271,7 @@ has to hold. A built-in `slack:` channel is a later convenience, not a v1 need.
 
 **Notification is entirely a worker concern.** Agent configs contain no
 notification fields at all — not even a channel name. An agent with an approval
-gate *must* notify someone; that isn't an agent-author decision, and making the
+gate *must* notify someone. That isn't an agent-author decision, and making the
 config name a channel would point an immutable, committed file at something owned
 by whoever deploys the worker.
 
@@ -364,7 +364,7 @@ echo '{"ticket_id":"4821"}' | charter run refund-triage --inputs-file -
 A missing or unknown flag prints the `inputs` block — types, defaults, enums, and
 descriptions — so the config file is the only place a task's interface is written
 down. It isn't in `--help`, because Typer builds that before the agent is named. Values are validated and coerced before the request is
-created; an unknown flag or a missing required input fails locally, without
+created. An unknown flag or a missing required input fails locally, without
 burning a run.
 
 All three forms end at `invoke_workflow(context={...})`, returning the request id
@@ -378,7 +378,7 @@ bounded budget, a declared result shape, a terminal `Complete(result=...)`. So
 task = one BoundFlow request, and the budgets in `per_run` are what bound it.
 
 That naming is what makes "just trust the agent to go do stuff" coherent rather
-than alarming. Unbounded trust has no scope to be bounded by; trust *within a
+than alarming. Unbounded trust has no scope to be bounded by. Trust *within a
 task* does — the agent is free to reason, retry, and call every `read` tool it
 wants, spending up to that task's budget, and the only thing it cannot do
 unilaterally is the irreversible edge. Every guardrail in Charter is scoped to a
@@ -455,7 +455,7 @@ unnecessary question, and the failure mode where it doesn't ask lands back on th
 normal path — it calls a gated tool, stopped exactly as before.
 
 **Where do you specify the final action? You don't — that's the product.** You
-specify the menu and the objective; the agent chooses which actions to take and in
+specify the menu and the objective. The agent chooses which actions to take and in
 what order, and every irreversible one stops for you. If you had to declare the
 final action you'd be writing a workflow, and you'd want BoundFlow's SDK instead.
 
@@ -483,7 +483,7 @@ folds into history, and the loop re-enters. So one task can take several actions
 (refund, then close the ticket), each gated separately, and the agent sees what each
 call returned before it reports what it did.
 
-`entry` is the only place that stages context and calls the agent; every re-entry
+`entry` is the only place that stages context and calls the agent. Every re-entry
 is "fold in new information, run again." It also owns the `per_run` counters,
 since those are the constraint BoundFlow can't enforce for it.
 

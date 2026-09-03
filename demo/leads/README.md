@@ -33,7 +33,7 @@ Every field the schema accepts appears in those four YAML files. Anything the de
 doesn't use is commented rather than omitted, so the file is the reference.
 
 **Which half goes where.** `charter push` seals `v1.yaml` + `v1/skills/` into an
-artifact; `charter apply` sends `runtime.yaml` and `lifecycle.yaml` to the control
+artifact. `charter apply` sends `runtime.yaml` and `lifecycle.yaml` to the control
 plane. Behaviour is packaged because it has to reach workers that may not exist
 yet. Policy is applied because it has to stay changeable — a budget you cannot
 lower without cutting a release is not a budget.

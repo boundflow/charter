@@ -5,7 +5,7 @@
 ![The Charter console: the fleet with an agent parked on an approval, the decision waiting on a human, and the policy and run history behind it](docs/console.gif)
 
 > **Pre-alpha, and in the open early.** The design is settled enough to read and
-> argue with; the code is not settled enough to run anything you care about.
+> argue with. The code is not settled enough to run anything you care about.
 > Expect the configuration format to change.
 
 You define an agent and its policies in YAML. Charter runs it on your compute and
@@ -211,8 +211,8 @@ python -m venv .venv
 .venv/bin/pytest
 ```
 
-`boundflow` comes from PyPI; add `--pre --upgrade boundflow` to track its main, which
-is what CI's second unit job does.
+`boundflow` comes from PyPI. Add `--pre --upgrade boundflow` to track its main,
+which is what CI's second unit job does.
 
 End-to-end tests need a control plane, and skip themselves without one. The compose
 file CI uses runs the published image:
