@@ -58,12 +58,8 @@ on a timer, which is the only way to see an agent genuinely wait on a person.
 
 ## Running it
 
-Activate the virtualenv Charter is installed in, rather than calling its `charter`
-by path. The agent declares its tool server as `command: python`, so the worker
-spawns whatever `python` is on PATH — without the venv active that interpreter has
-no `mcp`, and `leads-finder` quarantines at boot saying so.
-
-    source .venv/bin/activate
+Run these with Charter's environment active — the agent spawns its tool server as
+`python network.py`, and it needs the interpreter Charter is installed in.
 
 Six environment variables — the control plane's two addresses, its key, the tenant,
 Postgres for the harness's own state, and a model key:
