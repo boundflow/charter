@@ -1,6 +1,6 @@
 # Charter
 
-**The easiest way to build and manage production-ready agents that run on your own compute.**
+**Build and manage production-ready agents that run on your own compute.**
 
 ![The Charter console: the fleet with an agent parked on an approval, the decision waiting on a human, and the policy and run history behind it](docs/console.gif)
 
@@ -14,20 +14,18 @@ from a persistent control plane.
 
 ## Why Charter
 
-- **Automatic rollback.** Set thresholds on failures, spend and rejections. An
-  agent that crosses one pauses, cools down, or returns to the version that worked.
-- **Durable approvals.** A run parks at a gate and resumes days later, on another
-  worker, with everything it had discovered, spent and been told.
-- **Fleet visibility.** Every agent you run is listed in `charter agents` and in
-  the console, with what it is waiting on, what it has spent, and what stopped it.
-- **Per-task budgets.** Cap cost, model calls and tool failures for a whole task.
-  An exhausted limit reports which one it was.
-- **Declared authority.** The model sees only the tools you list. Gated tools it
-  can propose, but not call.
-- **Versioned behaviour.** Objective, tools and gates are an immutable file, so a
-  rollback restores the whole agent rather than a prompt string.
-- **Traces you own.** Send every model and tool call to your own OTLP backend.
-  Prompts never reach the control plane.
+- **Durable execution.** A run parks for a human and resumes days later on another
+  worker, with its state intact.
+- **Policy that acts.** Set thresholds on the metrics an agent produces. One that
+  crosses a threshold pauses, cools down, or rolls back to the version that worked.
+- **Declared authority.** The model sees only the tools you list, gated tools
+  require human approval, and budgets cap what a task may spend.
+- **Fleet operations.** Every agent's operational state, run history, metrics and
+  open decisions, from the CLI or the console.
+- **Your network, your data.** Workers run in your environment, so agents reach
+  internal services and databases directly. Model keys and prompts never reach the
+  control plane, and the agent's conversation, files and traces stay in stores you
+  run.
 
 [DESIGN.md](DESIGN.md) documents every field.
 
@@ -125,7 +123,7 @@ add them.
 charter tenant create default        # once per control plane
 charter agent create summarize       # prints an instance id
 charter apply .                      # arm config and policy
-charter worker .                     # in its own terminal — this is the process
+charter worker .                     # leave this running, it is the process
 ```
 
 Then, from another terminal:
@@ -195,13 +193,13 @@ through their workers and the control plane whether or not the CLI is installed.
 
 ## Documentation
 
-- [DESIGN.md](DESIGN.md) — every field of every file, and the decisions behind them
-- [demo/leads/](demo/leads/) — an agent that finds people, asks you to approve
+- [DESIGN.md](DESIGN.md): every field of every file, and the decisions behind them
+- [demo/leads/](demo/leads/): an agent that finds people, asks you to approve
   every message before it sends one, and waits days if that is how long you take.
   It runs against a fake network on your machine, so nothing reaches anybody.
-- [examples/](examples/) — fuller configurations, for reading. They name real
+- [examples/](examples/): fuller configurations, for reading. They name real
   Zendesk and Stripe servers, so they do not run as-is.
-- [deploy/](deploy/) — running workers as containers, and a control plane locally
+- [deploy/](deploy/): running workers as containers, and a control plane locally
 
 ## Development
 
