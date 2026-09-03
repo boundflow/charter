@@ -9,7 +9,7 @@ Four files, with different lifetimes:
 | File | What it is | Versioned? | Compiles to |
 |---|---|---|---|
 | `agents/<name>/v<N>.yaml` | Configuration — objective, inputs, MCP tools | **Yes** | `WorkflowConfig(version=N)` + the agent definition the generic handler runs |
-| `agents/<name>/runtime.yaml` | Runtime policy — hard caps per iteration | No | `set_agent_runtime_policy` |
+| `agents/<name>/runtime.yaml` | Runtime policy — hard caps per run | No | `set_agent_runtime_policy` |
 | `agents/<name>/lifecycle.yaml` | Lifecycle policy — how it reacts over time | No | `set_workflow_lifecycle_policy` |
 | `worker.yaml` | Which agents + versions this worker process serves | No | `@worker.workflow(type, version=N)` registrations |
 
@@ -131,9 +131,9 @@ below.
 
 How the agent reacts to its own history across tasks. Not versioned; always live.
 
-**Workflow lifecycle only.** Charter deliberately does not expose BoundFlow's
-*agent* lifecycle policy (`SetModel`, `SetMaxLlmCalls`, `SetMaxCostUsd`,
-`SetMaxTokensPerCall`). See below for why.
+Rules act on the workflow. Charter does not expose BoundFlow's *agent* lifecycle
+policy, so a rule never changes the model or the caps: those are declared in the
+versioned config, and a `set_version` has to restore them.
 
 ```yaml
 apiVersion: charter/v1
@@ -162,36 +162,6 @@ anything expressible in the SDK's workflow policy is expressible in YAML.
 
 `charter schema -o .charter` writes these out as JSON Schema, so an editor
 offers the valid metrics rather than you looking them up here.
-
-### Why no agent lifecycle policy
-
-The three actions that adjust caps (`SetMaxLlmCalls`, `SetMaxCostUsd`,
-`SetMaxTokensPerCall`) would **break the dual enforcement above**. Charter sets
-BoundFlow's runtime cap equal to the declared per-run budget and accumulates the
-same number itself; an agent rule mutating BoundFlow's copy server-side leaves the
-two enforcers defending different numbers, with only one of them visible in YAML.
-
-`SetModel` breaks something worse: **it changes behavior without a version bump.**
-`model` is declared in the versioned config file. If a lifecycle rule can swap it
-out-of-band, the agent that's actually running is described by no version on disk,
-and `set_version` no longer restores a known state — which is the whole reason
-configuration is the versioned artifact.
-
-What's lost is automatic cost adaptation, and it comes back better through the
-primitive Charter already has: write a `v2.yaml` with the cheaper model, commit
-it, and let a rule move the fleet.
-
-```yaml
-  - when: { metric: cost, threshold: 5.00 }
-    then: { set_version: 2 }        # v2 = same agent, cheaper model
-```
-
-Same outcome as a `SetModel` downgrade, except the thing that changed is a file in
-git, the change is auditable, and it uses one mechanism instead of two. Every
-lifecycle action Charter exposes acts on the *agent as a managed unit* — hold it,
-slow it, or move it to a known version — which is the fleet-management posture the
-product is for. Tuning an individual agent's model economics is what the SDK is
-for.
 
 ## 4. Worker manifest — `worker.yaml`
 
@@ -279,7 +249,7 @@ the control plane dispatching operations nobody can handle.
 from YAML:
 
 1. find-or-create the workflow, type = `name`, `WorkflowConfig(version, invoke_mode)`
-2. `set_agent_runtime_policy` from `per_iteration`
+2. `set_agent_runtime_policy` from `per_run`
 3. `set_workflow_lifecycle_policy` from `rules`
 4. `activate_workflow`
 
@@ -354,24 +324,6 @@ task: the approval still exists and degrades to its existing timeout branch, whi
 is a state the state machine already handles. Failures are logged loudly, because
 "the gate opened and nobody was told" is exactly the condition an operator needs
 to find out about.
-
-### Lifecycle events are not notifiable yet
-
-`paused`, `cooldown`, and `set_version` fire in the scheduler, server-side. The
-worker is never told, so Charter has no push path for them — which is unfortunate,
-since "your agent just got paused" is the most operationally interesting event the
-product produces.
-
-Options, none of them free:
-
-- **Poll the audit log** from the worker or CLI. Works today, no BoundFlow change,
-  but it's polling and the latency is the poll interval.
-- **Server-side webhooks in BoundFlow** — the right answer, and useful to the SDK
-  independently of Charter. Notification becomes a control-plane feature emitting
-  on the same events it already writes to the audit log.
-
-Deferred until after the worker path works end to end; the audit log means nothing
-is lost in the meantime, only delayed.
 
 ## Tool failure
 
@@ -462,7 +414,7 @@ task/req_01J8Z... started
 A rejection is not a failure. The agent is told, and carries on without that
 action unless the tool sets `on_reject: fail`.
 
-### Not every mutation costs a human
+### Approval per tool
 
 The walkthrough above is the strictest setting. Each tool declares its own
 requirement:
@@ -488,7 +440,7 @@ governed: per-task budget, tool limits, the full audit trail, and lifecycle rule
 that pause or roll it back when it starts failing. That's the honest version of
 "trust the agent" — no human in the loop, but not unsupervised either.
 
-### Confidence is a reasoning tool, not a gate
+### Asking a human
 
 Approval is binary, and confidence appears in exactly one place:
 `ask_human.when` — `rarely`, `balanced`, or `eagerly`. It is a posture rather than
@@ -513,9 +465,10 @@ reply, write the row, page someone), that destination is just another tool, gate
 like the rest. There is deliberately no ungated final side effect, because "the
 last thing it does" is exactly the thing you'd most want to approve.
 
-## The state machine the generic handler runs
+## One operation, re-entered
 
-One operation, re-entered. Every park ends it; nothing is held open.
+The harness runs the agent loop. Charter's handler runs once per park: every park
+ends the operation, and nothing is held open.
 
 ```
 entry -> agent -> result      -> Complete
@@ -525,12 +478,10 @@ entry -> agent -> result      -> Complete
                 \-> wait       -> Next(delay)  -> entry
 ```
 
-**Only a result ends a task.** An approved call is a step, not a terminus: the
-tool is called, its result folds into history, and the loop re-enters. That buys
-three things — an agent can take several actions in one task (refund, *then* close
-the ticket), each separately gated; it observes what its action actually returned
-rather than acting blind; and it always gets to report what it did, so the task
-result describes the work instead of stopping mid-sentence at the last side effect.
+Only a result ends a task. An approved call is a step: the tool runs, its result
+folds into history, and the loop re-enters. So one task can take several actions
+(refund, then close the ticket), each gated separately, and the agent sees what each
+call returned before it reports what it did.
 
 `entry` is the only place that stages context and calls the agent; every re-entry
 is "fold in new information, run again." It also owns the `per_run` counters,
@@ -800,68 +751,3 @@ keeping that true — if `boundflow workflow runs <id>` can't inspect a Charter 
 we've built a walled garden. But it isn't part of the product surface, and the
 policy-writing commands should be documented as unsafe against Charter-managed
 workflows.
-
-## Asks of BoundFlow
-
-### Pagination on ListWorkflowRuns
-
-`list_workflow_runs` returns **every** run a workflow has ever had — no `LIMIT` in
-the query, no page token, and nothing trims them. `charter tasks` therefore fetches
-an entire history to show twenty rows, and filters locally.
-
-Fine at ten runs, wrong at ten thousand, and a periodic agent gets there in a
-month. The ask is keyset pagination — `limit` plus an `after` cursor on
-`(created_at, request_id)` — rather than offset, which skips and repeats rows when
-new runs land mid-scan, exactly when you'd be paging. A server-side outcome filter
-would help too: "show me the failures" is the question people actually have.
-
-Related: `WorkflowMetrics` is scoped to the workflow's **current version** while
-the run list spans every version, so after a `set_version` rollback the totals a
-lifecycle rule judges drop to that version's record while the history still shows
-everything. Defensible, but neither is labelled as such.
-
-
-Three related changes, all in the approval path. Together they make the audit log
-self-describing and remove a branch from Charter's state machine.
-
-1. **Persist `justification` into `ApprovalAuditDetails`.** It's written to the job
-   row at `ParkForApproval` and cleared when the decision lands, so the permanent
-   record says "rejected" with no subject.
-2. **Accept an optional `reason` on `approve_workflow` / `reject_workflow`**, stored
-   alongside the decision. Approvals benefit too: "fine, but stop refunding
-   shipping" is the highest-quality signal the system produces and has nowhere to go.
-3. **Surface it on the resumed operation** — `ctx.approval_reason`, beside the
-   existing `ctx.input_answer`. Without this the reason is recorded but Charter must
-   fetch it back over gRPC to use it.
-
-With all three, the rejection path collapses from
-
-```
-rejected -> ask_rejection_reason -> AwaitInput("why?") -> log_rejection_reason -> entry
-```
-
-to `rejected -> entry`, deleting two operations, a second park, a second human
-interaction, and a timeout branch. It also removes a failure mode: today a human
-can reject and walk away, the "why?" input times out, and the agent redrafts having
-learned nothing from a rejection that did happen.
-
-## Open
-
-- **Scheduling.** `WorkflowConfig.repeat_every_seconds` and `triggerable` aren't
-  in any file above. Probably a `schedule:` block in configuration — but a
-  periodic agent can't take per-invocation `inputs`, so the two are mutually
-  exclusive and the schema should say so.
-- **`invoke_mode`.** Derived, not authored: an agent that declares `inputs:` is
-  doing discrete tasks and must be `queue` (coalescing would silently discard a
-  ticket). An agent with no inputs is being told "something changed, go look", and
-  `coalesce` is correct — two such triggers really are one piece of work.
-- **Model pricing.** `set_model_pricing` is per-tenant and global, not per-agent —
-  belongs in `worker.yaml` or a separate tenant-level file, not in an agent's config.
-- **Stranded versions.** A worker registers a handler per `(agent, version)`, so a
-  task pinned to a version no running worker serves is never claimed — it waits,
-  silently, with no error anywhere. The trap is a deploy: roll workers that serve
-  only v2 and every task parked at a gate on v1 is stranded. `serves: versions:
-  [1, 2]` is already the fix and the bundle keeps every version for exactly this,
-  but nothing says when it is safe to drop v1. Wants one question asked of the
-  control plane — are there tasks pinned to versions nobody serves — as a boot
-  warning or a `charter doctor`. Same class as the warnings `apply` already gives.
