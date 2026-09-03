@@ -12,9 +12,10 @@ Define an agent in YAML: what it is responsible for, which tools it may call, wh
 needs a human, and what it may spend. Charter deploys it as a service you can
 operate.
 
-The agent runs in your environment. Its state, policy and history live in a control
+Agents run in your environment. Their state, policy and history live in a control
 plane, so a task survives a closed laptop, a restarted worker, or an approval that
-takes until tomorrow.
+takes until tomorrow — and one console covers all of them, whether you run three or
+three hundred.
 
 ## Why Charter
 
@@ -22,6 +23,8 @@ takes until tomorrow.
   agent that crosses one pauses, cools down, or returns to the version that worked.
 - **Durable approvals.** A run parks at a gate and resumes days later, on another
   worker, with everything it had discovered, spent and been told.
+- **One console for the fleet.** `charter ui` and `charter agents` show every agent
+  you run, what each is waiting on, what it has spent, and what stopped it.
 - **Per-task budgets.** Cap cost, model calls and tool failures for a whole task.
   An exhausted limit reports which one it was.
 - **Declared authority.** The model sees only the tools you list. Gated tools it
