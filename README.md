@@ -8,35 +8,30 @@
 > argue with; the code is not settled enough to run anything you care about.
 > Expect the configuration format to change.
 
-A prototype agent is a prompt and some tools. A production agent needs more: a
-defined responsibility, explicit authority over what it may touch, a budget it
-can't exceed, a way for humans to intervene while it works, and someone watching
-its behavior over time.
+Define an agent in YAML: what it is responsible for, which tools it may call, what
+needs a human, and what it may spend. Charter deploys it as a service you can
+operate.
 
-Charter is that, as configuration. You describe an agent in YAML — what it's
-responsible for, which tools it gets, what needs a human, what it may spend — and
-Charter deploys it as a durable, governed service you can operate.
-
-The agent runs in your environment. Its state, policy and history live in a
-control plane, so a task survives a closed laptop, a restarted worker, or an
-approval that takes until tomorrow.
+The agent runs in your environment. Its state, policy and history live in a control
+plane, so a task survives a closed laptop, a restarted worker, or an approval that
+takes until tomorrow.
 
 ## Why Charter
 
-- **Automatic rollback** — an agent whose failures, spend or rejections cross a
-  threshold you set pauses, cools down, or returns to the version that worked.
-- **Durable approvals** — a run parks at a gate and resumes days later, on another
+- **Automatic rollback.** Set thresholds on failures, spend and rejections. An
+  agent that crosses one pauses, cools down, or returns to the version that worked.
+- **Durable approvals.** A run parks at a gate and resumes days later, on another
   worker, with everything it had discovered, spent and been told.
-- **Per-task budgets** — cost, model calls and tool failures are capped across the
-  whole task, and an exhausted limit names which one and what it suggests.
-- **Declared authority** — the model sees only the tools you listed, and the ones
-  you gate it can propose but never call.
-- **Versioned behaviour** — objective, tools and gates are an immutable file, so a
+- **Per-task budgets.** Cap cost, model calls and tool failures for a whole task.
+  An exhausted limit reports which one it was.
+- **Declared authority.** The model sees only the tools you list. Gated tools it
+  can propose, but not call.
+- **Versioned behaviour.** Objective, tools and gates are an immutable file, so a
   rollback restores the whole agent rather than a prompt string.
-- **Traces you own** — every model and tool call to your own OTLP backend; prompts
-  never reach the control plane.
+- **Traces you own.** Send every model and tool call to your own OTLP backend.
+  Prompts never reach the control plane.
 
-Each is a few lines of YAML. [DESIGN.md](DESIGN.md) is the field reference.
+[DESIGN.md](DESIGN.md) documents every field.
 
 ## Quickstart
 
@@ -65,15 +60,14 @@ export CHARTER_STORE_URL=postgres://charter:charter@localhost:5434/charter
 
 Remove it with `docker compose -f deploy/local.compose.yml down -v`.
 
-For production, either run the BoundFlow backend yourself — its
-[deployment docs](https://github.com/boundflow/boundflow/blob/main/docs/deployment.md)
-own that — or use **BoundFlow Cloud**, managed and in early access
-([request access](mailto:hello@boundflow.dev)). Cloud hands you an API key and the
-two addresses; export those instead of the local ones and nothing else changes.
-The worker still runs wherever you put it, so `CHARTER_STORE_URL` is still yours.
+For production you have two options. Run the BoundFlow backend yourself, following
+its [deployment docs](https://github.com/boundflow/boundflow/blob/main/docs/deployment.md).
+Or use **BoundFlow Cloud**, which is managed and in early access
+([request access](mailto:hello@boundflow.dev)): it gives you an API key and the two
+addresses, and you export those instead of the local ones. The worker still runs
+wherever you put it, so `CHARTER_STORE_URL` stays yours.
 
-Whichever you pick, inference stays yours: the control plane never sees your model
-key or its traffic.
+Either way the control plane never sees your model key or its traffic.
 
 ### Your first agent
 
@@ -158,20 +152,21 @@ mcp:
         approval: always
 ```
 
-Suppose the agent reads a ticket and concludes a $240 refund is warranted. It
-cannot issue it. `create_refund` requires approval, so Charter parks the task and
-surfaces the proposed call and the agent's reasoning to a human:
+When the agent decides to call `create_refund`, Charter stops the task and shows a
+human the call it wants to make and the reasoning behind it:
 
 ```bash
 charter approve apr_01J8Z --reason "third dispute this month"
 ```
 
-Only then is the refund executed. The agent receives the result, finishes the task,
-and reports what happened. The task didn't live in your terminal in the meantime —
-`charter apply` compiled your configuration into workflows and policy on the
-[BoundFlow](https://github.com/boundflow/boundflow) control plane, and a Charter
-worker runs the agent loop in your environment, talking to your MCP servers with
-credentials that never leave it.
+The refund runs after you approve it. The agent gets the result, finishes the task,
+and reports what it did.
+
+Nothing waited in your terminal for that. `charter apply` compiles your
+configuration into workflows and policy on the
+[BoundFlow](https://github.com/boundflow/boundflow) control plane. A Charter worker
+runs the agent loop in your environment and talks to your MCP servers with
+credentials that stay there.
 
 ```
                     BoundFlow
@@ -191,8 +186,8 @@ credentials that never leave it.
         └─────────────────────────┘
 ```
 
-Charter introduces no database or service of its own. If the Charter CLI vanished,
-deployed agents would keep running through their workers and the control plane.
+Charter adds no database or service of its own. Deployed agents keep running
+through their workers and the control plane whether or not the CLI is installed.
 
 ## Documentation
 
