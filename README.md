@@ -316,13 +316,6 @@ charter run summarize --instance <id> --text "..."
 charter status <task-id>
 ```
 
-`create` is separate from `apply` because an instance owns state — its own store,
-budget and lifecycle history — so bringing one into existence is a decision a
-person makes, not something CI does on its behalf. `apply` is safe to re-run.
-
-Every command that acts on an agent names an instance, including when there is
-only one: the instance is what holds the state.
-
 ### A larger project
 
 ```
