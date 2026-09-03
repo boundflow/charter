@@ -10,8 +10,7 @@
 
 Charter provides the infrastructure for running AI agents in production. You define
 an agent and its policies in YAML. Charter runs it on your compute and governs it
-from a persistent control plane, so a run survives a worker restart, a deploy, or an
-approval that takes days.
+from a persistent control plane.
 
 ## Why Charter
 
