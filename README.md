@@ -220,7 +220,7 @@ pip install --pre boundflow-charter    # or whatever main is, published every gr
 
 ### A control plane
 
-Charter needs one to run agents against. To try it, run a throwaway one:
+Charter needs one to run agents against. To run one locally:
 
 ```bash
 docker compose -f deploy/local.compose.yml up -d --wait
@@ -236,10 +236,9 @@ export BOUNDFLOW_WORKER_ADDRESS=http://localhost:50052
 export CHARTER_STORE_URL=postgres://charter:charter@localhost:5434/charter
 ```
 
-Delete it with `docker compose -f deploy/local.compose.yml down -v`. It keeps
-nothing you would miss.
+Remove it with `docker compose -f deploy/local.compose.yml down -v`.
 
-For something that lasts, either run the BoundFlow backend properly — its
+For anything beyond that, either run the BoundFlow backend properly — its
 [deployment docs](https://github.com/boundflow/boundflow/blob/main/docs/deployment.md)
 own that — or use **BoundFlow Cloud**, managed and in early access
 ([request access](mailto:hello@boundflow.dev)).
