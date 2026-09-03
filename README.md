@@ -194,12 +194,11 @@ through their workers and the control plane whether or not the CLI is installed.
 ## Documentation
 
 - [DESIGN.md](DESIGN.md): every field of every file, and the decisions behind them
-- [demo/leads/](demo/leads/): an agent that finds people, asks you to approve
-  every message before it sends one, and waits days if that is how long you take.
-  It runs against a fake network on your machine, so nothing reaches anybody.
-- [examples/](examples/): fuller configurations, for reading. They name real
-  Zendesk and Stripe servers, so they do not run as-is.
 - [deploy/](deploy/): running workers as containers, and a control plane locally
+- [examples/](examples/): fuller configurations, for reading. They name real
+  Zendesk and Stripe servers, so they do not run as-is
+- [demo/leads/](demo/leads/): an agent that runs end to end against a local MCP
+  server, where you play the people it contacts
 
 ## Development
 
