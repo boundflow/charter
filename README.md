@@ -8,9 +8,11 @@
 > argue with; the code is not settled enough to run anything you care about.
 > Expect the configuration format to change.
 
+Charter is a control plane for AI agents. It turns an agent definition into a
+service you can deploy, govern and roll back.
+
 Define an agent in YAML: what it is responsible for, which tools it may call, what
-needs a human, and what it may spend. Charter deploys it as a service you can
-operate.
+needs a human, and what it may spend.
 
 Agents run in your environment. Their state, policy and history live in a control
 plane, so a task survives a closed laptop, a restarted worker, or an approval that
@@ -167,8 +169,14 @@ and reports what it did.
 Nothing waited in your terminal for that. `charter apply` compiles your
 configuration into workflows and policy on the
 [BoundFlow](https://github.com/boundflow/boundflow) control plane. A Charter worker
-runs the agent loop in your environment and talks to your MCP servers with
-credentials that stay there.
+runs the agent in your environment and talks to your MCP servers with credentials
+that stay there.
+
+The agent loop itself is [deepagents](https://github.com/langchain-ai/deepagents),
+so its tools, subagents, filesystem and skills work here unchanged. Charter makes
+that loop durable and governed: it checkpoints the run, turns the harness's
+interrupts into approvals a person can answer tomorrow, and holds it to the limits
+your config declares.
 
 ```
                     BoundFlow
