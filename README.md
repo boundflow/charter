@@ -88,19 +88,44 @@ meantime.
 
 ## What makes it production-ready
 
-### Explicit authority
+### It pauses and rolls itself back
 
-Access to an MCP server is not access to everything that server exposes. The
-model only ever sees the tools you declared:
+Lifecycle rules watch an agent's own cost, failures and rejections, and act on
+them without you:
 
+```yaml
+rules:
+  - when: { metric: num_failures, threshold: 2 }
+    then: { pause: { window: 5 } }
+
+  - when: { metric: cost, threshold: 5.00 }
+    then: { cooldown: { window: 20, seconds: 300 } }
+
+  - when: { metric: approval_rejections, threshold: 3 }
+    then: { set_version: { target: 1 } }
 ```
-mcp stripe: 34 tools available, 2 declared (32 ignored)
+
+A noisy agent gets cooled down. A repeatedly failing one gets paused. A new
+version whose decisions keep getting rejected rolls back to the one that worked —
+and because versions are immutable specifications, rollback restores the whole
+agent, not just a prompt string. What changed is a file in Git, with an author and
+a diff.
+
+### An approval that waits as long as it takes
+
+An agent stops for a human for two reasons: it needs information it shouldn't
+guess, or it wants to do something beyond its authority.
+
+```bash
+charter pending refund-triage
+charter approve apr_01J8Z --reason "confirmed duplicate"
+charter answer  inp_01J8Z "use the March charge"
 ```
 
-If the server adds a tool tomorrow, your agent doesn't silently gain a capability.
-And tools marked `approval: always` aren't callable inside the agent loop at all —
-the agent can propose them, but a separate step executes them after a human signs
-off. The model can propose authority it doesn't have; it can't grant it to itself.
+Neither is a process sitting around waiting. Charter checkpoints the task; it can
+wait overnight and resume on another worker with everything it had discovered,
+spent and been told. Rejection carries a reason back to the agent, so a "no" is
+feedback it can act on, not just a closed door.
 
 ### A budget per task
 
@@ -120,43 +145,19 @@ stripe__create_refund failed 3 times (max_tool_failures=3)
 the integration looks broken
 ```
 
-### Humans in the loop, durably
+### It only has the tools you gave it
 
-An agent stops for a human for two reasons: it needs information it shouldn't
-guess, or it wants to do something beyond its authority.
+Access to an MCP server is not access to everything that server exposes. The
+model only ever sees the tools you declared:
 
-```bash
-charter pending refund-triage
-charter approve apr_01J8Z --reason "confirmed duplicate"
-charter answer  inp_01J8Z "use the March charge"
+```
+mcp stripe: 34 tools available, 2 declared (32 ignored)
 ```
 
-Neither is a process sitting around waiting. Charter checkpoints the task; it can
-wait overnight and resume on another worker with everything it had discovered,
-spent and been told. Rejection carries a reason back to the agent, so a "no" is
-feedback it can act on, not just a closed door.
-
-### Policy that acts on its own
-
-Humans govern individual actions. Lifecycle rules govern the agent itself:
-
-```yaml
-rules:
-  - when: { metric: num_failures, threshold: 2 }
-    then: { pause: { window: 5 } }
-
-  - when: { metric: cost, threshold: 5.00 }
-    then: { cooldown: { window: 20, seconds: 300 } }
-
-  - when: { metric: approval_rejections, threshold: 3 }
-    then: { set_version: { target: 1 } }
-```
-
-A noisy agent gets cooled down. A repeatedly failing one gets paused. A new
-version whose decisions keep getting rejected rolls back to the one that worked —
-and because versions are immutable specifications, rollback restores the whole
-agent, not just a prompt string. What changed is a file in Git, with an author and
-a diff.
+If the server adds a tool tomorrow, your agent doesn't silently gain a capability.
+And tools marked `approval: always` aren't callable inside the agent loop at all —
+the agent can propose them, but a separate step executes them after a human signs
+off. The model can propose authority it doesn't have; it can't grant it to itself.
 
 ## Operate agents, not sessions
 
