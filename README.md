@@ -145,8 +145,7 @@ charter status <task-id>
 
 ## How it works
 
-An agent is a directory with a version file in it. That file says what the agent is
-for, which tools it may call, and which of them stop for a person:
+A tool the agent shouldn't call on its own gets one line:
 
 ```yaml
 mcp:
