@@ -14,8 +14,7 @@ operate.
 
 Agents run in your environment. Their state, policy and history live in a control
 plane, so a task survives a closed laptop, a restarted worker, or an approval that
-takes until tomorrow — and one console covers all of them, whether you run three or
-three hundred.
+takes until tomorrow.
 
 ## Why Charter
 
@@ -23,8 +22,8 @@ three hundred.
   agent that crosses one pauses, cools down, or returns to the version that worked.
 - **Durable approvals.** A run parks at a gate and resumes days later, on another
   worker, with everything it had discovered, spent and been told.
-- **One console for the fleet.** `charter ui` and `charter agents` show every agent
-  you run, what each is waiting on, what it has spent, and what stopped it.
+- **Fleet visibility.** Every agent you run is listed in `charter agents` and in
+  the console, with what it is waiting on, what it has spent, and what stopped it.
 - **Per-task budgets.** Cap cost, model calls and tool failures for a whole task.
   An exhausted limit reports which one it was.
 - **Declared authority.** The model sees only the tools you list. Gated tools it
