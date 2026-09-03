@@ -33,7 +33,7 @@ Every field the schema accepts appears in those four YAML files. Anything the de
 doesn't use is commented rather than omitted, so the file is the reference.
 
 **Which half goes where.** `charter push` seals `v1.yaml` + `v1/skills/` into an
-artifact; `charter apply` sends `runtime.yaml` and `lifecycle.yaml` to the control
+artifact. `charter apply` sends `runtime.yaml` and `lifecycle.yaml` to the control
 plane. Behaviour is packaged because it has to reach workers that may not exist
 yet. Policy is applied because it has to stay changeable — a budget you cannot
 lower without cutting a release is not a budget.
@@ -58,19 +58,27 @@ on a timer, which is the only way to see an agent genuinely wait on a person.
 
 ## Running it
 
-Four environment variables — the control plane, its key, Postgres for the
-harness's own state, and a model key:
+Run these with Charter's environment active — the agent spawns its tool server as
+`python network.py`, and it needs the interpreter Charter is installed in.
+
+Six environment variables — the control plane's two addresses, its key, the tenant,
+Postgres for the harness's own state, and a model key:
 
     export BOUNDFLOW_SERVER_ADDRESS=http://localhost:50051
     export BOUNDFLOW_WORKER_ADDRESS=http://localhost:50052
     export BOUNDFLOW_API_KEY=...
+    export CHARTER_TENANT=default
     export CHARTER_STORE_URL=postgres://...
     export ANTHROPIC_API_KEY=...
-    export CHARTER_TENANT=default
 
-Create the instances, then start the worker from this directory — the MCP server
-is spawned as a subprocess relative to wherever the worker runs:
+If you brought the control plane up with `deploy/local.compose.yml`, the store is
+`postgres://charter:charter@localhost:5434/charter`.
 
+The tenant has to exist before an agent can live in it. Create it once, then the
+instances, then start the worker from this directory — the MCP server is spawned
+as a subprocess relative to wherever the worker runs:
+
+    charter tenant create default                         # once per control plane
     charter agent create leads-finder --path demo/leads   # prints an instance id
     charter apply demo/leads/worker.yaml --all
 

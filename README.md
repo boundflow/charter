@@ -1,217 +1,35 @@
 # Charter
 
-**The easiest way to build and manage production-ready agents.**
+**Build and manage production-ready agents that run on your own compute.**
 
 ![The Charter console: the fleet with an agent parked on an approval, the decision waiting on a human, and the policy and run history behind it](docs/console.gif)
 
 > **Pre-alpha, and in the open early.** The design is settled enough to read and
-> argue with; the code is not settled enough to run anything you care about.
+> argue with. The code is not settled enough to run anything you care about.
 > Expect the configuration format to change.
 
-A prototype agent is a prompt and some tools. A production agent needs more: a
-defined responsibility, explicit authority over what it may touch, a budget it
-can't exceed, a way for humans to intervene while it works, and someone watching
-its behavior over time.
+Charter provides the infrastructure for running AI agents in production. You define
+an agent and its policies in YAML. Charter runs it on your compute and governs it
+from a persistent control plane.
 
-Charter is that, as configuration. You describe an agent in YAML — what it's
-responsible for, which tools it gets, what needs a human, what it may spend — and
-Charter deploys it as a durable, governed service you can operate.
+## Why Charter
 
-The agent runs in your environment. Its state, policy and history live in a
-control plane, so a task survives a closed laptop, a restarted worker, or an
-approval that takes until tomorrow.
+- **Durable execution.** A run parks for a human and resumes days later on another
+  worker, with its state intact.
+- **Policy that acts.** Set thresholds on the metrics an agent produces. One that
+  crosses a threshold pauses, cools down, or rolls back to the version that worked.
+- **Declared authority.** The model sees only the tools you list, gated tools
+  require human approval, and budgets cap what a task may spend.
+- **Fleet operations.** Every agent's operational state, run history, metrics and
+  open decisions, from the CLI or the console.
+- **Your network, your data.** Workers run in your environment, so agents reach
+  internal services and databases directly. Model keys and prompts never reach the
+  control plane, and the agent's conversation, files and traces stay in stores you
+  run.
 
-> [!WARNING]
-> **Pre-alpha.** Charter agents have run end-to-end against a live control plane,
-> a real model and real MCP servers — but plenty hasn't. Expect rough edges and
-> expect the configuration format to change.
+[DESIGN.md](DESIGN.md) documents every field.
 
-## Define an agent
-
-An agent is a directory with a version file in it — `refund-triage/v1.yaml`:
-
-```yaml
-apiVersion: charter/v1
-kind: AgentConfig
-
-name: refund-triage
-version: 1
-model: claude-haiku-4-5
-
-objective: |
-  Resolve the refund request on ticket {{ inputs.ticket_id }}.
-  Look up the ticket and the charge before proposing anything.
-  Never propose a refund above ${{ inputs.max_refund_usd }}.
-
-inputs:
-  ticket_id: { type: string, required: true }
-  max_refund_usd: { type: number, default: 100 }
-
-mcp:
-  - name: stripe
-    url: https://mcp.stripe.com
-    env: [STRIPE_API_KEY]
-    tools:
-      - tool: get_charge
-      - tool: create_refund
-        approval: always
-
-response_format:
-  resolution: { type: string }
-  refunded_usd: { type: number }
-```
-
-That file is the whole agent. Budgets and lifecycle rules live in two optional
-files beside it — see [a project](#a-project) — and a conservative default
-ceiling applies until you add them.
-
-Deploy it, create an instance, and give it work:
-
-```bash
-charter agent create refund-triage
-charter apply .
-charter run refund-triage --instance a3f9c012 --ticket-id 4821
-```
-
-Suppose the agent reads the ticket and the charge and concludes a $240 refund is
-warranted. It cannot issue it. `create_refund` requires approval, so Charter
-parks the task and surfaces the proposed action and the agent's reasoning to a
-human:
-
-```bash
-charter approve apr_01J8Z --reason "third dispute this month"
-```
-
-Only then is the refund executed. The agent receives the result, finishes the
-task, and reports what happened. The task didn't live in your terminal in the
-meantime.
-
-## What makes it production-ready
-
-### Explicit authority
-
-Access to an MCP server is not access to everything that server exposes. The
-model only ever sees the tools you declared:
-
-```
-mcp stripe: 34 tools available, 2 declared (32 ignored)
-```
-
-If the server adds a tool tomorrow, your agent doesn't silently gain a capability.
-And tools marked `approval: always` aren't callable inside the agent loop at all —
-the agent can propose them, but a separate step executes them after a human signs
-off. The model can propose authority it doesn't have; it can't grant it to itself.
-
-### A budget per task
-
-```yaml
-per_run:
-  max_cost_usd: 0.30
-  max_llm_calls: 40
-  max_tool_failures: 3
-```
-
-Limits hold across the whole task — reasoning rounds, retries, human feedback and
-tool calls alike. When one is exhausted, Charter tells you the operational reason
-rather than collapsing it into a generic failure:
-
-```
-stripe__create_refund failed 3 times (max_tool_failures=3)
-the integration looks broken
-```
-
-### Humans in the loop, durably
-
-An agent stops for a human for two reasons: it needs information it shouldn't
-guess, or it wants to do something beyond its authority.
-
-```bash
-charter pending refund-triage
-charter approve apr_01J8Z --reason "confirmed duplicate"
-charter answer  inp_01J8Z "use the March charge"
-```
-
-Neither is a process sitting around waiting. Charter checkpoints the task; it can
-wait overnight and resume on another worker with everything it had discovered,
-spent and been told. Rejection carries a reason back to the agent, so a "no" is
-feedback it can act on, not just a closed door.
-
-### Policy that acts on its own
-
-Humans govern individual actions. Lifecycle rules govern the agent itself:
-
-```yaml
-rules:
-  - when: { metric: num_failures, threshold: 2 }
-    then: { pause: { window: 5 } }
-
-  - when: { metric: cost, threshold: 5.00 }
-    then: { cooldown: { window: 20, seconds: 300 } }
-
-  - when: { metric: approval_rejections, threshold: 3 }
-    then: { set_version: { target: 1 } }
-```
-
-A noisy agent gets cooled down. A repeatedly failing one gets paused. A new
-version whose decisions keep getting rejected rolls back to the one that worked —
-and because versions are immutable specifications, rollback restores the whole
-agent, not just a prompt string. What changed is a file in Git, with an author and
-a diff.
-
-## Operate agents, not sessions
-
-An agent persists beyond any single task.
-
-```
-$ charter agents
-
-AGENT           VER  STATUS  ACTIVITY
-invoice-chaser  v1   paused  idle
-refund-triage   v1   active  awaiting_approval
-ticket-sweeper  v1   active  idle
-```
-
-Inspect its authority and how close it is to tripping a rule:
-
-```
-$ charter describe refund-triage
-
-limits per task
-  max_cost_usd    0.25
-  max_llm_calls   20
-
-rules
-  num_failures   1 of 2     -> pause window=5
-  cost           5.2 of 5   -> cooldown window=20 seconds=300
-```
-
-And reconstruct, afterwards, every governance decision that was made:
-
-```
-$ charter audit refund-triage
-
-2026-08-18 03:47  approval rejected by dana@example.com
-                  refund-triage: run stripe__create_refund
-                  amount_usd: 240
-                  reason: wrong charge — ch_9001 is the original
-```
-
-## Getting started
-
-1. **Define the agent** — `v1.yaml`: its objective, the tools it may call, which of
-   them need a human.
-2. **Set its policy** — `runtime.yaml` for budgets and authority, `lifecycle.yaml`
-   for pause, cooldown and rollback rules.
-3. **Package it** — `charter push` seals the version into your registry. Skip it
-   while developing: a worker reads a directory just as well.
-4. **Configure a worker** — `worker.yaml`: credentials, and which agents and
-   versions this process serves.
-5. **Apply it** — `charter apply` arms config and policy on the control plane;
-   `charter agent create` instantiates the agent.
-6. **Run it** — `charter run` starts a task; `charter status` says how it went.
-7. **Manage it** — the step that doesn't end: approve what it proposes, watch what
-   it spends, add a `v2.yaml` when it should behave differently. `charter ui` puts
-   the same thing in a browser, for whoever decides an approval.
+## Quickstart
 
 ```bash
 pip install boundflow-charter          # add [ui] for the console, [otel] for traces
@@ -238,184 +56,119 @@ export CHARTER_STORE_URL=postgres://charter:charter@localhost:5434/charter
 
 Remove it with `docker compose -f deploy/local.compose.yml down -v`.
 
-For production, either run the BoundFlow backend yourself — its
-[deployment docs](https://github.com/boundflow/boundflow/blob/main/docs/deployment.md)
-own that — or use **BoundFlow Cloud**, managed and in early access
-([request access](mailto:hello@boundflow.dev)). Cloud hands you an API key and the
-two addresses; export those instead of the local ones and nothing else changes.
-The worker still runs wherever you put it, so `CHARTER_STORE_URL` is still yours.
+For production you have two options. Run the BoundFlow backend yourself, following
+its [deployment docs](https://github.com/boundflow/boundflow/blob/main/docs/deployment.md).
+Or use **BoundFlow Cloud**, which is managed and in early access
+([request access](mailto:hello@boundflow.dev)): it gives you an API key and the two
+addresses, and you export those instead of the local ones. The worker still runs
+wherever you put it, so `CHARTER_STORE_URL` stays yours.
 
-Whichever you pick, inference stays yours: the control plane never sees your model
-key or its traffic.
+Either way the control plane never sees your model key or its traffic.
 
-### A project
+### Your first agent
 
-```
-.
-├── worker.yaml               # which agents this worker serves, pricing, channels
-└── leads-finder/
-    ├── v1.yaml               # objective, tools, gates — versioned, immutable
-    ├── v1/skills/            # procedures for that version, shipped with it
-    ├── runtime.yaml          # budgets, limits, authority — policy, not versioned
-    └── lifecycle.yaml        # pause, cooldown and rollback rules
-```
-
-Only `v1.yaml` is required; a version file plus credentials is enough to run an
-agent. The split matters: `v1.yaml` is what the agent *does* and is versioned, so
-a rollback restores behavior. Budgets and lifecycle rules are today's guardrails
-and stay in force across one.
-
-Skills are the procedures the agent should follow once it gets there — how your
-refunds policy works, the runbook a new hire would be handed. Drop them in
-`v1/skills/<name>/SKILL.md` and they ship with that version; the layout is
-deepagents' own, so skills you already have work unchanged. They live inside `v1/`
-because rolling back to v1 should restore the instructions v1 was running with.
-
-### Traces
-
-Every model call and tool call, with its prompts, results and token counts, goes to
-a sink the worker owns:
+`summarize/v1.yaml`:
 
 ```yaml
-trace_sink:
-  kind: otel
-  endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT}
+apiVersion: charter/v1
+kind: AgentConfig
+
+name: summarize
+version: 1
+model: claude-haiku-4-5
+
+objective: |
+  Summarise this in two sentences: {{ inputs.text }}
+
+inputs:
+  text: { type: string, required: true }
+
+response_format:
+  summary:
+    type: string
+    description: The summary, in two sentences.
 ```
 
-`otel` speaks OTLP and follows OpenTelemetry's GenAI conventions, so Jaeger, Tempo,
-Datadog and Langfuse all read it without a translation layer — `jsonl` and
-`logging` are there for when you just want to look. Traces are captured worker-side
-and carry prompts, so they go to your backend and never to the control plane.
-
-That is separate from `store.url`, which holds checkpoints and the agent's files —
-state a parked task resumes from, not telemetry.
-
-### Which agents a worker serves
+`worker.yaml`, beside it:
 
 ```yaml
-serves:
-  - agent: leads-finder       # from ./leads-finder, while you develop
-    versions: [1]
-  - agent: refund-triage      # from the registry, once it is real
-    versions: [1, 2]
-    repository: ghcr.io/acme/agents
-```
+apiVersion: charter/v1
+kind: Worker
 
-A repository derives one address per version — `<repository>/<agent>:v<N>`, the
-address `charter push` writes. List every version a lifecycle rule can roll back
-to: a worker that cannot build the old version leaves the control plane
-dispatching work nobody can handle.
-
-### Credentials
-
-`worker.yaml` is committed, so nothing secret goes in it. Credentials are `${VAR}`
-references resolved from the environment when the worker starts:
-
-```yaml
 control_plane:
-  endpoint: ${BOUNDFLOW_SERVER_ADDRESS}          # the control API, for the CLI
-  worker_endpoint: ${BOUNDFLOW_WORKER_ADDRESS}   # where workers claim tasks
+  endpoint: ${BOUNDFLOW_SERVER_ADDRESS}
+  worker_endpoint: ${BOUNDFLOW_WORKER_ADDRESS}
   api_key: ${BOUNDFLOW_API_KEY}
   tenant: default
 
 llm:
-  provider: anthropic          # or openai, google_genai, bedrock, ollama, …
+  provider: anthropic
   api_key: ${ANTHROPIC_API_KEY}
 
 store:
   url: ${CHARTER_STORE_URL}
+
+agents_dir: ./
+serves:
+  - agent: summarize
+    versions: [1]
 ```
 
-Two addresses, because BoundFlow serves the control API and worker dispatch
-separately — on two ports locally, and on two hosts in Cloud. Leave
-`worker_endpoint` out and workers fall back to `BOUNDFLOW_WORKER_ADDRESS`, then to
-localhost, which is what you want while developing and never what you want against
-a remote control plane.
+It calls no tools and sets no budget. Both are optional, and the sections below
+add them.
 
-`provider` is whatever LangChain can build, so a model it supports works here —
-install that integration (`pip install "boundflow-charter[openai]"`) and name it.
-A local runtime needs no `api_key`, and `base_url` reaches an OpenAI-compatible
-server you host. The one requirement is that the model reports token usage:
-BoundFlow refuses to run one that doesn't.
-
-Inference is bring-your-own: your model key stays in the worker environment and
-model traffic never reaches the control plane. The CLI reads this same file, so
-the control plane is configured once and every command talks to the one your
-worker does.
-
-### First run
+### Run it
 
 ```bash
-charter validate .                    # parse and cross-check every file
-charter agent create leads-finder     # bring one instance into existence
-charter apply .                       # arm config, policy and pricing
-charter worker .                      # in its own terminal — this is the process
+charter tenant create default        # once per control plane
+charter agent create summarize       # prints an instance id
+charter apply .                      # arm config and policy
+charter worker .                     # leave this running, it is the process
 ```
 
-`create` is separate from `apply` because an instance owns state — its own store,
-budget and lifecycle history — so bringing one into existence is a decision a
-person makes, not something CI does on their behalf. `apply` is safe to re-run as
-often as you like.
-
-`create` prints an instance id; keep it. Commands that act on an agent name an
-instance, because the instance is the thing holding the state:
+Then, from another terminal:
 
 ```bash
-charter run leads-finder --instance a3f9c012 --topic "..."
+charter run summarize --instance <id> --text "..."
+charter status <task-id>
 ```
 
-### Deploying
+## How it works
 
-Locally, `charter worker .` is the whole thing, which is what you want while
-iterating — the agent's MCP servers and your logs are right in front of you.
+A tool the agent shouldn't call on its own gets one line:
 
-For anything long-lived, run the worker as a container. The reason is isolation
-rather than packaging: an agent can declare MCP servers as commands, and the
-worker executes them. [deploy/](deploy/) has a Dockerfile that mounts the project
-rather than baking it in, so changing an objective is a restart, not a rebuild.
+```yaml
+mcp:
+  - name: stripe
+    url: https://mcp.stripe.com
+    env: [STRIPE_API_KEY]
+    tools:
+      - tool: get_charge
+      - tool: create_refund
+        approval: always
+```
 
-## CLI
-
-Working with configuration:
+When the agent decides to call `create_refund`, Charter stops the task and shows a
+human the call it wants to make and the reasoning behind it:
 
 ```bash
-charter validate .               # parse and cross-check configuration
-charter diff .                   # compare declared and deployed state
-charter apply .                  # update config, policy and pricing
-charter push <agent> <ref>       # publish a version to an OCI registry
-charter worker .                 # run agents in this environment
+charter approve apr_01J8Z --reason "third dispute this month"
 ```
 
-Operating an agent:
+The refund runs after you approve it. The agent gets the result, finishes the task,
+and reports what it did.
 
-```bash
-charter agent create <agent>     # bring an instance into existence
-charter run <agent> --flags      # start a task
-charter agents                   # every agent and what it's doing
-charter describe <agent>         # authority, limits, rules, any hold
-charter tasks <agent>            # task history
-charter status <task-id>         # result, cost and why it stopped
-charter audit <agent>            # every governance decision recorded
+Nothing waited in your terminal for that. `charter apply` compiles your
+configuration into workflows and policy on the
+[BoundFlow](https://github.com/boundflow/boundflow) control plane. A Charter worker
+runs the agent in your environment and talks to your MCP servers with credentials
+that stay there.
 
-charter pending <agent>          # the open gate, if it's parked on one
-charter approve / reject / answer <id>
-charter ui                       # the same, in a browser
-
-charter pause <agent>            # stop it taking work
-charter resume <agent> --suspension <id>
-charter agent delete <agent>     # destroy an instance and its history
-```
-
-Read commands take `--json` for the complete record instead of the curated view.
-
-## Architecture
-
-Charter is an opinionated agent layer built on
-[BoundFlow](https://github.com/boundflow/boundflow).
-
-`charter apply` compiles your configuration into workflows and policy on the
-BoundFlow control plane. Charter workers run the actual agent loop in your
-environment, talking to your MCP servers with credentials that never leave it.
+The agent loop itself is [deepagents](https://github.com/langchain-ai/deepagents),
+so its tools, subagents, filesystem and skills work here unchanged. Charter makes
+that loop durable and governed: it checkpoints the run, turns the harness's
+interrupts into approvals a person can answer tomorrow, and holds it to the limits
+your config declares.
 
 ```
                     BoundFlow
@@ -435,11 +188,18 @@ environment, talking to your MCP servers with credentials that never leave it.
         └─────────────────────────┘
 ```
 
-Charter introduces no database or service of its own. If the Charter CLI vanished,
-deployed agents would keep running through their workers and the control plane.
+Charter adds no database or service of its own. Deployed agents keep running
+through their workers and the control plane whether or not the CLI is installed.
 
-See [DESIGN.md](DESIGN.md) for the full configuration reference and the design
-decisions behind it, and [examples/](examples/) for complete configurations.
+## Documentation
+
+- [DESIGN.md](DESIGN.md): every field of every file, and the decisions behind them
+- [demo/leads/](demo/leads/): an agent that finds people, asks you to approve
+  every message before it sends one, and waits days if that is how long you take.
+  It runs against a fake network on your machine, so nothing reaches anybody.
+- [examples/](examples/): fuller configurations, for reading. They name real
+  Zendesk and Stripe servers, so they do not run as-is.
+- [deploy/](deploy/): running workers as containers, and a control plane locally
 
 ## Development
 
@@ -449,8 +209,8 @@ python -m venv .venv
 .venv/bin/pytest
 ```
 
-`boundflow` comes from PyPI; add `--pre --upgrade boundflow` to track its main, which
-is what CI's second unit job does.
+`boundflow` comes from PyPI. Add `--pre --upgrade boundflow` to track its main,
+which is what CI's second unit job does.
 
 End-to-end tests need a control plane, and skip themselves without one. The compose
 file CI uses runs the published image:
