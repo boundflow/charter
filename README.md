@@ -336,8 +336,7 @@ a remote control plane.
 install that integration (`pip install "boundflow-charter[openai]"`) and name it.
 A local runtime needs no `api_key`, and `base_url` reaches an OpenAI-compatible
 server you host. The one requirement is that the model reports token usage:
-BoundFlow refuses to run one that doesn't, because a cost cap it cannot price
-isn't a cap.
+BoundFlow refuses to run one that doesn't.
 
 Inference is bring-your-own: your model key stays in the worker environment and
 model traffic never reaches the control plane. The CLI reads this same file, so

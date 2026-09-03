@@ -105,9 +105,8 @@ class CharterWorker:
 
         llm = self.project.manifest.llm
         # LangChain's own factory, so the providers Charter serves are the ones it
-        # serves — and a new one there needs nothing here. What it cannot supply is
-        # token usage: BoundFlow refuses a model that reports none, because a cost
-        # cap it cannot price is not a cap.
+        # serves — and a new one there needs nothing here. BoundFlow still refuses a
+        # model that reports no token usage.
         extra = {}
         if llm.api_key:
             extra["api_key"] = resolve(llm.api_key)
