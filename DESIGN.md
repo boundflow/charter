@@ -204,12 +204,13 @@ apiVersion: charter/v1
 kind: Worker
 
 control_plane:
-  endpoint: ${BOUNDFLOW_SERVER_ADDRESS}
+  endpoint: ${BOUNDFLOW_SERVER_ADDRESS}          # the control API, for the CLI
+  worker_endpoint: ${BOUNDFLOW_WORKER_ADDRESS}   # where workers claim tasks
   api_key: ${BOUNDFLOW_API_KEY}
   tenant: default
 
 llm:
-  provider: anthropic
+  provider: anthropic          # or openai, google_genai, bedrock, ollama, …
   api_key: ${ANTHROPIC_API_KEY}
 
 # Postgres for the harness's own state: checkpoints and the agent's files.
@@ -226,6 +227,25 @@ trace_sink:
   kind: otel
   endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT}
 ```
+
+Two addresses, because BoundFlow serves the control API and worker dispatch
+separately — on two ports locally, and on two hosts in Cloud. Leave
+`worker_endpoint` out and workers fall back to `BOUNDFLOW_WORKER_ADDRESS`, then to
+localhost, which is right while developing and never right against a remote control
+plane.
+
+`provider` is whatever LangChain can build, so a model it supports works here —
+install that integration and name it. A local runtime needs no `api_key`, and
+`base_url` reaches an OpenAI-compatible server you host. The model must report
+token usage; BoundFlow refuses to run one that doesn't.
+
+`trace_sink` takes every model call and tool call, with its prompts, results and
+token counts, to a sink the worker owns. `otel` speaks OTLP and follows
+OpenTelemetry's GenAI conventions, so Jaeger, Tempo, Datadog and Langfuse read it
+without a translation layer; `jsonl` and `logging` are there for when you just want
+to look. Traces carry prompts, so they go to your backend and never to the control
+plane — which is what makes them different from `store.url`, holding the checkpoints
+and files a parked task resumes from.
 
 At boot the worker loads each listed config version and calls
 `worker.workflow(agent, version=N)` once per version. There is one operation —
