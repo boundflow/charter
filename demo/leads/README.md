@@ -58,19 +58,31 @@ on a timer, which is the only way to see an agent genuinely wait on a person.
 
 ## Running it
 
-Four environment variables — the control plane, its key, Postgres for the
-harness's own state, and a model key:
+Activate the virtualenv Charter is installed in, rather than calling its `charter`
+by path. The agent declares its tool server as `command: python`, so the worker
+spawns whatever `python` is on PATH — without the venv active that interpreter has
+no `mcp`, and `leads-finder` quarantines at boot saying so.
+
+    source .venv/bin/activate
+
+Six environment variables — the control plane's two addresses, its key, the tenant,
+Postgres for the harness's own state, and a model key:
 
     export BOUNDFLOW_SERVER_ADDRESS=http://localhost:50051
     export BOUNDFLOW_WORKER_ADDRESS=http://localhost:50052
     export BOUNDFLOW_API_KEY=...
+    export CHARTER_TENANT=default
     export CHARTER_STORE_URL=postgres://...
     export ANTHROPIC_API_KEY=...
-    export CHARTER_TENANT=default
 
-Create the instances, then start the worker from this directory — the MCP server
-is spawned as a subprocess relative to wherever the worker runs:
+If you brought the control plane up with `deploy/local.compose.yml`, the store is
+`postgres://charter:charter@localhost:5434/charter`.
 
+The tenant has to exist before an agent can live in it. Create it once, then the
+instances, then start the worker from this directory — the MCP server is spawned
+as a subprocess relative to wherever the worker runs:
+
+    charter tenant create default                         # once per control plane
     charter agent create leads-finder --path demo/leads   # prints an instance id
     charter apply demo/leads/worker.yaml --all
 

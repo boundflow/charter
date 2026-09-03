@@ -248,7 +248,82 @@ The worker still runs wherever you put it, so `CHARTER_STORE_URL` is still yours
 Whichever you pick, inference stays yours: the control plane never sees your model
 key or its traffic.
 
-### A project
+### An agent
+
+Two files. `summarize/v1.yaml` is the agent:
+
+```yaml
+apiVersion: charter/v1
+kind: AgentConfig
+
+name: summarize
+version: 1
+model: claude-haiku-4-5
+
+objective: |
+  Summarise this in two sentences: {{ inputs.text }}
+
+inputs:
+  text: { type: string, required: true }
+
+response_format:
+  summary:
+    type: string
+    description: The summary, in two sentences.
+```
+
+and `worker.yaml` beside it says where to run it:
+
+```yaml
+apiVersion: charter/v1
+kind: Worker
+
+control_plane:
+  endpoint: ${BOUNDFLOW_SERVER_ADDRESS}
+  worker_endpoint: ${BOUNDFLOW_WORKER_ADDRESS}
+  api_key: ${BOUNDFLOW_API_KEY}
+  tenant: default
+
+llm:
+  provider: anthropic
+  api_key: ${ANTHROPIC_API_KEY}
+
+store:
+  url: ${CHARTER_STORE_URL}
+
+agents_dir: ./
+serves:
+  - agent: summarize
+    versions: [1]
+```
+
+That agent calls no tools and declares no budget, which is why it fits here. Both
+are optional; the sections below add them.
+
+### Running it
+
+```bash
+charter tenant create default        # once per control plane
+charter agent create summarize       # prints an instance id
+charter apply .                      # arm config and policy
+charter worker .                     # in its own terminal — this is the process
+```
+
+Then, from another terminal:
+
+```bash
+charter run summarize --instance <id> --text "..."
+charter status <task-id>
+```
+
+`create` is separate from `apply` because an instance owns state — its own store,
+budget and lifecycle history — so bringing one into existence is a decision a
+person makes, not something CI does on its behalf. `apply` is safe to re-run.
+
+Every command that acts on an agent names an instance, including when there is
+only one: the instance is what holds the state.
+
+### A larger project
 
 ```
 .
@@ -343,26 +418,13 @@ model traffic never reaches the control plane. The CLI reads this same file, so
 the control plane is configured once and every command talks to the one your
 worker does.
 
-### First run
+### Something that runs end to end
 
-```bash
-charter validate .                    # parse and cross-check every file
-charter agent create leads-finder     # bring one instance into existence
-charter apply .                       # arm config, policy and pricing
-charter worker .                      # in its own terminal — this is the process
-```
-
-`create` is separate from `apply` because an instance owns state — its own store,
-budget and lifecycle history — so bringing one into existence is a decision a
-person makes, not something CI does on their behalf. `apply` is safe to re-run as
-often as you like.
-
-`create` prints an instance id; keep it. Commands that act on an agent name an
-instance, because the instance is the thing holding the state:
-
-```bash
-charter run leads-finder --instance a3f9c012 --topic "..."
-```
+[demo/leads/](demo/leads/) is an agent that finds people, asks you to approve every
+message before it sends one, and waits — for days if that is how long you take. It
+runs against a fake network on your machine, so nothing reaches anybody.
+[examples/](examples/) has fuller configurations for reference; those name real
+Zendesk and Stripe servers, so they read rather than run.
 
 ### Deploying
 
