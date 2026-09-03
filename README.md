@@ -238,7 +238,7 @@ export CHARTER_STORE_URL=postgres://charter:charter@localhost:5434/charter
 
 Remove it with `docker compose -f deploy/local.compose.yml down -v`.
 
-For anything beyond that, either run the BoundFlow backend properly — its
+For production, either run the BoundFlow backend yourself — its
 [deployment docs](https://github.com/boundflow/boundflow/blob/main/docs/deployment.md)
 own that — or use **BoundFlow Cloud**, managed and in early access
 ([request access](mailto:hello@boundflow.dev)).
