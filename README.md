@@ -1,6 +1,6 @@
 # Charter
 
-**Infrastructure for running AI agents in production.**
+**The easiest way to build and manage production-ready agents.**
 
 ![The Charter console: the fleet with an agent parked on an approval, the decision waiting on a human, and the policy and run history behind it](docs/console.gif)
 
@@ -8,9 +8,10 @@
 > argue with. The code is not settled enough to run anything you care about.
 > Expect the configuration format to change.
 
-You define an agent and its policies in YAML. Charter runs it on your compute and
-governs it from a persistent control plane, so a run survives a worker restart, a
-deploy, or an approval that takes days.
+Charter provides the infrastructure for running AI agents in production. You define
+an agent and its policies in YAML. Charter runs it on your compute and governs it
+from a persistent control plane, so a run survives a worker restart, a deploy, or an
+approval that takes days.
 
 ## Why Charter
 
