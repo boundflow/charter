@@ -30,6 +30,7 @@ import asyncio
 import contextlib
 import os
 import uuid
+import warnings
 from contextlib import asynccontextmanager
 
 import pytest
@@ -65,9 +66,83 @@ async def cp(boundflow_api_key):
 
 @pytest_asyncio.fixture
 async def tenant(cp):
-    """A fresh tenant per test. Agent identity is (tenant, name), so isolation is
-    what lets tests reuse agent names without colliding."""
-    return await cp.create_tenant(f"charter-e2e-{uuid.uuid4().hex[:8]}")
+    """A fresh tenant per test, deleted after. Agent identity is (tenant, name), so
+    isolation is what lets tests reuse agent names without colliding.
+
+    Deleting matters against a control plane that outlives the run: a local one is
+    thrown away with its database, and a shared or hosted one accumulated a tenant
+    per test, forever, until someone noticed.
+
+    Teardown never fails a test. The assertion belongs to whatever the test was
+    checking, and a control plane that refuses the delete has not made the test's
+    subject wrong — it has left rubbish, which the warning says.
+    """
+    made = await cp.create_tenant(f"charter-e2e-{uuid.uuid4().hex[:8]}")
+    try:
+        yield made
+    finally:
+        # Issue the deletes now; the sweeper below reaps the tenant at the end of
+        # the session. Waiting here for them to land costs every test the lease
+        # timeout of whatever the worker was doing when it was cancelled.
+        with contextlib.suppress(Exception):
+            await _delete_workflows(cp, made.id)
+        _made_tenants.append(made)
+
+
+_made_tenants: list = []
+
+
+async def _delete_workflows(cp, tenant_id: str) -> None:
+    """Ask for every workflow in a tenant to go away.
+
+    A delete does not finish while a run is in flight, and a run parked at a gate
+    never ends on its own — so the gate is answered first, which ends the run.
+    """
+    for wf in [w for w in await cp.list_workflows() if w.tenant_id == tenant_id]:
+        full = await cp.get_workflow(wf.id)      # gate detail is only on the read
+        if full.pending_approval is not None:
+            with contextlib.suppress(Exception):
+                await cp.reject_workflow(wf.id, full.pending_approval.approval_id,
+                                         "teardown", "the test is over")
+        elif full.pending_input is not None:
+            with contextlib.suppress(Exception):
+                await cp.submit_input(wf.id, full.pending_input.input_id,
+                                      {"answer": "teardown"}, "teardown")
+        with contextlib.suppress(Exception):
+            await cp.abandon_queued_requests(wf.id, all=True)
+        with contextlib.suppress(Exception):
+            await cp.delete_workflow(wf.id)
+
+
+@pytest_asyncio.fixture(scope="session", autouse=True)
+async def _sweep_tenants(boundflow_api_key):
+    """Reap the session's tenants once, at the end.
+
+    A control plane refuses to delete a tenant that still holds a live workflow,
+    and those deletes land on their own schedule — so this retries rather than
+    making every test wait for its own. Against a local control plane none of this
+    matters; against a shared or hosted one, a suite that leaks a tenant per test
+    fills it up.
+    """
+    yield
+    if not _made_tenants:
+        return
+    async with ControlPlaneClient(SERVER_ADDRESS, api_key=boundflow_api_key) as cp:
+        deadline = asyncio.get_event_loop().time() + 90
+        left = list(_made_tenants)
+        while left and asyncio.get_event_loop().time() < deadline:
+            still = []
+            for t in left:
+                try:
+                    await _delete_workflows(cp, t.id)
+                    await cp.delete_tenant(t.id)
+                except Exception:  # noqa: BLE001 — retried, then reported
+                    still.append(t)
+            left = still
+            if left:
+                await asyncio.sleep(3)
+        for t in left:
+            warnings.warn(f"left tenant {t.name} ({t.id}) behind", stacklevel=1)
 
 
 async def wait_for_run(cp, request_id: str, timeout: int = 60):
