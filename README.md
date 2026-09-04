@@ -229,6 +229,9 @@ rules:
   - when: { metric: num_failures, threshold: 3 }
     then: { pause: { window: 5 } }
 
+  - when: { metric: approval_rejections, threshold: 2 }
+    then: { cooldown: { window: 10, seconds: 3600 } }
+
   - when: { metric: cost, threshold: 2.00 }
     then: { set_version: { target: 1 } }
 ```
