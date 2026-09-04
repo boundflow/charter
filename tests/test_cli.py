@@ -13,6 +13,7 @@ terminal.
 from __future__ import annotations
 
 import datetime as dt
+import sys
 from contextlib import asynccontextmanager
 from dataclasses import replace
 
@@ -684,3 +685,19 @@ def test_a_control_plane_error_is_one_line_not_a_traceback(cp, monkeypatch, caps
     printed = out.out + out.err
     assert "request not found" in printed
     assert "Traceback" not in printed and "raise" not in printed
+
+
+def test_the_console_names_its_extra_when_it_is_missing(monkeypatch):
+    """`charter ui` without the `[ui]` extra says how to install it.
+
+    Starlette and uvicorn arrive through that extra, so a plain
+    `pip install boundflow-charter` followed by `charter ui` hits a
+    ModuleNotFoundError traceback right after a successful first run.
+    """
+    monkeypatch.setitem(sys.modules, "boundflow.ui", None)
+
+    res = runner.invoke(cli.app, ["ui"])
+
+    assert res.exit_code == 1
+    assert "boundflow-charter[ui]" in res.output
+    assert "Traceback" not in res.output

@@ -239,7 +239,7 @@ rules:
 Both are re-applied on every `charter apply`, so a ceiling can be lowered without
 cutting a release.
 
-## Where things run
+## Architecture
 
 `charter apply` compiles your configuration into workflows and policy on the
 [BoundFlow](https://github.com/boundflow/boundflow) control plane. A Charter worker

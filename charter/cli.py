@@ -1959,7 +1959,13 @@ def console_ui(
     Read and act only. Authoring stays in the files, where a version is a diff
     with an author.
     """
-    from boundflow.ui import serve
+    try:
+        from boundflow.ui import serve
+    except ImportError:
+        # Starlette and uvicorn arrive through the extra, so a plain install
+        # reaches this line and nowhere else.
+        _err("the console needs its extra: pip install 'boundflow-charter[ui]'")
+        raise typer.Exit(1) from None
 
     from .console import LABELS
 
