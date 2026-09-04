@@ -13,6 +13,7 @@ terminal.
 from __future__ import annotations
 
 import datetime as dt
+import sys
 from contextlib import asynccontextmanager
 from dataclasses import replace
 
@@ -658,3 +659,45 @@ def test_the_renderer_is_found_under_either_name():
         assert all(callable(getattr(mod, f, None))
                    for f in ("output", "set_json", "is_json")), name
     assert found, "neither renderer module is importable"
+
+
+def test_a_control_plane_error_is_one_line_not_a_traceback(cp, monkeypatch, capsys):
+    """A wrong id prints `error: <what the server said>` and exits 1.
+
+    The SDK already raises a typed error with a usable message. Uncaught, Typer
+    prints it under forty lines of its own internals, so `charter status` on a
+    mistyped id reads as a crash in Charter. Exercised through `main`, because
+    that is where the handling lives and what the installed script calls.
+    """
+    from boundflow.errors import NotFoundError
+
+    async def missing(self, request_id):
+        raise NotFoundError("request not found")
+
+    monkeypatch.setattr(cp, "get_request_info", missing.__get__(cp), raising=False)
+    monkeypatch.setattr("sys.argv", ["charter", "status", "nope"])
+
+    with pytest.raises(SystemExit) as exit:
+        cli.main()
+
+    assert exit.value.code == 1
+    out = capsys.readouterr()
+    printed = out.out + out.err
+    assert "request not found" in printed
+    assert "Traceback" not in printed and "raise" not in printed
+
+
+def test_the_console_names_its_extra_when_it_is_missing(monkeypatch):
+    """`charter ui` without the `[ui]` extra says how to install it.
+
+    Starlette and uvicorn arrive through that extra, so a plain
+    `pip install boundflow-charter` followed by `charter ui` hits a
+    ModuleNotFoundError traceback right after a successful first run.
+    """
+    monkeypatch.setitem(sys.modules, "boundflow.ui", None)
+
+    res = runner.invoke(cli.app, ["ui"])
+
+    assert res.exit_code == 1
+    assert "boundflow-charter[ui]" in res.output
+    assert "Traceback" not in res.output

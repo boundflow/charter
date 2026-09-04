@@ -5,8 +5,11 @@ BoundFlow serves the control API and worker dispatch on different addresses. Onl
 a CLI talking to it and a worker dialling localhost.
 """
 import ast
+import asyncio
 import inspect
 from pathlib import Path
+
+import pytest
 
 from charter.config.worker import ControlPlane
 
@@ -43,3 +46,31 @@ def test_a_worker_endpoint_is_carried_when_given():
     cp = ControlPlane(endpoint="https://api.example:443", api_key="k", tenant="t",
                       worker_endpoint="https://worker.example:443")
     assert cp.worker_endpoint == "https://worker.example:443"
+
+
+def test_a_worker_with_an_unresolved_model_key_refuses_to_start(tmp_path, monkeypatch):
+    """An unset ${VAR} in `llm` stops the worker before it claims anything.
+
+    Resolved lazily, the worker boots, prints every agent as ready, and dies
+    mid-dispatch on the first real task — which fails that task and reads as a
+    Charter bug rather than a missing export.
+    """
+    from charter import scaffold
+    from charter.config.loader import load_project
+    from charter.worker import run_worker
+
+    for rel, body in scaffold.files("triage").items():
+        target = tmp_path / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(body)
+
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+    def built(*a, **k):
+        raise AssertionError("the worker was constructed before the key was checked")
+
+    monkeypatch.setattr("charter.worker.CharterWorker", built)
+
+    with pytest.raises(RuntimeError) as e:
+        asyncio.run(run_worker(load_project(tmp_path / "worker.yaml")))
+    assert "ANTHROPIC_API_KEY" in str(e.value)

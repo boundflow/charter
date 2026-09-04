@@ -322,6 +322,13 @@ class CharterWorker:
 
 
 async def run_worker(project: Project, chat_model=None) -> None:
+    if chat_model is None:
+        # Resolved here so an unset key stops the worker, rather than a worker that
+        # reports every agent ready and fails the first real task mid-dispatch.
+        llm = project.manifest.llm
+        for ref in (llm.api_key, llm.base_url):
+            if ref:
+                resolve(ref)
     worker = CharterWorker(project, chat_model=chat_model)
     try:
         await worker.run()
