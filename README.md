@@ -53,6 +53,7 @@ export BOUNDFLOW_API_KEY=<the key it printed>
 export BOUNDFLOW_SERVER_ADDRESS=http://localhost:50051
 export BOUNDFLOW_WORKER_ADDRESS=http://localhost:50052
 export CHARTER_STORE_URL=postgres://charter:charter@localhost:5434/charter
+export ANTHROPIC_API_KEY=<your model key>   # or another provider's, see worker.yaml below
 ```
 
 Remove it with `docker compose -f local.compose.yml down -v`. Cloning the repo
@@ -113,6 +114,8 @@ control_plane:
   tenant: default
 
 llm:
+  # Any provider LangChain can build. Name it here, put its key in the variable
+  # below, and install its package: pip install 'boundflow-charter[openai]'
   provider: anthropic
   api_key: ${ANTHROPIC_API_KEY}
 
