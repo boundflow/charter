@@ -226,6 +226,19 @@ class Project:
     agents: dict[str, AgentBundle]
 
 
+def load_worker(worker_yaml: Path) -> WorkerManifest:
+    """Just the manifest, without the agents it serves.
+
+    `load_project` needs every served agent to exist on disk. Adding one to a
+    project is the case where it doesn't yet.
+    """
+    problems: list[str] = []
+    manifest = _parse(WorkerManifest, Path(worker_yaml), problems)
+    if manifest is None:
+        raise ConfigError(problems)
+    return manifest
+
+
 def load_project(worker_yaml: Path) -> Project:
     """Load a worker manifest and the agents it serves. Raises ConfigError listing
     every problem across every file."""

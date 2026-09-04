@@ -28,10 +28,11 @@ import sys
 from pathlib import Path
 
 import typer
+from boundflow.errors import BoundflowError
 
-from . import ui
+from . import scaffold, ui
 from .compile import compile_agent
-from .config.agent import split_qualified
+from .config.agent import AGENT_NAME, split_qualified
 try:
     from boundflow.cli.output import is_json, output, set_json
 except ImportError:  # pragma: no cover - exercised by the compatibility test
@@ -41,7 +42,7 @@ except ImportError:  # pragma: no cover - exercised by the compatibility test
     # unpushed local merge. Delete this once #93 is in a release Charter can pin.
     from boundflow.cli._output import is_json, output, set_json
 
-from .config.loader import ConfigError, load_agent, load_project
+from .config.loader import ConfigError, load_agent, load_project, load_worker
 
 app = typer.Typer(
     add_completion=False,
@@ -50,6 +51,7 @@ app = typer.Typer(
     no_args_is_help=True,
     # \b is Click's "don't rewrap the next paragraph" marker.
     help="Governed agents from YAML.\n\n\b\n"
+         "  charter init <agent>         write a starting agent and worker\n"
          "  charter apply .              create or update agents\n"
          "  charter run <agent> --flag   start one task\n"
          "  charter agents               what every agent is doing\n"
@@ -210,6 +212,65 @@ def schema(
         depth = glob.count("/")
         rel = "../" * depth + f"{out.name}/{name}.schema.json"
         ui.detail(f"{glob:<24} # yaml-language-server: $schema={rel}")
+
+
+@app.command()
+def init(
+    name: str = typer.Argument(..., help="Agent name, which is also its directory"),
+    path: Path = typer.Option(Path("."), "--path", "-p", help="Where to write it"),
+) -> None:
+    """Write a working agent and the worker manifest that serves it.
+
+        charter init summarize
+
+    Two files: `<name>/v1.yaml` and `worker.yaml` beside it. The agent calls no
+    tools and sets no budget, which is the smallest thing that runs.
+
+    Run it again in the same directory to add a second agent, and the existing
+    `worker.yaml` gains a `serves:` entry instead of being replaced.
+    """
+    if not re.match(AGENT_NAME, name):
+        ui.err(f"{name!r} is not a valid agent name — lowercase, digits and "
+               f"hyphens, starting with a letter, 3 to 63 characters")
+        raise typer.Exit(1)
+
+    if (path / name).exists():
+        ui.err(f"{path / name} already exists")
+        raise typer.Exit(1)
+
+    written = scaffold.files(name)
+    worker = path / "worker.yaml"
+    if worker.exists():
+        # An existing manifest is the user's, so it is edited rather than
+        # replaced — and only after it parses as one of ours.
+        try:
+            manifest = load_worker(worker)
+        except ConfigError as e:
+            ui.err(f"{worker} does not parse as a Charter worker manifest: {e}")
+            raise typer.Exit(1) from None
+        if any(s.agent == name for s in manifest.serves):
+            ui.err(f"{worker} already serves {name!r}")
+            raise typer.Exit(1)
+        try:
+            worker.write_text(scaffold.add_to_serves(worker.read_text(), name))
+        except ValueError as e:
+            ui.err(f"{worker}: {e}")
+            raise typer.Exit(1) from None
+        written.pop("worker.yaml")
+
+    for rel, body in written.items():
+        target = path / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(body)
+        ui.ok(str(target))
+    if not written.get("worker.yaml"):
+        ui.ok(f"{worker}  (serves: + {name})")
+
+    typer.echo()
+    ui.dim("then, with the control plane's addresses and your model key exported:")
+    ui.detail(f"charter agent create {name} --path {path}")
+    ui.detail(f"charter apply {path}")
+    ui.detail(f"charter worker {path}")
 
 
 @app.command()
@@ -1932,10 +1993,26 @@ def worker(
         asyncio.run(run_worker(project))
     except KeyboardInterrupt:
         _ok("stopped")
+    except RuntimeError as e:
+        # An unresolved ${VAR} is the common one, and it stops the worker before it
+        # claims anything. A traceback here reads as a Charter crash.
+        _err(str(e))
+        raise typer.Exit(1) from None
 
 
 def main() -> None:
-    app()
+    """Run the app, rendering control-plane failures as one line.
+
+    Every command here reaches the control plane, and the SDK already converts a
+    gRPC status into a typed error with a usable message. Left uncaught, Typer
+    prints that message under forty lines of its own internals — so a wrong task
+    id reads like a crash in Charter.
+    """
+    try:
+        app()
+    except BoundflowError as e:
+        ui.err(str(e))
+        raise SystemExit(1) from None
 
 
 if __name__ == "__main__":
