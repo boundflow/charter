@@ -48,6 +48,8 @@ control_plane:
   tenant: default
 
 llm:
+  # Any provider LangChain can build. Name it here, put its key in the variable
+  # below, and install its package: pip install 'boundflow-charter[openai]'
   provider: anthropic
   api_key: ${{ANTHROPIC_API_KEY}}
 

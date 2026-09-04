@@ -38,9 +38,9 @@ dependencies = [
     # A separate distribution from langgraph: `langgraph.checkpoint.postgres` and
     # `langgraph.store.postgres`.
     "langgraph-checkpoint-postgres>=3.1",
-    # The only model provider wired up today — `worker.yaml` refuses any other.
-    # `init_chat_model` lives here, and it is how a provider gets built. Declared
-    # rather than inherited from deepagents: we import it directly now.
+    # `init_chat_model` lives here, and it is how `llm.provider` gets built, so any
+    # provider LangChain supports works. Declared rather than inherited from
+    # deepagents: we import it directly.
     "langchain>=1.0",
     # Anthropic is the only integration installed by default, because a default has
     # to be something. Any other provider is an extra, or install its package.
