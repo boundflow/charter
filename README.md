@@ -148,7 +148,7 @@ triage  d9811374  v1   active  active
 Run a task against it:
 
 ```bash
-charter run triage --instance d9811374 --ticket "card declined twice, tried a new one"
+charter run triage --instance d9811374 --ticket "card declined twice, tried a new one"  # prints a task id
 charter status <task-id>
 ```
 
