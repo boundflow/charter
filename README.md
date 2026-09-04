@@ -146,7 +146,7 @@ charter status <task-id>
 
 `status` prints what the agent returned, in the shape `response_format` declared:
 
-```console
+```
 task      f683f822-d8f4-40a7-b528-8db1a576140c
 outcome   successful
 took      11s
@@ -205,8 +205,7 @@ per_run:
   max_llm_calls: 20
 ```
 
-`lifecycle.yaml` says what the control plane does to an agent between tasks, with
-nobody watching:
+`lifecycle.yaml` says what the control plane does to an agent between tasks:
 
 ```yaml
 apiVersion: charter/v1
