@@ -137,10 +137,18 @@ charter apply .                      # arm config and policy
 charter worker .                     # leave this running, it is the process
 ```
 
-Then, from another terminal:
+Then, from another terminal, `charter agents` confirms it exists and carries the
+instance id every command needs:
+
+```
+AGENT   INSTANCE  VER  STATUS  ACTIVITY
+triage  d9811374  v1   active  active
+```
+
+Run a task against it:
 
 ```bash
-charter run triage --instance <id> --ticket "card declined twice, tried a new one"
+charter run triage --instance d9811374 --ticket "card declined twice, tried a new one"
 charter status <task-id>
 ```
 
