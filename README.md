@@ -205,7 +205,8 @@ per_run:
   max_llm_calls: 20
 ```
 
-`lifecycle.yaml` says what the control plane does to an agent between tasks:
+`lifecycle.yaml` acts on the agent over time. When a metric crosses a threshold the
+control plane can pause it, cool it down, or roll it back to an earlier version:
 
 ```yaml
 apiVersion: charter/v1
