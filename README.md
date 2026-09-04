@@ -193,7 +193,7 @@ Nothing waits in your terminal. The task ends at the gate and resumes when someo
 answers, which can be days later on a different worker.
 
 Limits are policy rather than behaviour, so they sit outside the version.
-`runtime.yaml` bounds a single task:
+`runtime.yaml` holds what one task may spend and what the agent may reach:
 
 ```yaml
 apiVersion: charter/v1
@@ -203,6 +203,18 @@ agent: triage
 per_run:
   max_cost_usd: 0.50
   max_llm_calls: 20
+  max_seconds: 300
+  max_parallel_subagents: 3
+  capability_call_limits:
+    - { capability: write, max_calls: 10 }
+
+limits:
+  max_call_seconds: 60
+  max_tool_seconds: 30
+
+authority:
+  allowed_capabilities: [read, write]
+  approval_timeout_seconds: 3600
 ```
 
 `lifecycle.yaml` acts on the agent over time. When a metric crosses a threshold the
