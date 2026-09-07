@@ -26,7 +26,6 @@ It is one agent and a config file. There is no pipeline code.
                                          roll it back
 
     network.py                           the fake network, as an MCP server
-    approve.py                           you, approving what the agent wants to send
     inbox.py                             you, as the people being contacted
 
 Every field the schema accepts appears in those four YAML files. Anything the demo
@@ -84,14 +83,23 @@ as a subprocess relative to wherever the worker runs:
 
     cd demo/leads && charter worker .
 
-Both gated tools stop for a human, and nothing here routes a notification, so run
-the approval console in a second terminal or the agent sits at its first gate
-until it times out:
+Both gated tools stop for a human, and nothing here routes a notification, so
+watch for gates from a second terminal or the agent sits at its first gate until
+it times out:
 
-    python demo/leads/approve.py            # read each one, decide
-    python demo/leads/approve.py --auto     # approve everything, hands-off
+    charter pending leads-finder --instance <id>
 
-And the inbox in a third, which is you as the people being contacted:
+That prints the call it wants to make and the two commands that answer it, which
+take a reason because an approval nobody can explain later is not much of one:
+
+    charter approve <approval-id> --agent leads-finder --instance <id> --reason '...'
+    charter reject  <approval-id> --agent leads-finder --instance <id> --reason '...'
+
+The console does the same in a browser, across every agent at once:
+
+    charter ui
+
+And the inbox in a third terminal, which is you as the people being contacted:
 
     python demo/leads/inbox.py
 

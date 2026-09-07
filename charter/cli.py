@@ -1118,13 +1118,16 @@ def describe(
             if wf.pending_approval:
                 g = wf.pending_approval
                 ui.gate(agent, "approval", g.approval_id, g.justification, [
-                    f"charter approve {g.approval_id} --agent {agent} --reason '...'",
-                    f"charter reject  {g.approval_id} --agent {agent} --reason '...'",
+                    f"charter approve {g.approval_id} --agent {agent} "
+                    f"--instance {short(wf.id)} --reason '...'",
+                    f"charter reject  {g.approval_id} --agent {agent} "
+                    f"--instance {short(wf.id)} --reason '...'",
                 ], timeout=_when(g.timeout_at))
             elif wf.pending_input:
                 g = wf.pending_input
                 ui.gate(agent, "an answer", g.input_id, g.prompt, [
-                    f"charter answer {g.input_id} '...' --agent {agent}"],
+                    f"charter answer {g.input_id} '...' --agent {agent} "
+                    f"--instance {short(wf.id)}"],
                     timeout=_when(g.timeout_at))
 
     asyncio.run(go())
@@ -1446,13 +1449,16 @@ def pending(agent: str = typer.Argument(..., help="Agent name"),
             if wf.pending_approval:
                 g = wf.pending_approval
                 ui.gate(agent, "approval", g.approval_id, g.justification, [
-                    f"charter approve {g.approval_id} --agent {agent} --reason '...'",
-                    f"charter reject  {g.approval_id} --agent {agent} --reason '...'",
+                    f"charter approve {g.approval_id} --agent {agent} "
+                    f"--instance {short(wf.id)} --reason '...'",
+                    f"charter reject  {g.approval_id} --agent {agent} "
+                    f"--instance {short(wf.id)} --reason '...'",
                 ], timeout=_when(g.timeout_at))
             elif wf.pending_input:
                 g = wf.pending_input
                 ui.gate(agent, "an answer", g.input_id, g.prompt, [
-                    f"charter answer {g.input_id} '...' --agent {agent}",
+                    f"charter answer {g.input_id} '...' --agent {agent} "
+                    f"--instance {short(wf.id)}",
                 ], timeout=_when(g.timeout_at))
             else:
                 ui.dim(f"{agent}: nothing waiting ({wf.lifecycle_state.value})")

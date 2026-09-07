@@ -8,8 +8,8 @@ waiting is real.
     python demo/leads/inbox.py
 
 Shows what is waiting on you and lets you answer it. Runs alongside the worker and
-`approve.py`: that one is you approving your own agent's outbound messages, this
-one is the other side answering. Ctrl-C to leave; nothing is lost, because it all
+`charter pending`: that one is you approving your own agent's outbound messages,
+this one is the other side answering. Ctrl-C to leave; nothing is lost, because it all
 lives in network.db.
 """
 
