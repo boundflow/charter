@@ -106,7 +106,7 @@ async def test_a_real_model_proposes_the_gated_tool_rather_than_calling_it(
         request_id = await cp.invoke_workflow(wf.id, context={"ticket_id": "4821"})
 
         gate = await wait_for_gate(cp, wf.id, timeout=180)
-        assert "support__create_refund" in gate.justification
+        assert "desk__create_refund" in gate.justification
 
         await cp.approve_workflow(wf.id, gate.approval_id, "live-test", "duplicate")
         info = await wait_for_run(cp, request_id, timeout=180)
@@ -119,4 +119,4 @@ async def test_a_real_model_proposes_the_gated_tool_rather_than_calling_it(
     # the old mechanism; under the harness the tool is in the list and the *call*
     # is what stops, so a test that asserted absence would now pass for the wrong
     # reason.
-    assert any("support__create_refund" in names for names in model.offered)
+    assert any("desk__create_refund" in names for names in model.offered)

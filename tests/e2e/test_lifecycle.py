@@ -68,7 +68,7 @@ async def test_a_task_runs_and_publishes_what_the_agent_returned(cp, project, te
     answer rather than a wrapper to unpick."""
     wf = await one_instance(cp, project, "ticket-sweeper", tenant)
     model = scripted(
-        calls("support__list_open_tickets"),
+        calls("desk__list_open_tickets"),
         submits(summary="two tickets need a look", needs_attention=2),
     )
 
@@ -87,7 +87,7 @@ async def test_a_gated_tool_is_offered_and_its_call_is_stopped(cp, project, tena
     doesn't go through without a human."""
     wf = await one_instance(cp, project, "refund-demo", tenant)
     model = scripted(
-        calls("support__create_refund", charge_id="ch_9002", amount_usd=240,
+        calls("desk__create_refund", charge_id="ch_9002", amount_usd=240,
               reason="duplicate"),
         submits(resolution="refunded", refunded_usd=240),
     )
@@ -97,10 +97,10 @@ async def test_a_gated_tool_is_offered_and_its_call_is_stopped(cp, project, tena
         await cp.invoke_workflow(wf.id, context={"ticket_id": "4821"})
         gate = await wait_for_gate(cp, wf.id, timeout=90)
 
-    assert "support__create_refund" in gate.justification
+    assert "desk__create_refund" in gate.justification
     # The arguments reach the approver, or they're deciding on a name alone.
     assert "ch_9002" in gate.justification
-    assert any("support__create_refund" in names for names in model.offered)
+    assert any("desk__create_refund" in names for names in model.offered)
 
 
 async def test_an_approval_resumes_the_same_conversation(cp, project, tenant):
@@ -108,7 +108,7 @@ async def test_an_approval_resumes_the_same_conversation(cp, project, tenant):
     is the same agent mid-thought rather than a new one starting over."""
     wf = await one_instance(cp, project, "refund-demo", tenant)
     model = scripted(
-        calls("support__create_refund", charge_id="ch_9002", amount_usd=240,
+        calls("desk__create_refund", charge_id="ch_9002", amount_usd=240,
               reason="duplicate"),
         submits(resolution="refunded the duplicate", refunded_usd=240),
     )
@@ -129,7 +129,7 @@ async def test_a_rejection_reaches_the_model(cp, project, tenant):
     the reason only exists at decision time — after the gate was raised."""
     wf = await one_instance(cp, project, "refund-demo", tenant)
     model = scripted(
-        calls("support__create_refund", charge_id="ch_7700", amount_usd=89,
+        calls("desk__create_refund", charge_id="ch_7700", amount_usd=89,
               reason="changed their mind"),
         submits(resolution="no refund — outside the window", refunded_usd=0),
     )
