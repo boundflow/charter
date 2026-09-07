@@ -11,8 +11,15 @@ tickets and the charges behind them, so both run with nothing but a model key.
 ## Running them
 
 You need a control plane and the environment from the
-[Quickstart](../README.md#quickstart), plus `ANTHROPIC_API_KEY`. From this
-directory:
+[Quickstart](../README.md#quickstart), plus `ANTHROPIC_API_KEY`.
+
+Run these with Charter's environment active, not just `charter` on your path. The
+worker spawns the tool server as `python desk.py`, so bare `python` has to be the
+interpreter Charter is installed in:
+
+    source .venv/bin/activate
+
+From this directory:
 
     charter agent create refund-triage
     charter apply .
