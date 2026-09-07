@@ -21,7 +21,7 @@ inputs:
   ticket_id:
     type: string
     required: true
-    description: Ticket to resolve. The desk has T-1041 to T-1044.
+    description: Ticket to resolve. T-1041 to T-1044 exist.
   max_refund_usd:
     type: number
     default: 100
@@ -32,7 +32,7 @@ inputs:
     enum: [low, normal, urgent]
 
 mcp:
-  - name: desk
+  - name: support
     url: http://localhost:8931/mcp
     tools:
       - tool: get_ticket

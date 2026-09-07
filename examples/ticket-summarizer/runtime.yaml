@@ -6,5 +6,5 @@ agent: ticket-summarizer
 per_run:
   max_cost_usd: 0.15
   tool_call_limits:
-    - tool: desk__get_ticket
+    - tool: support__get_ticket
       max_calls: 25

@@ -235,7 +235,7 @@ class TestPendingAndApprove:
         cp.workflows = [workflow(
             "refund-demo", lifecycle_state=LifecycleState.AWAITING_APPROVAL,
             pending=PendingApproval(approval_id="apr_1",
-                                    justification="run desk__create_refund\n  amount: 240",
+                                    justification="run support__create_refund\n  amount: 240",
                                     metadata={}, opened_at=NOW, timeout_at=None))]
         out = invoke("pending", "refund-demo", "--instance", "wf_refun").output
         assert "needs approval" in out

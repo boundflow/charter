@@ -158,8 +158,8 @@ def test_gated_tools_become_interrupts_not_omissions():
     rather than reject and hope the next attempt is right."""
     cfg = load_agent(EXAMPLES / "refund-triage").latest
     gates = interrupt_on(cfg)
-    assert set(gates) == {"desk__create_refund"}
-    assert gates["desk__create_refund"]["allowed_decisions"] == [
+    assert set(gates) == {"support__create_refund"}
+    assert gates["support__create_refund"]["allowed_decisions"] == [
         "approve", "edit", "reject"]
 
 
@@ -195,16 +195,16 @@ def test_a_pending_action_parks_the_task():
     cfg, loop = loop_for()
     interrupt = {"__interrupt__": [type("I", (), {
         "value": {"action_requests": [
-            {"name": "desk__create_refund", "args": {"amount": 40},
+            {"name": "support__create_refund", "args": {"amount": 40},
              "description": "Refund $40 to the customer"}]},
         "id": "int-1"})()]}
     ctx = FakeCtx(results=[FakeResult(interrupt)])
 
     out = run(loop.entry(ctx))
     assert isinstance(out, AwaitApproval)
-    assert "desk__create_refund" in out.justification
+    assert "support__create_refund" in out.justification
     assert "Refund $40 to the customer" in out.justification
-    assert out.metadata["tool"] == "desk__create_refund"
+    assert out.metadata["tool"] == "support__create_refund"
     assert out.timeout == loop.runtime.authority.approval_timeout_seconds
     assert ctx.context[K_GATES] == 1
 
@@ -329,13 +329,13 @@ def test_a_gate_says_what_is_about_to_happen():
     _, loop = loop_for()
     interrupt = {"__interrupt__": [type("I", (), {
         "value": {"action_requests": [{
-            "name": "desk__create_refund",
+            "name": "support__create_refund",
             "args": {"charge_id": "ch_9002", "amount_usd": 240},
             "description": "Tool execution requires approval"}]},
         "id": "i"})()]}
 
     out = run(loop.entry(FakeCtx(results=[FakeResult(interrupt)])))
-    assert "desk__create_refund" in out.justification
+    assert "support__create_refund" in out.justification
     assert "ch_9002" in out.justification
     assert "Tool execution requires" not in out.justification
 
@@ -415,7 +415,7 @@ def test_a_fail_fast_tool_ends_the_task():
     lived in the loop that was deleted. A declared field that quietly does nothing
     is worse than not having it."""
     cfg, loop = loop_for()
-    assert "desk__create_refund" in cfg.fail_fast_tools or cfg.fail_fast_tools
+    assert "support__create_refund" in cfg.fail_fast_tools or cfg.fail_fast_tools
 
     tool = next(iter(cfg.fail_fast_tools))
     out = run(loop.entry(FakeCtx(results=[
@@ -434,7 +434,7 @@ def test_an_ordinary_tool_failure_does_not_end_the_task():
     _, loop = loop_for()
     out = run(loop.entry(FakeCtx(results=[
         FakeResult({"resolution": "worked around it"},
-                   tool_failures={"desk__get_charge": 2})])))
+                   tool_failures={"support__get_charge": 2})])))
 
     assert isinstance(out, Complete)
     assert "failed" not in out.result
@@ -531,7 +531,7 @@ class TestGateGranularity:
         return Loop(bundle.latest, bundle.runtime, tools=empty,
                     chat_model=lambda m: object(), store_url="postgresql://unused")
 
-    def _interrupt(self, tool="desk__create_refund"):
+    def _interrupt(self, tool="support__create_refund"):
         return {"__interrupt__": [type("I", (), {
             "value": {"action_requests": [
                 {"name": tool, "args": {"amount": 40}, "description": "d"}]},
@@ -562,13 +562,13 @@ class TestGateGranularity:
         scanning statuses never learns the thing it existed to do didn't happen."""
         loop = self._loop(on_reject="fail")
         ctx = FakeCtx(context={K_DECISION: "reject",
-                               "_gated_tool": "desk__create_refund"},
+                               "_gated_tool": "support__create_refund"},
                       approval_reason="too much",
                       results=[FakeResult({"resolution": "unused"})])
 
         out = run(loop.entry(ctx))
         assert out.result["failed"] is True
-        assert "desk__create_refund" in out.result["reason"]
+        assert "support__create_refund" in out.result["reason"]
         assert "too much" in out.result["reason"]
 
     def test_an_unanswered_gate_under_fail_says_so(self):
@@ -608,7 +608,7 @@ class TestGatingAnything:
         """Two mechanisms, one for each declaration site — a tool that declares
         `approval: always` shouldn't also need naming here."""
         cfg = self._cfg([])
-        assert "desk__create_refund" in interrupt_on(cfg)
+        assert "support__create_refund" in interrupt_on(cfg)
 
     def test_a_typo_is_refused_rather_than_gating_nothing(self):
         from charter.config.agent import Gate

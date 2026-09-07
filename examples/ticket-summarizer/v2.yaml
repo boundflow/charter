@@ -15,7 +15,7 @@ schedule:
   every: 15m
 
 mcp:
-  - name: desk
+  - name: support
     url: http://localhost:8931/mcp
     tools:
       - tool: search_tickets

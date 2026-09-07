@@ -1,7 +1,8 @@
 # Examples
 
-Two agents over one toy support desk. `desk.py` is a small MCP server with four
-tickets and the charges behind them, so both run with nothing but a model key.
+Two agents over one toy support system. `support_server.py` is a small MCP server
+with four tickets and the charges behind them, so both run with nothing but a
+model key.
 
     refund-triage       reads a ticket, decides, and refunds. The refund stops
                         for a human before it goes through.
@@ -13,10 +14,10 @@ tickets and the charges behind them, so both run with nothing but a model key.
 You need a control plane and the environment from the
 [Quickstart](../README.md#quickstart), plus `ANTHROPIC_API_KEY`.
 
-Start the desk. It serves MCP over HTTP on port 8931, and both agents reach it by
-URL:
+Start the support server. It serves MCP over HTTP on port 8931, and both agents
+reach it by URL:
 
-    python examples/desk.py
+    python examples/support_server.py
 
 In a second terminal, from this directory, bring up an agent and a worker:
 
@@ -39,7 +40,7 @@ and carries on without it.
 
 `charter ui` shows the same thing in a browser, across every agent at once.
 
-The desk has four tickets, T-1041 to T-1044. One is a duplicate charge, one is a
+There are four tickets, T-1041 to T-1044. One is a duplicate charge, one is a
 size exchange the refund policy says not to refund.
 
 ## What each file is for

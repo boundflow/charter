@@ -1,18 +1,17 @@
-"""A toy support desk, so the examples run without a Zendesk or a Stripe account.
+"""A toy support system, so the examples run without a Zendesk or a Stripe account.
 
 Two agents share it: `ticket-summarizer` reads, `refund-triage` reads and refunds.
 One small domain across both, so what differs between the examples is the
 capability being shown rather than the scenario.
 
-    python examples/desk.py     # start it yourself, in its own terminal
+    python examples/support_server.py     # start it yourself, in its own terminal
 
 It serves MCP over HTTP on localhost:8931, which is how a real MCP server is
 usually reached. The agents name it by URL, so nothing here depends on which
 interpreter the worker happens to run.
 
-State is in memory. Each worker gets a fresh desk, which is what you want from an
-example: the same four tickets every run, and a refund that is gone when you
-restart.
+State is in memory. Restarting it puts the same four tickets back, and forgets
+any refund, which is what you want from an example.
 """
 
 from mcp.server.fastmcp import FastMCP
@@ -21,7 +20,7 @@ from mcp.types import ToolAnnotations
 READ_ONLY = ToolAnnotations(readOnlyHint=True)
 MUTATES = ToolAnnotations(readOnlyHint=False, destructiveHint=False)
 
-mcp = FastMCP("desk", host="127.0.0.1", port=8931)
+mcp = FastMCP("support", host="127.0.0.1", port=8931)
 
 TICKETS = {
     "T-1041": {

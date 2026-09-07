@@ -24,10 +24,10 @@ def test_example_parses():
 
 def test_derived_views():
     cfg = AgentConfig.model_validate(load())
-    assert cfg.gated_tools == ["desk__create_refund"]
-    assert "desk__get_ticket" in cfg.inline_tools
-    assert "desk__create_refund" not in cfg.inline_tools
-    assert cfg.fail_fast_tools == {"desk__get_ticket", "desk__create_refund"}
+    assert cfg.gated_tools == ["support__create_refund"]
+    assert "support__get_ticket" in cfg.inline_tools
+    assert "support__create_refund" not in cfg.inline_tools
+    assert cfg.fail_fast_tools == {"support__get_ticket", "support__create_refund"}
     assert len(cfg.all_tools) == 3
 
 

@@ -133,7 +133,7 @@ def test_a_declared_subagent_carries_the_same_bounds():
     cfg = agent_with([{"name": "researcher", "description": "Reads."}])
     gov = governor(allowed_capabilities=["read", "spawn"], allowed_tools=[])
 
-    spec = declared_subagents(cfg, fake_tools("desk__get_ticket"), gov, {})[0]
+    spec = declared_subagents(cfg, fake_tools("support__get_ticket"), gov, {})[0]
 
     assert offer(spec["middleware"], "write_file") == "refused"
     assert offer(spec["middleware"], "read_file") == "allowed"
@@ -143,12 +143,12 @@ def test_a_narrower_tool_list_is_honoured():
     from charter.harness.durable import declared_subagents
 
     cfg = agent_with([{"name": "researcher", "description": "Reads.",
-                       "tools": ["desk__get_ticket"]}])
-    tools = fake_tools("desk__get_ticket", "desk__get_charge")
+                       "tools": ["support__get_ticket"]}])
+    tools = fake_tools("support__get_ticket", "support__get_charge")
 
     spec = declared_subagents(cfg, tools, governor(), {})[0]
 
-    assert [t.name for t in spec["tools"]] == ["desk__get_ticket"]
+    assert [t.name for t in spec["tools"]] == ["support__get_ticket"]
 
 
 def test_declaring_no_tools_means_the_parents_whole_set():
@@ -171,7 +171,7 @@ def test_a_subagent_cannot_reach_further_than_its_parent():
 
     with _pytest.raises(ValidationError, match="does not declare"):
         agent_with([{"name": "researcher", "description": "Reads.",
-                     "tools": ["desk__nonexistent"]}])
+                     "tools": ["support__nonexistent"]}])
 
 
 def test_general_purpose_cannot_be_redeclared():

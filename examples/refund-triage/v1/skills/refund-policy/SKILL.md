@@ -1,6 +1,6 @@
 ---
 name: refund-policy
-description: When this desk refunds, when it does not, and what to say to the approver. Read before proposing any refund.
+description: When we refund, when we do not, and what to say to the approver. Read before proposing any refund.
 ---
 
 # When a refund is warranted

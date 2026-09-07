@@ -11,7 +11,7 @@ model — dotted tool names, `is_error` under its 1.x name, an activate that the
 fake accepted unconditionally — so the fakes stop at the model and no further.
 
     model = scripted(
-        calls("desk__get_ticket", ticket_id="4821"),
+        calls("support__get_ticket", ticket_id="4821"),
         submits(resolution="refunded", refunded_usd=240),
     )
 

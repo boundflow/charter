@@ -8,9 +8,9 @@ per_run:
   max_cost_usd: 0.30
   max_llm_calls: 40
   tool_call_limits:
-    - tool: desk__get_charge
+    - tool: support__get_charge
       max_calls: 5
-    - tool: desk__get_ticket
+    - tool: support__get_ticket
       max_calls: 10
   # Covers every way the harness can read a file, so the cap survives it shipping
   # a fourth one. Capping `read_file` alone would not.
