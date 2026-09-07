@@ -13,8 +13,7 @@ objective: |
 
 mcp:
   - name: desk
-    command: python
-    args: [desk.py]
+    url: http://localhost:8931/mcp
     tools:
       - tool: search_tickets
         on_failure: fail

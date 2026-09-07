@@ -33,8 +33,7 @@ inputs:
 
 mcp:
   - name: desk
-    command: python
-    args: [desk.py]
+    url: http://localhost:8931/mcp
     tools:
       - tool: get_ticket
         on_failure: fail

@@ -62,21 +62,20 @@ class TestTemplating:
 class TestMcpServer:
     def test_command_and_url_together_rejected(self):
         raw = load()
-        raw["mcp"][0]["url"] = "https://example.com"
+        raw["mcp"][0]["command"] = "python"
         with pytest.raises(ValidationError, match="exactly one of"):
             AgentConfig.model_validate(raw)
 
     def test_neither_command_nor_url_rejected(self):
         raw = load()
-        raw["mcp"][0].pop("command")
-        raw["mcp"][0].pop("args")
+        raw["mcp"][0].pop("url")
         with pytest.raises(ValidationError, match="exactly one of"):
             AgentConfig.model_validate(raw)
 
     def test_http_url_rejected(self):
+        """Loopback is the exception; anything else over http carries a token in
+        cleartext."""
         raw = load()
-        raw["mcp"][0].pop("command")
-        raw["mcp"][0].pop("args")
         raw["mcp"][0]["url"] = "http://mcp.example.com"
         with pytest.raises(ValidationError, match="https"):
             AgentConfig.model_validate(raw)

@@ -13,19 +13,18 @@ tickets and the charges behind them, so both run with nothing but a model key.
 You need a control plane and the environment from the
 [Quickstart](../README.md#quickstart), plus `ANTHROPIC_API_KEY`.
 
-Run these with Charter's environment active, not just `charter` on your path. The
-worker spawns the tool server as `python desk.py`, so bare `python` has to be the
-interpreter Charter is installed in:
+Start the desk. It serves MCP over HTTP on port 8931, and both agents reach it by
+URL:
 
-    source .venv/bin/activate
+    python examples/desk.py
 
-From this directory:
+In a second terminal, from this directory, bring up an agent and a worker:
 
     charter agent create refund-triage
     charter apply .
     charter worker .
 
-Then, from another terminal:
+In a third, give it a ticket:
 
     charter run refund-triage --instance <id> --ticket_id T-1041
 
@@ -39,6 +38,9 @@ and the refund goes through and the task finishes. Reject, and the agent is told
 and carries on without it.
 
 `charter ui` shows the same thing in a browser, across every agent at once.
+
+The desk has four tickets, T-1041 to T-1044. One is a duplicate charge, one is a
+size exchange the refund policy says not to refund.
 
 ## What each file is for
 
