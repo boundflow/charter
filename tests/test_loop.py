@@ -158,8 +158,8 @@ def test_gated_tools_become_interrupts_not_omissions():
     rather than reject and hope the next attempt is right."""
     cfg = load_agent(EXAMPLES / "refund-triage").latest
     gates = interrupt_on(cfg)
-    assert set(gates) == {"stripe__create_refund"}
-    assert gates["stripe__create_refund"]["allowed_decisions"] == [
+    assert set(gates) == {"desk__create_refund"}
+    assert gates["desk__create_refund"]["allowed_decisions"] == [
         "approve", "edit", "reject"]
 
 
@@ -195,16 +195,16 @@ def test_a_pending_action_parks_the_task():
     cfg, loop = loop_for()
     interrupt = {"__interrupt__": [type("I", (), {
         "value": {"action_requests": [
-            {"name": "stripe__create_refund", "args": {"amount": 40},
+            {"name": "desk__create_refund", "args": {"amount": 40},
              "description": "Refund $40 to the customer"}]},
         "id": "int-1"})()]}
     ctx = FakeCtx(results=[FakeResult(interrupt)])
 
     out = run(loop.entry(ctx))
     assert isinstance(out, AwaitApproval)
-    assert "stripe__create_refund" in out.justification
+    assert "desk__create_refund" in out.justification
     assert "Refund $40 to the customer" in out.justification
-    assert out.metadata["tool"] == "stripe__create_refund"
+    assert out.metadata["tool"] == "desk__create_refund"
     assert out.timeout == loop.runtime.authority.approval_timeout_seconds
     assert ctx.context[K_GATES] == 1
 
@@ -434,7 +434,7 @@ def test_an_ordinary_tool_failure_does_not_end_the_task():
     _, loop = loop_for()
     out = run(loop.entry(FakeCtx(results=[
         FakeResult({"resolution": "worked around it"},
-                   tool_failures={"desk__get_ticket": 2})])))
+                   tool_failures={"desk__get_charge": 2})])))
 
     assert isinstance(out, Complete)
     assert "failed" not in out.result
@@ -531,7 +531,7 @@ class TestGateGranularity:
         return Loop(bundle.latest, bundle.runtime, tools=empty,
                     chat_model=lambda m: object(), store_url="postgresql://unused")
 
-    def _interrupt(self, tool="stripe__create_refund"):
+    def _interrupt(self, tool="desk__create_refund"):
         return {"__interrupt__": [type("I", (), {
             "value": {"action_requests": [
                 {"name": tool, "args": {"amount": 40}, "description": "d"}]},
@@ -562,13 +562,13 @@ class TestGateGranularity:
         scanning statuses never learns the thing it existed to do didn't happen."""
         loop = self._loop(on_reject="fail")
         ctx = FakeCtx(context={K_DECISION: "reject",
-                               "_gated_tool": "stripe__create_refund"},
+                               "_gated_tool": "desk__create_refund"},
                       approval_reason="too much",
                       results=[FakeResult({"resolution": "unused"})])
 
         out = run(loop.entry(ctx))
         assert out.result["failed"] is True
-        assert "stripe__create_refund" in out.result["reason"]
+        assert "desk__create_refund" in out.result["reason"]
         assert "too much" in out.result["reason"]
 
     def test_an_unanswered_gate_under_fail_says_so(self):
@@ -608,7 +608,7 @@ class TestGatingAnything:
         """Two mechanisms, one for each declaration site — a tool that declares
         `approval: always` shouldn't also need naming here."""
         cfg = self._cfg([])
-        assert "stripe__create_refund" in interrupt_on(cfg)
+        assert "desk__create_refund" in interrupt_on(cfg)
 
     def test_a_typo_is_refused_rather_than_gating_nothing(self):
         from charter.config.agent import Gate

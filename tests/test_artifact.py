@@ -17,7 +17,7 @@ from pathlib import Path
 from charter.artifact import pack
 from charter.config.loader import load_agent
 
-DEMO = Path(__file__).parent.parent / "demo" / "leads" / "leads-finder"
+DEMO = Path(__file__).parent.parent / "examples" / "refund-triage"
 
 
 def bundle():
@@ -90,4 +90,4 @@ def test_the_tag_comes_from_the_config_not_the_caller():
 
     assert packed.tag == "v1"
     assert packed.reference("ghcr.io/acme/agents") == \
-        "ghcr.io/acme/agents/leads-finder:v1"
+        "ghcr.io/acme/agents/refund-triage:v1"

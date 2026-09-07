@@ -24,11 +24,11 @@ def test_example_parses():
 
 def test_derived_views():
     cfg = AgentConfig.model_validate(load())
-    assert cfg.gated_tools == ["stripe__create_refund"]
-    assert "zendesk__get_ticket" in cfg.inline_tools
-    assert "stripe__create_refund" not in cfg.inline_tools
-    assert cfg.fail_fast_tools == {"zendesk__get_ticket", "stripe__create_refund"}
-    assert len(cfg.all_tools) == 7
+    assert cfg.gated_tools == ["desk__create_refund"]
+    assert "desk__get_ticket" in cfg.inline_tools
+    assert "desk__create_refund" not in cfg.inline_tools
+    assert cfg.fail_fast_tools == {"desk__get_ticket", "desk__create_refund"}
+    assert len(cfg.all_tools) == 3
 
 
 def test_invoke_mode_is_derived():
@@ -75,7 +75,9 @@ class TestMcpServer:
 
     def test_http_url_rejected(self):
         raw = load()
-        raw["mcp"][1]["url"] = "http://mcp.stripe__com"
+        raw["mcp"][0].pop("command")
+        raw["mcp"][0].pop("args")
+        raw["mcp"][0]["url"] = "http://mcp.example.com"
         with pytest.raises(ValidationError, match="https"):
             AgentConfig.model_validate(raw)
 
@@ -83,7 +85,7 @@ class TestMcpServer:
         """`env` takes variable NAMES — this file is committed and immutable, so a
         literal secret here would live forever."""
         raw = load()
-        raw["mcp"][1]["env"] = ["sk_live_abc123"]
+        raw["mcp"][0]["env"] = ["sk_live_abc123"]
         with pytest.raises(ValidationError, match="variable NAME"):
             AgentConfig.model_validate(raw)
 

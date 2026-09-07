@@ -113,7 +113,7 @@ def agent_with(subagents):
     from charter.config.agent import AgentConfig
     from pathlib import Path
     raw = yaml.safe_load(
-        (Path(__file__).parent.parent / "demo/leads/leads-finder/v1.yaml").read_text())
+        (Path(__file__).parent.parent / "examples/refund-triage/v1.yaml").read_text())
     raw["subagents"] = subagents
     return AgentConfig.model_validate(raw)
 
@@ -133,7 +133,7 @@ def test_a_declared_subagent_carries_the_same_bounds():
     cfg = agent_with([{"name": "researcher", "description": "Reads."}])
     gov = governor(allowed_capabilities=["read", "spawn"], allowed_tools=[])
 
-    spec = declared_subagents(cfg, fake_tools("net__search_people"), gov, {})[0]
+    spec = declared_subagents(cfg, fake_tools("desk__get_ticket"), gov, {})[0]
 
     assert offer(spec["middleware"], "write_file") == "refused"
     assert offer(spec["middleware"], "read_file") == "allowed"
@@ -143,12 +143,12 @@ def test_a_narrower_tool_list_is_honoured():
     from charter.harness.durable import declared_subagents
 
     cfg = agent_with([{"name": "researcher", "description": "Reads.",
-                       "tools": ["net__search_people"]}])
-    tools = fake_tools("net__search_people", "net__send_message")
+                       "tools": ["desk__get_ticket"]}])
+    tools = fake_tools("desk__get_ticket", "desk__get_charge")
 
     spec = declared_subagents(cfg, tools, governor(), {})[0]
 
-    assert [t.name for t in spec["tools"]] == ["net__search_people"]
+    assert [t.name for t in spec["tools"]] == ["desk__get_ticket"]
 
 
 def test_declaring_no_tools_means_the_parents_whole_set():
@@ -171,7 +171,7 @@ def test_a_subagent_cannot_reach_further_than_its_parent():
 
     with _pytest.raises(ValidationError, match="does not declare"):
         agent_with([{"name": "researcher", "description": "Reads.",
-                     "tools": ["net__nonexistent"]}])
+                     "tools": ["desk__nonexistent"]}])
 
 
 def test_general_purpose_cannot_be_redeclared():

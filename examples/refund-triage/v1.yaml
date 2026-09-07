@@ -21,7 +21,7 @@ inputs:
   ticket_id:
     type: string
     required: true
-    description: Zendesk ticket to resolve.
+    description: Ticket to resolve. The desk has T-1041 to T-1044.
   max_refund_usd:
     type: number
     default: 100
@@ -32,23 +32,13 @@ inputs:
     enum: [low, normal, urgent]
 
 mcp:
-  - name: zendesk
-    command: npx
-    args: ["-y", "@zendesk/mcp"]
-    env: [ZENDESK_SUBDOMAIN, ZENDESK_API_TOKEN]
+  - name: desk
+    command: python
+    args: [desk.py]
     tools:
       - tool: get_ticket
         on_failure: fail
-      - tool: search_tickets
-      - tool: add_internal_note
-      - tool: close_ticket
-
-  - name: stripe
-    url: https://mcp.stripe.com
-    env: [STRIPE_API_KEY]
-    tools:
       - tool: get_charge
-      - tool: list_refunds
       - tool: create_refund
         approval: always
         on_failure: fail

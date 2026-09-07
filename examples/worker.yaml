@@ -48,9 +48,10 @@ notifications:
       channel: finance
     - channel: oncall
 
-trace_sink:
-  kind: otel
-  endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT}
+# Needs the endpoint it names, so it is left off.
+# trace_sink:
+#   kind: otel
+#   endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT}
 
 model_pricing:
   claude-haiku-4-5: { input: 0.80, output: 4.00 }

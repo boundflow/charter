@@ -15,10 +15,9 @@ schedule:
   every: 15m
 
 mcp:
-  - name: zendesk
-    command: npx
-    args: ["-y", "@zendesk/mcp"]
-    env: [ZENDESK_SUBDOMAIN, ZENDESK_API_TOKEN]
+  - name: desk
+    command: python
+    args: [desk.py]
     tools:
       - tool: search_tickets
         on_failure: fail

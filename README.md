@@ -288,10 +288,8 @@ through their workers and the control plane whether or not the CLI is installed.
 
 - [DESIGN.md](DESIGN.md): every field of every file, and the decisions behind them
 - [deploy/](deploy/): running workers as containers, and a control plane locally
-- [examples/](examples/): fuller configurations, for reading. They name real
-  Zendesk and Stripe servers, so they do not run as-is
-- [demo/leads/](demo/leads/): an agent that runs end to end against a local MCP
-  server, where you play the people it contacts
+- [examples/](examples/): two agents over a toy support desk, one of them gating
+  a refund. They run with nothing but a model key
 
 ## Development
 
