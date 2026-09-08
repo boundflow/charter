@@ -3,13 +3,10 @@ kind: LifecyclePolicy
 
 agent: refund-triage
 
-# `window` is a lookback over recent runs and a minimum sample size: a rule does
-# not evaluate until that many runs exist. Small windows here so the rules can
-# fire in a demo.
 rules:
-  # If 2 refunds are turned down in the last 3 runs, stay paused until someone
+  # If 4 approvals are rejected in the last 3 runs, stay paused until someone
   # runs `charter resume`.
-  - when: { metric: approval_rejections, threshold: 2 }
+  - when: { metric: approval_rejections, threshold: 4 }
     then: { pause: { window: 3 } }
 
   # If 2 tasks failed in the last 3 runs, pause the agent.
