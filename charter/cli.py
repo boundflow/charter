@@ -944,17 +944,19 @@ def agents(tenant: str = TENANT) -> None:
                        if w.lifecycle_state.value in ("awaiting_approval", "awaiting_input")]
             stopped = [w for w in mine if not ui.working(w.workflow_state.value)]
 
+            # The table already carries both states, so these are the commands
+            # for them and not a second telling of what it says.
             if waiting:
                 typer.echo()
-                ui.warn(f"{len(waiting)} waiting on a human")
+                ui.warn("awaiting approval")
                 for w in waiting:
                     ui.detail(f"charter pending {w.workflow_type} --instance {short(w.id)}")
             if stopped:
                 typer.echo()
-                ui.warn(f"{len(stopped)} stopped — no new tasks will start")
+                ui.warn("stopped")
                 for w in stopped:
-                    ui.detail(f"charter audit {w.workflow_type} --instance {short(w.id)}")
                     ui.detail(f"charter resume {w.workflow_type} --instance {short(w.id)}")
+                    ui.detail(f"charter audit {w.workflow_type} --instance {short(w.id)}")
 
     asyncio.run(go())
 
@@ -1135,8 +1137,6 @@ def tasks(agent: str = typer.Argument(...),
             line = (f"{agent}  v{wf.version}  {ui.state(wf.workflow_state.value)}"
                     f"  {ui.state(wf.lifecycle_state.value)}")
             typer.echo(line)
-            if not ui.working(wf.workflow_state.value):
-                ui.warn(f"  stopped — no new tasks will start")
 
             m = await cp.get_workflow_metrics(wf.id)
             typer.echo(f"\n  {m.run_count} run(s), ${m.total_cost_usd:.4f}, "

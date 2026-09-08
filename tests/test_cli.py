@@ -167,7 +167,7 @@ class TestAgents:
         cp.workflows = [workflow("refund-demo",
                                  lifecycle_state=LifecycleState.AWAITING_APPROVAL)]
         out = invoke("agents").output
-        assert "waiting on a human" in out
+        assert "awaiting approval" in out
         assert "charter pending refund-demo" in out
 
     def test_points_a_paused_agent_at_resume(self, cp):

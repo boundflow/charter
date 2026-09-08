@@ -74,7 +74,9 @@ runs and it pauses itself.
     AGENT          INSTANCE  VER  STATUS  ACTIVITY
     refund-triage  5054d8e3  v1   paused  active
 
-    1 stopped — no new tasks will start
+    stopped
+      charter resume refund-triage --instance 5054d8e3
+      charter audit refund-triage --instance 5054d8e3
 
 Further runs are refused until `charter resume refund-triage --instance <id>`.
 One run can propose at most three refunds, so this can only be a pattern across
