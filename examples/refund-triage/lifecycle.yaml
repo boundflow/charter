@@ -4,14 +4,15 @@ kind: LifecyclePolicy
 agent: refund-triage
 
 rules:
-  - when: { metric: num_failures, threshold: 2 }
-    then: { pause: { window: 5 } }
+  # If 4 refunds are turned down in the last ten tasks, stay paused until someone
+  # runs `charter resume`.
+  - when: { metric: approval_rejections, threshold: 4 }
+    then: { pause: { window: 10 } }
 
+  # If 2 tasks failed in the last 5 runs, pause the agent
+  - when: { metric: num_failures, threshold: 2 }
+    then: { pause: { window: 5 } } 
+
+  # 5 dollar budget in 20 task runs. If agent crosses it, stop for five minutes, then continue.
   - when: { metric: cost, threshold: 5.00 }
     then: { cooldown: { window: 20, seconds: 300 } }
-
-  - when: { metric: approval_rejections, threshold: 3 }
-    then: { set_version: { target: 1 } }
-
-  - when: { metric: tool_failures, threshold: 3, tool: support__create_refund }
-    then: { pause: { window: 10 } }

@@ -470,8 +470,8 @@ def _print_compiled(c) -> None:
         action = rule.action.model_dump()
         kind = action.pop("kind", "?")
         detail = " ".join(f"{k}={v}" for k, v in action.items())
-        typer.echo(f"  rule                 {rule.metric.value} >= {rule.threshold:g}"
-                   f" -> {kind} {detail}".rstrip())
+        typer.echo(f"  rule                 metric={rule.metric.value} "
+                   f"threshold={rule.threshold:g} action={kind} {detail}".rstrip())
 
 
 def _apply_single(bundle, *, dry_run: bool) -> None:
@@ -689,6 +689,19 @@ async def _select(cp, agent: str, *, instance: str | None, all_: bool,
     if fans_out:
         ui.detail(f"--all             {verb} every instance")
     raise typer.Exit(1)
+
+
+def _rule_row(rule) -> list[str]:
+    """One lifecycle rule as metric, threshold, window, action, tool."""
+    action = rule.action.model_dump()
+    kind = action.pop("kind", "?")
+    window = action.pop("window", "")
+    seconds = action.pop("seconds", None)
+    detail = " ".join(f"{k}={v}" for k, v in action.items())
+    if seconds:
+        detail = f"{seconds:g}s {detail}".strip()
+    return [rule.metric.value, f"{rule.threshold:g}", str(window),
+            f"{kind} {detail}".strip(), rule.tool or ""]
 
 
 def _state_of(w) -> str:
@@ -1044,34 +1057,25 @@ def describe(
 
             rules = await cp.get_workflow_lifecycle_policy(wf.id)
             metrics = await cp.get_workflow_metrics(wf.id)
-            observed = {
-                "num_failures": metrics.total_failures,
-                "cost": round(metrics.total_cost_usd, 4),
-                "num_llm_calls": metrics.total_llm_calls,
-                "latency": round(metrics.total_latency_seconds, 1),
-                "approval_rejections": metrics.total_approval_rejections,
-            }
             typer.echo()
             typer.secho("rules", fg=typer.colors.BRIGHT_BLACK)
             if not rules:
                 ui.detail("none armed")
-            labels = [f"{r.metric.value}{f'[{r.tool}]' if r.tool else ''}" for r in rules]
-            width = max((len(l) for l in labels), default=0)
-            for rule, label in zip(rules, labels):
-                action = rule.action.model_dump()
-                kind = action.pop("kind", "?")
-                detail = " ".join(f"{k}={v}" for k, v in action.items())
-                now = (metrics.tool_failure_counts.get(rule.tool, 0) if rule.tool
-                       else observed.get(rule.metric.value, 0))
-                line = (f"  {label.ljust(width)}   {now} of {rule.threshold:g}"
-                        f"   -> {kind} {detail}".rstrip())
-                (ui.warn if now >= rule.threshold else typer.echo)(line)
+            else:
+                ui.table(["metric", "threshold", "window", "action", "tool"],
+                         [_rule_row(r) for r in rules])
 
             typer.echo()
-            typer.secho("so far", fg=typer.colors.BRIGHT_BLACK)
-            ui.kv([("runs", metrics.run_count),
+            typer.secho("metrics", fg=typer.colors.BRIGHT_BLACK)
+            # Totals for the version now running, which is not the window a pause or
+            # cooldown rule reads. Printed as its own block rather than beside a
+            # threshold, where it read as progress toward one.
+            ui.kv([("version", f"v{wf.version}"),
+                   ("runs", metrics.run_count),
                    ("cost", f"${metrics.total_cost_usd:.4f}"),
-                   ("llm calls", metrics.total_llm_calls)], indent="  ")
+                   ("llm calls", metrics.total_llm_calls),
+                   ("failures", metrics.total_failures),
+                   ("rejections", metrics.total_approval_rejections)], indent="  ")
 
             if wf.pending_approval:
                 g = wf.pending_approval
@@ -1327,7 +1331,7 @@ def _rule_line(metric: str, value, rules: list, tool: str | None = None) -> None
                       if getattr(rule.then, k))
         at = rule.when.threshold
         near = value >= at
-        text = f"    {label:<28} {value}  (of {at:g} -> {action})"
+        text = f"    {label:<28} {value}  threshold={at:g} action={action}"
         (_warn if near else typer.echo)(text)
 
 
@@ -1643,8 +1647,9 @@ def audit(
                     typer.echo(f"{stamp}  input {e.decision.value}: "
                                f"{(e.answer or {}).get('text', '')}")
                 else:
-                    typer.echo(f"{stamp}  policy fired: {getattr(e, 'metric', '')} -> "
-                               f"{getattr(e, 'action', '')}")
+                    typer.echo(f"{stamp}  policy fired: "
+                               f"metric={getattr(e, 'metric', '')} "
+                               f"action={getattr(e, 'action', '')}")
 
     asyncio.run(go())
 

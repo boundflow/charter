@@ -72,14 +72,19 @@ class TestAgentCrossFile:
 
     def test_lifecycle_rule_for_undeclared_tool(self, project):
         def mutate(raw):
-            raw["rules"][-1]["when"]["tool"] = "support__nonexistent"
+            raw["rules"].append(
+                {"when": {"metric": "tool_failures", "threshold": 3,
+                          "tool": "support__nonexistent"},
+                 "then": {"pause": {"window": 5}}})
         edit(project / "refund-triage" / "lifecycle.yaml", mutate)
         with pytest.raises(ConfigError, match="no version of this agent declares"):
             load_agent(project / "refund-triage")
 
     def test_set_version_target_missing_on_disk(self, project):
         def mutate(raw):
-            raw["rules"][2]["then"]["set_version"]["target"] = 7
+            raw["rules"].append(
+                {"when": {"metric": "cost", "threshold": 9.0},
+                 "then": {"set_version": {"target": 7}}})
         edit(project / "refund-triage" / "lifecycle.yaml", mutate)
         with pytest.raises(ConfigError, match="no v7.yaml"):
             load_agent(project / "refund-triage")

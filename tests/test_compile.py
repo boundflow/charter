@@ -2,7 +2,8 @@ from pathlib import Path
 
 from boundflow import Cooldown, InvokeMode, Pause, SetVersion, WorkflowMetric
 
-from charter.compile import compile_agent
+from charter.compile import compile_agent, compile_workflow_rules
+from charter.config.lifecycle import LifecyclePolicyFile
 from charter.config.loader import load_agent
 
 EXAMPLES = Path(__file__).parent.parent / "examples"
@@ -10,6 +11,18 @@ EXAMPLES = Path(__file__).parent.parent / "examples"
 
 def refund():
     return compile_agent(load_agent(EXAMPLES / "refund-triage"))
+
+
+def compiled_rules(*rules):
+    """Rules built here rather than read from an example.
+
+    These assert how the compiler translates each action and metric. Reading them
+    off `examples/` tied that coverage to what the example happens to demonstrate,
+    so trimming a rule there silently deleted a compiler test.
+    """
+    return compile_workflow_rules(LifecyclePolicyFile.model_validate({
+        "apiVersion": "charter/v1", "kind": "LifecyclePolicy",
+        "agent": "refund-triage", "rules": list(rules)}))
 
 
 def summarizer(version=None):
@@ -66,7 +79,14 @@ def test_convergence_limits_have_no_boundflow_equivalent():
 
 
 def test_workflow_rules():
-    rules = {r.metric: r for r in refund().workflow_rules}
+    rules = {r.metric: r for r in compiled_rules(
+        {"when": {"metric": "num_failures", "threshold": 2},
+         "then": {"pause": {"window": 5}}},
+        {"when": {"metric": "cost", "threshold": 5.0},
+         "then": {"cooldown": {"window": 20, "seconds": 300}}},
+        {"when": {"metric": "approval_rejections", "threshold": 3},
+         "then": {"set_version": {"target": 1}}},
+    )}
 
     failures = rules[WorkflowMetric.NUM_FAILURES]
     assert failures.threshold == 2
@@ -85,8 +105,11 @@ def test_workflow_rules():
 def test_tool_failures_renames_to_boundflows_misnomer():
     """Charter says `tool_failures` because the engine compares a summed count, not
     a ratio. BoundFlow's metric is named TOOL_FAILURE_RATE."""
-    rule = next(r for r in refund().workflow_rules
-                if r.metric == WorkflowMetric.TOOL_FAILURE_RATE)
+    rule, = compiled_rules(
+        {"when": {"metric": "tool_failures", "threshold": 3,
+                  "tool": "support__create_refund"},
+         "then": {"pause": {"window": 10}}})
+    assert rule.metric == WorkflowMetric.TOOL_FAILURE_RATE
     assert rule.tool == "support__create_refund"
     assert rule.threshold == 3
 

@@ -8,7 +8,7 @@ per_run:
   max_cost_usd: 0.30
   max_llm_calls: 40
   tool_call_limits:
-    # Let the agent get 3 chances to get the refund amount right, we will give it feedback during the gate
+    # Let the agent get 3 chances to get the refund amount right, we will give it feedback if we reject
     - tool: support__create_refund
       max_calls: 3
     - tool: support__get_charge
