@@ -4,8 +4,10 @@ kind: LifecyclePolicy
 agent: ticket-summarizer
 
 rules:
+  # v2 runs on a schedule and on a pricier model. Once it has spent this much,
+  # the control plane puts v1 back: cheaper model and only manually triggered
+  - when: { metric: cost, threshold: 0.05 }
+    then: { set_version: { target: 1 } }
+
   - when: { metric: num_failures, threshold: 3 }
     then: { pause: { window: 5 } }
-
-  - when: { metric: cost, threshold: 2.00 }
-    then: { set_version: { target: 1 } }

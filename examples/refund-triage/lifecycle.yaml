@@ -4,16 +4,7 @@ kind: LifecyclePolicy
 agent: refund-triage
 
 rules:
-  # If 4 approvals are rejected in the last 3 runs, stay paused until someone
-  # runs `charter resume`.
+  # If 4 refund attempts are rejected in the last 3 runs, stay paused until someone
+  # runs `charter resume`. One run may propose at most 3 times (see runtime policy), so this spans more than one run
   - when: { metric: approval_rejections, threshold: 4 }
     then: { pause: { window: 3 } }
-
-  # If 2 tasks failed in the last 3 runs, pause the agent.
-  - when: { metric: num_failures, threshold: 2 }
-    then: { pause: { window: 3 } }
-
-  # 5 dollar budget across 5 runs. If the agent crosses it, stop for five
-  # minutes, then continue.
-  - when: { metric: cost, threshold: 5.00 }
-    then: { cooldown: { window: 5, seconds: 300 } }

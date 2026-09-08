@@ -5,9 +5,11 @@ with four tickets and the charges behind them, so both run with nothing but a
 model key.
 
     refund-triage       reads a ticket, decides, and refunds. The refund stops
-                        for a human before it goes through.
+                        for a human, and the agent pauses itself if too many are
+                        turned down.
     ticket-summarizer   reads every open ticket and reports what needs attention.
-                        Two versions, so a rollback has somewhere to go.
+                        Runs unattended on v2, and rolls itself back to v1 when
+                        it spends too much.
 
 ## Running them
 
@@ -65,8 +67,49 @@ The agent will keep revising while you keep giving it reasons, so `runtime.yaml`
 caps `support__create_refund` at three calls per task. The objective asks it to
 revise rather than repeat; the ceiling is what holds when it doesn't.
 
+Turning refunds down often enough says something about the agent rather than the
+task, and `lifecycle.yaml` acts on that: four rejections across the last three
+runs and it pauses itself.
+
+    AGENT          INSTANCE  VER  STATUS  ACTIVITY
+    refund-triage  5054d8e3  v1   paused  active
+
+    1 stopped — no new tasks will start
+
+Further runs are refused until `charter resume refund-triage --instance <id>`.
+One run can propose at most three refunds, so this can only be a pattern across
+runs, which is the difference between the two policy files: `runtime.yaml` bounds
+one task, `lifecycle.yaml` reacts to several.
+
 `charter status <task-id>` is where you read the outcome, and `charter ui` does
 all of this in a browser, across every agent at once.
+
+## Rolling a version back
+
+`ticket-summarizer` has no gated tools, so nothing stops for a human. It has two
+versions: v1 uses a cheaper model and runs when you ask, v2 uses a better one and
+runs every fifteen minutes on its own. `lifecycle.yaml` says what to do if v2 is
+not worth it:
+
+    - when: { metric: cost, threshold: 0.05 }
+      then: { set_version: { target: 1 } }
+
+Create it and let it run:
+
+    charter agent create ticket-summarizer
+    charter apply . --all
+    charter run ticket-summarizer --instance <id>
+
+It starts on v2. Once v2 has spent five cents the control plane puts v1 back,
+with nobody watching:
+
+    AGENT              INSTANCE  VER  STATUS  ACTIVITY
+    ticket-summarizer  b4a3491a  v1   active  active
+
+    charter audit ticket-summarizer --instance b4a3491a
+    2026-09-08 22:12  policy fired: metric=cost action=set_version
+
+`charter describe` shows the rules and what the running version has spent so far.
 
 ## What each file is for
 

@@ -288,8 +288,9 @@ through their workers and the control plane whether or not the CLI is installed.
 
 - [DESIGN.md](DESIGN.md): every field of every file, and the decisions behind them
 - [deploy/](deploy/): running workers as containers, and a control plane locally
-- [examples/](examples/): two agents over a toy support system, one of them gating
-  a refund. They run with nothing but a model key
+- [examples/](examples/): two agents over a toy support system. One gates a refund
+  and pauses itself when too many are turned down, the other rolls itself back to
+  an earlier version. They run with nothing but a model key
 
 ## Development
 

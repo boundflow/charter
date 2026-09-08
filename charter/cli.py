@@ -704,6 +704,15 @@ def _rule_row(rule) -> list[str]:
             f"{kind} {detail}".strip(), rule.tool or ""]
 
 
+def _enum_name(value) -> str:
+    """An enum as its own name, not its Python repr.
+
+    The SDK hands back `WorkflowPolicyAction.SET_VERSION`; an operator reading an
+    audit trail wants `set_version`.
+    """
+    return str(getattr(value, "value", value)).rsplit(".", 1)[-1].lower()
+
+
 def _state_of(w) -> str:
     state = getattr(w, "workflow_state", None)
     return getattr(state, "value", state) or "unknown"
@@ -1648,8 +1657,8 @@ def audit(
                                f"{(e.answer or {}).get('text', '')}")
                 else:
                     typer.echo(f"{stamp}  policy fired: "
-                               f"metric={getattr(e, 'metric', '')} "
-                               f"action={getattr(e, 'action', '')}")
+                               f"metric={_enum_name(getattr(e, 'metric', ''))} "
+                               f"action={_enum_name(getattr(e, 'action', ''))}")
 
     asyncio.run(go())
 
