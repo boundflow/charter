@@ -678,6 +678,12 @@ exactly one of `pause: {window}`, `cooldown: {window, seconds}`, or
 `set_version: {target}`. A `set_version` target must exist on disk *and* appear in
 `serves[].versions` for every worker running the agent.
 
+`window` is two things: how many recent tasks the metric sums over, and how many
+must have run before the rule is evaluated at all. An agent with `window: 10` and
+four tasks behind it has no rule evaluated yet, whatever its metrics say.
+`set_version` takes no window, because it compares totals for the version now
+running, which reset when the version changes.
+
 ### Worker — `worker.yaml`
 
 Not versioned. Every secret is an `${ENV_VAR}` reference, never a literal.
