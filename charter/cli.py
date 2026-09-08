@@ -711,71 +711,32 @@ async def _workflow_for(cp, agent: str, tenant: str | None = None,
                           tenant=tenant, verb=verb, fans_out=False))[0]
 
 
-def _show_inputs(cfg) -> None:
-    """What this agent takes. Printed on the error paths rather than in --help,
-    because Typer builds --help before we know which agent was named — and the
-    moment someone needs this is the moment they got a flag wrong."""
-    if not cfg.inputs:
-        typer.echo("  (this agent declares no inputs)")
-        return
-    typer.echo(f"\ninputs for {cfg.name}:")
-    for name, spec in cfg.inputs.items():
-        flag = f"--{name.replace('_', '-')}"
-        bits = [spec.type]
-        if spec.required:
-            bits.append("required")
-        if spec.default is not None:
-            bits.append(f"default {spec.default}")
-        if spec.enum:
-            bits.append("one of " + "|".join(str(v) for v in spec.enum))
-        typer.echo(f"  {flag:<24} {', '.join(bits)}")
-        if spec.description:
-            typer.echo(f"  {'':<24} {spec.description}")
 
 
-def _coerce(spec, raw: str, name: str):
-    """CLI flags arrive as strings; the declared type is what they must become."""
-    try:
-        if spec.type == "integer":
-            return int(raw)
-        if spec.type == "number":
-            return float(raw)
-        if spec.type == "boolean":
-            return raw.lower() in ("1", "true", "yes", "y")
-        return raw
-    except ValueError:
-        raise typer.BadParameter(f"--{name.replace('_', '-')} must be a {spec.type}")
+
+
 
 
 @app.command(context_settings={"allow_extra_args": True, "ignore_unknown_options": True})
 def run(
     ctx: typer.Context,
-    agent: str = typer.Argument(..., help="Agent name (its directory)"),
-    path: Path = typer.Option(Path("."), "--path", help="Where agents live"),
+    agent: str = typer.Argument(..., help="Agent name"),
     instance: str = typer.Option(None, "--instance", help="Which instance to run on"),
     all_: bool = typer.Option(False, "--all", help="Start a task on every instance"),
     tenant: str = TENANT,
 ) -> None:
-    """Start one task. Declared inputs become --flags, validated before the request
-    is created so a typo fails here instead of burning a run.
+    """Start one task. Declared inputs are passed as --flags.
+
+    No checkout needed: the inputs travel with the versioned config the worker is
+    already serving, so it is the worker that fills declared defaults and refuses a
+    task missing a required one. Validating here as well would mean a second copy
+    of the spec, and the CLI disagreeing with the worker whenever it was stale.
 
     An agent with several instances needs one naming: each has its own state, so
     sending work to the wrong one isn't a scheduling detail, it's the wrong entity
     doing the job.
     """
-    agent_dir = Path(path) / agent
-    if not agent_dir.is_dir():
-        agent_dir = Path(path)
-    try:
-        bundle = load_agent(agent_dir)
-    except ConfigError as e:
-        _err(f"no agent config found for {agent!r} — `run` needs it to validate inputs")
-        for p in e.problems:
-            _err(f"  - {p}")
-        raise typer.Exit(1)
-
-    cfg = bundle.latest
-    flags = {}
+    context = {}
     args = list(ctx.args)
     while args:
         token = args.pop(0)
@@ -788,27 +749,7 @@ def run(
             value = args.pop(0)
         else:
             value = "true"
-        flags[key] = value
-
-    unknown = set(flags) - set(cfg.inputs)
-    if unknown:
-        _err(f"unknown input(s): {', '.join(sorted(unknown))}")
-        _show_inputs(cfg)
-        raise typer.Exit(1)
-
-    context = {}
-    for name, spec in cfg.inputs.items():
-        if name in flags:
-            context[name] = _coerce(spec, flags[name], name)
-        elif spec.default is not None:
-            context[name] = spec.default
-        elif spec.required:
-            _err(f"--{name.replace('_', '-')} is required")
-            _show_inputs(cfg)
-            raise typer.Exit(1)
-        if spec.enum and name in context and context[name] not in spec.enum:
-            _err(f"--{name.replace('_', '-')} must be one of {spec.enum}")
-            raise typer.Exit(1)
+        context[key] = _typed(value)
 
     async def go():
         async with _cp() as cp:
@@ -822,6 +763,22 @@ def run(
                     ui.detail(f"charter status {request_id}")
 
     asyncio.run(go())
+
+
+def _typed(value: str):
+    """A flag is text; the config it feeds declares numbers and booleans.
+
+    Nothing here knows the declared type, so the shape is read off the value. A
+    quoted number stays a number, which is the same guess YAML makes.
+    """
+    if value in ("true", "false"):
+        return value == "true"
+    for cast in (int, float):
+        try:
+            return cast(value)
+        except ValueError:
+            pass
+    return value
 
 
 agent_app = typer.Typer(help="Create and destroy instances of an agent.")
