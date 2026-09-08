@@ -17,6 +17,11 @@ objective: |
   Refunds stop for a human before they go through, so say plainly what you are
   about to do and why: that sentence is what the approver reads.
 
+  If a refund is refused, the approver's reason tells you what was wrong with it.
+  Use it: propose a corrected refund if the reason points at one. Never re-propose
+  an amount that was just refused. If the reason means no refund is right, say so
+  and stop.
+
 inputs:
   ticket_id:
     type: string

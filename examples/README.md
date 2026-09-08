@@ -34,14 +34,39 @@ holds your terminal open while it waits:
 
     charter pending refund-triage --instance <id>
 
-That prints the call it wants to make and the commands that answer it. Approve,
-and the refund goes through and the task finishes. Reject, and the agent is told
-and carries on without it.
+That prints the call it wants to make and the two commands that answer it. Both
+take a reason, and the reason is not paperwork: it is handed to the agent.
 
-`charter ui` shows the same thing in a browser, across every agent at once.
+    charter approve <id> --agent refund-triage --instance <id> --reason '...'
+    charter reject  <id> --agent refund-triage --instance <id> --reason '...'
 
-There are four tickets, T-1041 to T-1044. One is a duplicate charge, one is a
-size exchange the refund policy says not to refund.
+Approve, and the refund goes through and the task finishes with what it did.
+
+Reject with a reason that says what was wrong, and the agent works from it:
+
+    charter reject <id> --agent refund-triage --instance <id> \
+      --reason 'only half of this is ours. the second charge was authorised by the
+                customer on a different order, so refund 24.00, not 48.00'
+
+It comes back with a corrected proposal, and a second gate:
+
+    refund-triage wants to call support__create_refund
+      with charge_id='ch_88213', amount_usd=24.0
+
+Approve that one and the task finishes:
+
+    result
+      refunded_usd   24.0
+      resolution     Customer was charged twice for order #4417 on the 3rd at
+                     $48.00 each. Refunded $24.00 for our duplicate charge; the
+                     other $48.00 charge was authorized by the customer and remains.
+
+The agent will keep revising while you keep giving it reasons, so `runtime.yaml`
+caps `support__create_refund` at three calls per task. The objective asks it to
+revise rather than repeat; the ceiling is what holds when it doesn't.
+
+`charter status <task-id>` is where you read the outcome, and `charter ui` does
+all of this in a browser, across every agent at once.
 
 ## What each file is for
 
