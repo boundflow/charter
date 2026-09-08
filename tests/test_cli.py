@@ -751,3 +751,17 @@ class TestPrintedCommandsRun:
             args = [a.strip("'") for a in cmd.split()[1:]]
             res = invoke(*args)
             assert res.exit_code == 0, f"{cmd!r} exits {res.exit_code}: {res.output}"
+
+
+def test_a_deleted_instance_is_not_offered_to_pick_from(cp):
+    """`charter agents` hides deleted instances and the picker did not, so the two
+    disagreed about what exists and the picker suggested a dead one by default.
+    """
+    cp.workflows = [workflow("refund-triage",
+                             lifecycle_state=LifecycleState.DELETED),
+                    workflow("refund-triage")]
+
+    out = invoke("describe", "refund-triage").output
+
+    assert "has 1 instance" in out, out
+    assert "deleted" not in out

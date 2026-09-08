@@ -638,7 +638,8 @@ async def _instances(cp, agent: str, tenant: str | None = None) -> list:
     """
     tid = await _tenant_id(cp, tenant)
     return [w for w in await cp.list_workflows()
-            if w.workflow_type == agent and w.tenant_id == tid]
+            if w.workflow_type == agent and w.tenant_id == tid
+            and w.lifecycle_state.value != "deleted"]
 
 
 async def _select(cp, agent: str, *, instance: str | None, all_: bool,
