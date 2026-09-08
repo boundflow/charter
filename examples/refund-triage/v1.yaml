@@ -12,7 +12,7 @@ objective: |
 
   Look up the ticket and the underlying charge before you act. Never refund more
   than ${{ inputs.max_refund_usd }}. If the customer's reason is unclear, or the
-  charge doesn't match what they describe, ask — do not guess.
+  charge doesn't match what they describe, ask rather than guess.
 
   Refunds stop for a human before they go through, so say plainly what you are
   about to do and why: that sentence is what the approver reads.
@@ -54,6 +54,3 @@ response_format:
   refunded_usd:
     type: number
     description: Amount refunded, or 0 if none.
-
-# How long an approver has. An unanswered gate is a rejection — the agent is told
-# and carries on without that action, rather than the task dying.

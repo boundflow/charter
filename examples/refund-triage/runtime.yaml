@@ -15,8 +15,7 @@ per_run:
       max_calls: 5
     - tool: support__get_ticket
       max_calls: 10
-  # Covers every way the harness can read a file, so the cap survives it shipping
-  # a fourth one. Capping `read_file` alone would not.
+  # Every way the harness can read, not just read_file.
   capability_call_limits:
     - capability: read
       max_calls: 30
@@ -25,10 +24,7 @@ limits:
   max_tokens_per_call: 1024
   max_call_seconds: 60
 
-# What the agent may reach, as opposed to how much it may spend. Not versioned:
-# tightening this should not require cutting a release, and it has to be
-# changeable on an agent that is already running.
+# What the agent may reach. Re-applied on every `charter apply`.
 authority:
-  # The harness brings its own filesystem. This agent has no business writing to
-  # it, so it gets read only; declared MCP tools are always permitted regardless.
+  # Read only, on the harness's own filesystem. Declared MCP tools are unaffected.
   allowed_capabilities: [read]
