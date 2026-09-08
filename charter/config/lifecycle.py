@@ -66,17 +66,13 @@ class When(Base):
 class Pause(Base):
     """Hold all new tasks until `charter resume`. Queued tasks wait, not discarded."""
 
-    window: int = Field(gt=0, description=(
-        "How many recent tasks the metric sums over, and the number that must have "
-        "run before the rule is evaluated at all."))
+    window: int = Field(gt=0, description="How many recent tasks the metric sums over.")
 
 
 class Cooldown(Base):
     """Pause, then auto-resume after `seconds`."""
 
-    window: int = Field(gt=0, description=(
-        "How many recent tasks the metric sums over, and the number that must have "
-        "run before the rule is evaluated at all."))
+    window: int = Field(gt=0, description="How many recent tasks the metric sums over.")
     seconds: int = Field(gt=0)
 
 
