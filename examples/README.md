@@ -31,6 +31,13 @@ In a third, give it a ticket:
 
     charter run refund-triage --instance <id> --ticket_id T-1041
 
+There are four tickets. Two of them are refunds, two are not:
+
+    T-1041   charged twice for one order        proposes a refund
+    T-1042   package never arrived              proposes a refund
+    T-1043   wrong size, wants an exchange      no refund, finishes on its own
+    T-1044   cancel a subscription              no refund, finishes on its own
+
 The agent reads the ticket, looks up the charge, and asks to refund it. Nothing
 holds your terminal open while it waits:
 
@@ -68,7 +75,8 @@ task, so the agent gets three tries to land on the right amount. After that the
 call is refused and it has to finish without a refund.
 
 The `lifecycle.yaml` we applied pauses the agent after four rejections across the
-last three runs. Reject that many times, then look at it:
+last three runs. Three per run is the cap, so run it again on T-1042, or on
+T-1041 a second time, and keep rejecting. Then look at it:
 
     charter describe refund-triage --instance <id>
 
