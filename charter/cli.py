@@ -942,7 +942,12 @@ def agents(tenant: str = TENANT) -> None:
             # The two reasons an agent isn't working, and they need different acts.
             waiting = [w for w in mine
                        if w.lifecycle_state.value in ("awaiting_approval", "awaiting_input")]
-            stopped = [w for w in mine if not ui.working(w.workflow_state.value)]
+            # Cooling down is not stopped: it starts again on its own, so it gets
+            # the time rather than a resume nobody needs to run.
+            cooling = [w for w in mine if w.cooldown_until]
+            deleting = [w for w in mine if w.deletion_requested_at]
+            stopped = [w for w in mine if not ui.working(w.workflow_state.value)
+                       and not w.cooldown_until and not w.deletion_requested_at]
 
             # The table already carries both states, so these are the commands
             # for them and not a second telling of what it says.
@@ -951,6 +956,18 @@ def agents(tenant: str = TENANT) -> None:
                 ui.warn("awaiting approval")
                 for w in waiting:
                     ui.detail(f"charter pending {w.workflow_type} --instance {short(w.id)}")
+            if cooling:
+                typer.echo()
+                ui.warn("cooling down")
+                for w in cooling:
+                    ui.detail(f"{w.workflow_type} {short(w.id)} until "
+                              f"{_stamp(w.cooldown_until)}")
+            if deleting:
+                typer.echo()
+                ui.warn("deleting")
+                for w in deleting:
+                    ui.detail(f"{w.workflow_type} {short(w.id)} requested "
+                              f"{_stamp(w.deletion_requested_at)}")
             if stopped:
                 typer.echo()
                 ui.warn("stopped")
@@ -1170,15 +1187,21 @@ def tasks(agent: str = typer.Argument(...),
                 ui.dim(f"no matching tasks ({total} total)")
                 return
             reasons = await _reasons(cp, shown)
-            ui.table(["task", "outcome", "started", "took"],
+            # status and outcome are different answers: status is where the request
+            # got to, outcome is what the run decided. A run can be completed and
+            # unsuccessful.
+            ui.table(["task", "kind", "status", "outcome", "started", "took"],
                      [[r.request_id,
-                       ui.state((r.run_outcome or r.status).value),
+                       _enum_name(r.request_type) if r.request_type else "",
+                       _enum_name(r.status),
+                       ui.state(r.run_outcome.value) if r.run_outcome else "",
                        r.created_at.strftime("%m-%d %H:%M") if r.created_at else "",
                        _took(r.created_at, r.completed_at)] for r in shown],
                      notes=[_first_line(reasons.get(r.request_id, r.failure_reason))
                             for r in shown])
             if len(shown) < len(runs):
-                ui.dim(f"  {len(shown)} of {len(runs)} matching ({total} total) — -n 0 for all")
+                ui.dim(f"  {len(shown)} of {len(runs)} matching, {total} total. "
+                       f"-n 0 for all")
 
     asyncio.run(go())
 
