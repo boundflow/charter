@@ -262,3 +262,22 @@ def test_an_agent_with_no_tools_can_be_rebuilt_from_its_policy():
     rebuilt = policy.runtime_file("triage", applied)
 
     assert rebuilt.per_run.max_tool_failures > 0
+
+
+def test_custom_reads_the_same_off_the_wire_as_off_the_compiler():
+    """The SDK returns a typed object when you write a policy and protobuf JSON —
+    a plain dict — when you read one back. Reading only the attribute made every
+    cap and allowlist vanish on the read path, silently: a worker booting from
+    applied policy enforced nothing it declared.
+    """
+    from charter import policy
+
+    compiled = refund().runtime_policy
+    off_the_wire = {"maxCostUsd": 0.30, "custom": dict(compiled.custom)}
+
+    assert policy.allowed_capabilities(off_the_wire) == \
+        policy.allowed_capabilities(compiled)
+    assert policy.capability_call_caps(off_the_wire) == \
+        policy.capability_call_caps(compiled)
+    assert policy.proposal_caps(off_the_wire) == {"support__create_refund": 3}
+    assert policy.timeouts(off_the_wire) == policy.timeouts(compiled)

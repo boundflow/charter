@@ -129,6 +129,15 @@ def timeouts(policy) -> dict[str, int]:
 
 
 def _of(policy) -> dict[str, Any]:
+    """`custom`, from either shape a policy arrives in.
+
+    The SDK hands back a typed object on the write path and protobuf JSON — a
+    plain dict — on the read path. Reading only the attribute meant every caller
+    saw an empty policy whenever it came off the wire, which is silent: an
+    allowlist reads as "no allowlist" and a cap as "no cap".
+    """
+    if isinstance(policy, dict):
+        return policy.get("custom") or {}
     return getattr(policy, "custom", None) or {}
 
 

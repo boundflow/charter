@@ -1344,6 +1344,14 @@ def _fmt(value):
     read path, snake_case from a pydantic dump on the compile path."""
     if isinstance(value, list):
         return ", ".join(_one_limit(d) if isinstance(d, dict) else str(d) for d in value)
+    return _num(value)
+
+
+def _num(value):
+    """Counts read back as floats, because protobuf JSON has one number type. A
+    ceiling of 40 calls printed as 40.0 reads like a number someone computed."""
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
     return value
 
 
@@ -1354,7 +1362,7 @@ def _one_limit(d: dict) -> str:
     n = next((d[k] for k in ("maxCalls", "max_calls", "maxFailures", "max_failures",
                              "maxProposals", "max_proposals")
               if d.get(k) is not None), "?")
-    return f"{what}={n}"
+    return f"{what}={_num(n)}"
 
 
 def _took(started, finished) -> str:

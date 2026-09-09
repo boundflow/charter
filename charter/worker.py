@@ -232,8 +232,9 @@ class CharterWorker:
             # Nothing applied yet, so there is no policy to read and the worker
             # never read the directory's. Conservative defaults hold until
             # `charter apply` runs, which is the next boot.
-            log.warning("%s: no instance on the control plane yet — running on "
-                        "default limits until one is applied", bundle.name)
+            log.warning("%s: no instance on the control plane holds policy for "
+                        "this agent — running on default limits until "
+                        "`charter apply` sets some", bundle.name)
         return bundle, versions
 
     async def _pull(self, spec):
