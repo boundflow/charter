@@ -902,3 +902,15 @@ def test_a_policy_sourced_ceiling_parks_as_an_integer():
                                  policy_custom={MAX_WAIT_SECONDS: 300.0})))
     assert out.delay_seconds == 300
     assert isinstance(out.delay_seconds, int)
+
+
+def test_the_agents_why_leads_the_justification():
+    """`justification` is the only field a notification carries, so the agent's
+    case for the call goes first and the call itself follows."""
+    _, loop = loop_for()
+    text = loop._justify({"name": "support__create_refund",
+                          "args": {"charge_id": "ch_1", "amount_usd": 48.0,
+                                   "why": "charged twice for order #4417"}})
+    assert text.startswith("charged twice for order #4417")
+    assert "support__create_refund" in text
+    assert "why=" not in text, "why leads it rather than being listed as an argument"

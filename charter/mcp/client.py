@@ -339,6 +339,8 @@ class ToolSet:
         for server in self.servers.values():
             for name, tool in server.tools.items():
                 tool.name = server.spec.qualified(name)
+                if server.gated(name):
+                    tool = _explained(tool)
                 out.append(_bounded(tool, getattr(self, "_tool_seconds", 0.0)))
         return out
 
@@ -358,6 +360,50 @@ class ToolSet:
 
     async def __aexit__(self, *exc) -> None:
         await self.aclose()
+
+
+WHY = "why"
+
+
+def _explained(tool):
+    """A gated tool takes `why`, so the agent states its case before a person reads it.
+
+    The harness hands Charter a tool call and nothing else, so without this the
+    only account of a gated action is its arguments. Added to the schema the model
+    sees and stripped before the server is called: the field is Charter's, and a
+    tool that never declared it would reject the call.
+    """
+    schema = dict(getattr(tool, "args_schema", None) or {})
+    props = dict(schema.get("properties") or {})
+    if WHY in props:
+        return tool
+    props[WHY] = {
+        "type": "string", "title": "Why",
+        "description": ("Why this call should go ahead, with the evidence for it. "
+                        "A person reads this and nothing else before deciding, so "
+                        "name what you looked at, not that you looked."),
+    }
+    schema["properties"] = props
+    schema["required"] = list(schema.get("required") or []) + [WHY]
+    tool.args_schema = schema
+
+    if tool.coroutine:
+        inner = tool.coroutine
+
+        async def run(*args, **kwargs):
+            kwargs.pop(WHY, None)
+            return await inner(*args, **kwargs)
+
+        tool.coroutine = run
+    elif tool.func:
+        inner_fn = tool.func
+
+        def run_sync(*args, **kwargs):
+            kwargs.pop(WHY, None)
+            return inner_fn(*args, **kwargs)
+
+        tool.func = run_sync
+    return tool
 
 
 def _bounded(tool, seconds: float):

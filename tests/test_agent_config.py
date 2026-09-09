@@ -300,3 +300,41 @@ def test_starting_a_child_can_be_gated():
     and that one is versioned, because it changes what stops for a human."""
     cfg = AgentConfig.model_validate(load(gate={"tools": ["start_async_task"]}))
     assert "start_async_task" in cfg.gate.tools
+
+
+class TestGatedToolsExplainThemselves:
+    """A gated call reaches a person with the agent's case for it.
+
+    The harness hands Charter a tool call and nothing else, so a gate could only
+    ever show the arguments. `why` is Charter's, added to the schema the model
+    sees and removed before the server is called, which never declared it.
+    """
+
+    def _tool(self, coroutine=None, func=None, schema=None):
+        from types import SimpleNamespace
+        return SimpleNamespace(
+            name="support__create_refund", coroutine=coroutine, func=func,
+            args_schema=schema if schema is not None else {
+                "type": "object",
+                "properties": {"charge_id": {"type": "string"}},
+                "required": ["charge_id"]})
+
+    def test_the_model_is_asked_for_it(self):
+        from charter.mcp.client import _explained
+        tool = _explained(self._tool(func=lambda **kw: kw))
+        assert "why" in tool.args_schema["properties"]
+        assert "why" in tool.args_schema["required"]
+
+    def test_the_server_never_sees_it(self):
+        """It is not a parameter the tool declared, so passing it through would
+        fail the call."""
+        from charter.mcp.client import _explained
+        seen = {}
+        tool = _explained(self._tool(func=lambda **kw: seen.update(kw)))
+        tool.func(charge_id="ch_1", why="charged twice")
+        assert seen == {"charge_id": "ch_1"}
+
+    def test_it_is_added_once(self):
+        from charter.mcp.client import _explained
+        tool = _explained(_explained(self._tool(func=lambda **kw: kw)))
+        assert tool.args_schema["required"].count("why") == 1

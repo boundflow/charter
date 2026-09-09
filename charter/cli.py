@@ -1274,10 +1274,9 @@ def _gate_body(g) -> str:
     harness added is worth the space.
     """
     text = (getattr(g, "justification", "") or "").strip()
-    if not dict(getattr(g, "metadata", None) or {}).get("tool"):
-        return text          # nothing below repeats it, so print all of it
-    parts = text.split("\n\n", 1)
-    return parts[1].strip() if len(parts) > 1 else ""
+    if dict(getattr(g, "metadata", None) or {}).get("tool"):
+        return ""            # the fields below carry the call, the why and the args
+    return text
 
 
 def _gate_fields(g, kind: str) -> list[tuple[str, object]]:
@@ -1294,9 +1293,11 @@ def _gate_fields(g, kind: str) -> list[tuple[str, object]]:
         rows.append(("tool", tool))
     args = meta.pop("args", None)
     if isinstance(args, dict):
-        # One row each. The argument carrying the agent's reasoning is the point of
-        # the screen, and it is unreadable joined onto the end of the others.
-        rows += [(k, v) for k, v in args.items()]
+        args = dict(args)
+        if why := str(args.pop("why", "")).strip():
+            rows.append(("why", why))
+        if args:
+            rows.append(("args", ", ".join(f"{k}={v!r}" for k, v in args.items())))
     elif args:
         rows.append(("args", args))
     rows += sorted(meta.items())

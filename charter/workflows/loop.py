@@ -785,11 +785,16 @@ class Loop:
         harness's line is appended only when it says something we didn't.
         """
         name = action.get("name", "a tool")
-        args = action.get("args") or {}
+        args = dict(action.get("args") or {})
+        # Charter's own field, asked of every gated tool. It leads, because it is
+        # the agent's case rather than a restatement of the call.
+        why = str(args.pop("why", "")).strip()
         detail = ", ".join(f"{k}={v!r}" for k, v in args.items())
         line = f"{self.cfg.name} wants to call {name}"
         if detail:
             line += f" with {detail}"
+        if why:
+            line = f"{why}\n\n{line}"
 
         described = (action.get("description") or "").strip()
         if described and not described.lower().startswith("tool execution requires"):

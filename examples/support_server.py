@@ -80,15 +80,8 @@ def get_charge(charge_id: str) -> dict:
 
 
 @mcp.tool(annotations=MUTATES)
-def create_refund(charge_id: str, amount_usd: float, reason: str) -> dict:
-    """Refund against a charge. A person approves this before it runs.
-
-    reason: the evidence, not a summary. Name the ticket, the charges you compared
-    and what each was for, and why this amount rather than another. "Order #4417
-    charged twice on the 3rd, ch_88213 and ch_88301 at $48.00 each, refunding the
-    duplicate" is useful. "Customer requested a refund" is not: the approver
-    cannot check it.
-    """
+def create_refund(charge_id: str, amount_usd: float) -> dict:
+    """Refund against a charge. A person approves this before it runs."""
     if charge_id not in CHARGES:
         raise ValueError(f"no charge {charge_id}")
     charge = CHARGES[charge_id]
@@ -97,7 +90,7 @@ def create_refund(charge_id: str, amount_usd: float, reason: str) -> dict:
         raise ValueError(
             f"{amount_usd} exceeds the {outstanding} still refundable on {charge_id}")
     charge["refunded_usd"] += amount_usd
-    return {"charge_id": charge_id, "refunded_usd": amount_usd, "reason": reason,
+    return {"charge_id": charge_id, "refunded_usd": amount_usd,
             "remaining_usd": charge["amount_usd"] - charge["refunded_usd"]}
 
 
