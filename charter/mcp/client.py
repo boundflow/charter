@@ -28,6 +28,7 @@ import asyncio
 import logging
 import os
 import re
+import sys
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -137,6 +138,24 @@ def _ran(spec: McpServer) -> str:
     return " ".join([spec.command, *spec.args])
 
 
+def _executable(command: str) -> str:
+    """The command as the transport will spawn it.
+
+    On Windows `npx` on disk is `npx.cmd`, and the spawn is not run through a
+    shell, so nothing expands the extension. The MCP SDK resolves this before
+    spawning; resolving it the same way here keeps the diagnostic honest, since a
+    diagnostic that fails where the connection succeeded reports the wrong cause.
+    """
+    if sys.platform != "win32":
+        return command
+    try:
+        from mcp.os.win32.utilities import get_windows_executable_command
+    except ImportError:
+        # pywin32 missing or mismatched, which is itself why stdio failed.
+        return command
+    return get_windows_executable_command(command)
+
+
 async def _startup(spec: McpServer, seconds: float = 5.0) -> Startup:
     """Run a stdio server on its own and find out what stopped it.
 
@@ -150,7 +169,7 @@ async def _startup(spec: McpServer, seconds: float = 5.0) -> Startup:
     env = {**os.environ, **{n: os.environ[n] for n in spec.env if n in os.environ}}
     try:
         proc = await asyncio.create_subprocess_exec(
-            spec.command, *spec.args,
+            _executable(spec.command), *spec.args,
             stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE, env=env)
     except FileNotFoundError:

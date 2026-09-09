@@ -229,6 +229,37 @@ def test_a_missing_command_is_told_apart_from_a_crashing_one():
     assert "PATH" in found.hint, "the fix is almost always PATH or cwd"
 
 
+class TestTheDiagnosticSpawnsWhatTheTransportWould:
+    """`_startup` runs the command itself to explain a failed connection. It has to
+    resolve the command the way the transport did, or on Windows it reports
+    `command_not_found` for a server that was found — sending someone after PATH
+    when the cause is elsewhere.
+    """
+
+    def test_the_resolver_we_delegate_to_still_exists(self):
+        """Imported lazily and falling back to the bare command, so a rename in the
+        SDK would restore the bug on Windows with nothing failing. This fails."""
+        from mcp.os.win32.utilities import get_windows_executable_command
+
+        assert callable(get_windows_executable_command)
+
+    def test_off_windows_the_command_is_passed_through(self):
+        from charter.mcp.client import _executable
+
+        assert _executable("npx") == "npx"
+
+    def test_on_windows_the_extension_is_resolved_first(self, monkeypatch):
+        """`npx` on disk is `npx.cmd`, and the spawn does not go through a shell."""
+        import charter.mcp.client as client
+        from mcp.os.win32 import utilities
+
+        monkeypatch.setattr(client.sys, "platform", "win32")
+        monkeypatch.setattr(utilities, "get_windows_executable_command",
+                            lambda c: f"C:\\tools\\{c}.cmd")
+
+        assert client._executable("npx") == "C:\\tools\\npx.cmd"
+
+
 def test_a_task_group_error_is_flattened_to_its_causes():
     """`str()` on an ExceptionGroup is the same sentence whatever went wrong."""
     from charter.mcp.client import _leaves
