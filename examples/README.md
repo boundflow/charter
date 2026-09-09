@@ -81,10 +81,6 @@ Further runs are refused until you resume it:
 
     charter resume refund-triage --instance <id>
 
-One run can only propose three refunds, so this always takes more than one run.
-That is the split between the two files: `runtime.yaml` bounds a task,
-`lifecycle.yaml` watches across them.
-
 ## Rolling a version back
 
 `ticket-summarizer` has no gated tools, so nothing stops for a human. It has two
