@@ -1220,20 +1220,21 @@ def _config_lines(cfg) -> list[tuple[str, object]]:
     rather than the absence it is."""
     if cfg is None:
         return [("config", "none on the control plane — charter apply")]
-    schedule = (f"every {_duration(cfg.repeat_every_seconds)}"
-                if cfg.repeat_every_seconds else "on demand")
-    if not cfg.triggerable:
-        schedule += ", no manual runs"
-    queued = (f", max {cfg.max_queue_depth} queued" if cfg.max_queue_depth
-              else ", server default depth" if cfg.invoke_mode.value == "queue" else "")
-    return [("runs", schedule),
-            ("piled-up invokes", cfg.invoke_mode.value + queued),
-            ("if a worker dies", "another picks it up" if cfg.resumable
-             else "the workflow is interrupted until someone clears it"),
+    # Named after the fields they come from, so a value here can be found in the
+    # YAML that set it.
+    return [("schedule", f"every {_duration(cfg.repeat_every_seconds)}"
+             if cfg.repeat_every_seconds else "on demand"),
+            ("triggerable", "yes" if cfg.triggerable else "no"),
+            ("invoke mode", cfg.invoke_mode.value),
+            ("queue depth", str(cfg.max_queue_depth) if cfg.max_queue_depth
+             else "server default" if cfg.invoke_mode.value == "queue" else "-"),
+            # Retries the run on another worker when the infrastructure fails: a
+            # dead worker, an expired lease, a cancelled operation.
+            ("resumable", "yes" if cfg.resumable else "no"),
             # Not "round deadline": `round` is an internal unit, and the whole
             # point of replacing max_iterations with drafts/questions/tool-failures
             # was that nobody should have to know what one is.
-            ("cancelled after", _duration(cfg.invoke_timeout_seconds))]
+            ("timeout", _duration(cfg.invoke_timeout_seconds))]
 
 
 def _stamp(ts) -> str:
