@@ -85,8 +85,8 @@ Further runs are refused until you resume it:
 
 ## Rolling a version back
 
-`ticket-summarizer` has no gated tools, so nothing stops for a human. v2 is a new
-version of its prompt. If it turns out to cost too much, roll back to v1:
+v2 is a new version of `ticket-summarizer`'s prompt. If it turns out to cost too
+much, roll back to v1:
 
     - when: { metric: cost, threshold: 0.05 }
       then: { set_version: { target: 1 } }
