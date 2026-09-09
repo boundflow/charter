@@ -765,3 +765,21 @@ def test_a_deleted_instance_is_not_offered_to_pick_from(cp):
 
     assert "has 1 instance" in out, out
     assert "deleted" not in out
+
+
+def test_the_gate_shows_the_justification_from_its_own_field(cp):
+    """Charter keeps it out of the arguments so nothing renders it twice, so the
+    row has to come from the approval's `justification`, not from `metadata.args`.
+    """
+    cp.workflows = [workflow(
+        "refund-triage", lifecycle_state=LifecycleState.AWAITING_APPROVAL,
+        pending=PendingApproval(
+            approval_id="apr_1", justification="charged twice for order #4417",
+            metadata={"tool": "support__create_refund",
+                      "args": {"charge_id": "ch_1"}},
+            opened_at=NOW, timeout_at=None))]
+
+    out = invoke("pending", "refund-triage", "--instance", "wf_refun").output
+
+    assert "charged twice for order #4417" in out
+    assert "ch_1" in out

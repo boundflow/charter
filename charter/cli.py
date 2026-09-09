@@ -1291,15 +1291,13 @@ def _gate_fields(g, kind: str) -> list[tuple[str, object]]:
                                        or getattr(g, "input_id", ""))]
     if tool := meta.pop("tool", ""):
         rows.append(("tool", tool))
-    args = meta.pop("args", None)
-    if isinstance(args, dict):
-        args = dict(args)
-        if stated := str(args.pop("justification", "")).strip():
-            rows.append(("justification", stated))
-        if args:
-            rows.append(("args", ", ".join(f"{k}={v!r}" for k, v in args.items())))
-    elif args:
-        rows.append(("args", args))
+    # From the approval's own field, not from the arguments: the agent writes it
+    # there and Charter keeps it out of the arguments so nothing renders it twice.
+    if stated := str(getattr(g, "justification", "") or "").strip():
+        rows.append(("justification", stated))
+    if args := meta.pop("args", None):
+        rows.append(("args", ", ".join(f"{k}={v!r}" for k, v in args.items())
+                     if isinstance(args, dict) else args))
     rows += sorted(meta.items())
     if opened := getattr(g, "opened_at", None):
         rows.append(("opened", _stamp(opened)))
