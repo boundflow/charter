@@ -54,7 +54,7 @@ class TestBuild:
         written to a container's read-only mount is the failure this prevents."""
         monkeypatch.setenv("CHARTER_TRACE_PATH", str(tmp_path / "from-env.jsonl"))
         built = trace.build(TraceSink(kind="jsonl", path="${CHARTER_TRACE_PATH}"))
-        assert str(tmp_path / "from-env.jsonl") in repr(vars(built))
+        assert str(tmp_path / "from-env.jsonl") in vars(built).values()
 
 
 class TestTheSinkActuallyWrites:
