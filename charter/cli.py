@@ -1113,7 +1113,7 @@ def describe(
 
             if wf.pending_approval:
                 g = wf.pending_approval
-                ui.gate(agent, "approval", g.approval_id, g.justification, fields=_gate_fields(g, "approval"), actions=[
+                ui.gate(agent, "approval", g.approval_id, _gate_body(g), fields=_gate_fields(g, "approval"), actions=[
                     f"charter approve {g.approval_id} --agent {agent} "
                     f"--instance {short(wf.id)} --reason '...'",
                     f"charter reject  {g.approval_id} --agent {agent} "
@@ -1264,6 +1264,20 @@ def _config_lines(cfg) -> list[tuple[str, object]]:
             # point of replacing max_iterations with drafts/questions/tool-failures
             # was that nobody should have to know what one is.
             ("timeout", _duration(cfg.invoke_timeout_seconds))]
+
+
+def _gate_body(g) -> str:
+    """The justification without its opening sentence.
+
+    That sentence names the tool and its arguments, because a notification carries
+    `justification` alone. Here the fields below carry both, so only anything the
+    harness added is worth the space.
+    """
+    text = (getattr(g, "justification", "") or "").strip()
+    if not dict(getattr(g, "metadata", None) or {}).get("tool"):
+        return text          # nothing below repeats it, so print all of it
+    parts = text.split("\n\n", 1)
+    return parts[1].strip() if len(parts) > 1 else ""
 
 
 def _gate_fields(g, kind: str) -> list[tuple[str, object]]:
@@ -1488,7 +1502,7 @@ def pending(agent: str = typer.Argument(..., help="Agent name"),
 
             if wf.pending_approval:
                 g = wf.pending_approval
-                ui.gate(agent, "approval", g.approval_id, g.justification, fields=_gate_fields(g, "approval"), actions=[
+                ui.gate(agent, "approval", g.approval_id, _gate_body(g), fields=_gate_fields(g, "approval"), actions=[
                     f"charter approve {g.approval_id} --agent {agent} "
                     f"--instance {short(wf.id)} --reason '...'",
                     f"charter reject  {g.approval_id} --agent {agent} "
