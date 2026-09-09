@@ -38,15 +38,7 @@ dependencies = [
     # A separate distribution from langgraph: `langgraph.checkpoint.postgres` and
     # `langgraph.store.postgres`.
     "langgraph-checkpoint-postgres>=3.1",
-    # langgraph-checkpoint-postgres only pulls in bare `psycopg`, which ships no
-    # working driver implementation on its own: psycopg falls back through a
-    # compiled `c` extra (needs libpq dev headers), a `binary` extra (bundled
-    # libpq), and a pure-Python ctypes binding (needs libpq.dll/.so already on the
-    # system) — and without one of the extras pinned, that last resort is what a
-    # fresh install lands on. Most machines, Windows especially, have no system
-    # libpq, so `store.url` (required in every worker.yaml) fails at first
-    # connection with a three-way ImportError. `store.url` isn't optional, so the
-    # driver that makes it work isn't either.
+    # langgraph-checkpoint-postgres only pulls in bare `psycopg`, which has no working driver without an extra.
     "psycopg[binary]>=3.2",
     # `init_chat_model` lives here, and it is how `llm.provider` gets built, so any
     # provider LangChain supports works. Declared rather than inherited from
