@@ -260,6 +260,46 @@ class TestTheDiagnosticSpawnsWhatTheTransportWould:
         assert client._executable("npx") == "C:\\tools\\npx.cmd"
 
 
+class TestALoopThatCannotSpawn:
+    """Windows runs Charter on the Selector loop, because async psycopg refuses the
+    Proactor default and the checkpointer is async psycopg. Selector spawns nothing
+    through asyncio, so the diagnostic has to fall back the way the MCP SDK does —
+    otherwise every stdio failure there reports `NotImplementedError` instead of
+    what actually went wrong.
+    """
+
+    def test_a_missing_command_is_still_told_apart(self, monkeypatch):
+        from charter.mcp.client import _startup
+
+        async def refuses(*a, **k):
+            raise NotImplementedError
+
+        monkeypatch.setattr(asyncio, "create_subprocess_exec", refuses)
+        spec = McpServer(name="absent_one", command="charter-no-such-binary",
+                         args=[], tools=[ToolSpec(tool="t")])
+
+        found = run(_startup(spec, seconds=5))
+
+        assert found.code == "command_not_found"
+        assert "PATH" in found.hint
+
+    def test_a_server_that_dies_still_reports_its_own_last_line(self, monkeypatch):
+        from charter.mcp.client import _startup
+
+        async def refuses(*a, **k):
+            raise NotImplementedError
+
+        monkeypatch.setattr(asyncio, "create_subprocess_exec", refuses)
+        spec = McpServer(name="loud", command=sys.executable,
+                         args=["-c", "import sys; sys.exit('ModuleNotFoundError: no mcp')"],
+                         tools=[ToolSpec(tool="t")])
+
+        found = run(_startup(spec, seconds=10))
+
+        assert found.code == "startup_failed"
+        assert "ModuleNotFoundError" in found.verbatim
+
+
 def test_a_task_group_error_is_flattened_to_its_causes():
     """`str()` on an ExceptionGroup is the same sentence whatever went wrong."""
     from charter.mcp.client import _leaves

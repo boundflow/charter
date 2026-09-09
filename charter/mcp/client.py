@@ -28,6 +28,7 @@ import asyncio
 import logging
 import os
 import re
+import subprocess
 import sys
 from dataclasses import dataclass, field
 from typing import Any
@@ -177,6 +178,11 @@ async def _startup(spec: McpServer, seconds: float = 5.0) -> Startup:
             "command_not_found", f"no {spec.command!r} on PATH",
             f"the worker runs `{_ran(spec)}` from its own working directory, with "
             f"its own PATH — check both are what you expect")
+    except NotImplementedError:
+        # The Selector loop on Windows, which is the one the checkpointer requires.
+        # It spawns nothing through asyncio, so run it in a thread — the same
+        # fallback the MCP SDK makes, so the diagnostic matches the transport.
+        return await asyncio.to_thread(_startup_blocking, spec, env, seconds)
     except Exception as e:  # noqa: BLE001 — diagnosing must not raise
         return Startup("command_not_runnable", f"{type(e).__name__}: {e}",
                        f"the worker could not execute `{spec.command}`")
@@ -199,6 +205,37 @@ async def _startup(spec: McpServer, seconds: float = 5.0) -> Startup:
             "exited_silently", f"exited with code {proc.returncode}, saying nothing",
             f"run `{_ran(spec)}` yourself — it fails the same way outside Charter")
     # Its last line names the failure; everything above is traceback.
+    return Startup(
+        "startup_failed", text.splitlines()[-1].strip(),
+        f"run `{_ran(spec)}` yourself to see all of it. A server that imports "
+        f"fine for you and not for the worker is usually a different interpreter")
+
+
+def _startup_blocking(spec: McpServer, env: dict, seconds: float) -> Startup:
+    """`_startup` without asyncio, for a loop that cannot spawn. Same outcomes."""
+    try:
+        done = subprocess.run(  # noqa: S603
+            [_executable(spec.command), *spec.args],
+            capture_output=True, env=env, timeout=seconds, check=False)
+    except FileNotFoundError:
+        return Startup(
+            "command_not_found", f"no {spec.command!r} on PATH",
+            f"the worker runs `{_ran(spec)}` from its own working directory, with "
+            f"its own PATH — check both are what you expect")
+    except subprocess.TimeoutExpired:
+        return Startup(
+            "no_handshake", f"still running after {seconds:g}s, having said nothing",
+            f"`{_ran(spec)}` started but never spoke MCP — check it is an MCP "
+            f"server and that it uses stdio rather than http")
+    except Exception as e:  # noqa: BLE001 — diagnosing must not raise
+        return Startup("command_not_runnable", f"{type(e).__name__}: {e}",
+                       f"the worker could not execute `{spec.command}`")
+
+    text = (done.stderr or b"").decode("utf-8", "replace").strip()
+    if not text:
+        return Startup(
+            "exited_silently", f"exited with code {done.returncode}, saying nothing",
+            f"run `{_ran(spec)}` yourself — it fails the same way outside Charter")
     return Startup(
         "startup_failed", text.splitlines()[-1].strip(),
         f"run `{_ran(spec)}` yourself to see all of it. A server that imports "
