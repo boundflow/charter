@@ -63,28 +63,27 @@ Approve that one and the task finishes:
                      $48.00 each. Refunded $24.00 for our duplicate charge; the
                      other $48.00 charge was authorized by the customer and remains.
 
-The agent will keep revising while you keep giving it reasons, so `runtime.yaml`
-caps `support__create_refund` at three calls per task. The objective asks it to
-revise rather than repeat; the ceiling is what holds when it doesn't.
+The `runtime.yaml` we applied caps `support__create_refund` at three calls per
+task, so the agent gets three tries to land on the right amount. After that the
+call is refused and it has to finish without a refund.
 
-Turning refunds down often enough says something about the agent rather than the
-task, and `lifecycle.yaml` acts on that: four rejections across the last three
-runs and it pauses itself.
+The `lifecycle.yaml` we applied pauses the agent after four rejections across the
+last three runs. Reject that many times, then look at it:
 
-    AGENT          INSTANCE  VER  STATUS  ACTIVITY
-    refund-triage  5054d8e3  v1   paused  active
+    charter describe refund-triage --instance <id>
 
-    stopped
-      charter resume refund-triage --instance 5054d8e3
-      charter audit refund-triage --instance 5054d8e3
+    refund-triage
+      version    v1
+      status     paused
+      activity   active
 
-Further runs are refused until `charter resume refund-triage --instance <id>`.
-One run can propose at most three refunds, so this can only be a pattern across
-runs, which is the difference between the two policy files: `runtime.yaml` bounds
-one task, `lifecycle.yaml` reacts to several.
+Further runs are refused until you resume it:
 
-`charter status <task-id>` is where you read the outcome, and `charter ui` does
-all of this in a browser, across every agent at once.
+    charter resume refund-triage --instance <id>
+
+One run can only propose three refunds, so this always takes more than one run.
+That is the split between the two files: `runtime.yaml` bounds a task,
+`lifecycle.yaml` watches across them.
 
 ## Rolling a version back
 
