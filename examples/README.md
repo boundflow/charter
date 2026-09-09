@@ -31,12 +31,16 @@ In a third, give it a ticket:
 
     charter run refund-triage --instance <id> --ticket_id T-1041
 
-There are four tickets. Two of them are refunds, two are not:
+There are four tickets:
 
-    T-1041   charged twice for one order        proposes a refund
-    T-1042   package never arrived              proposes a refund
-    T-1043   wrong size, wants an exchange      no refund, finishes on its own
-    T-1044   cancel a subscription              no refund, finishes on its own
+    T-1041   charged twice for one order
+    T-1042   package never arrived
+    T-1043   wrong size, wants an exchange
+    T-1044   cancel a subscription
+
+The first two are the ones a refund is for. On the other two the agent has the
+refund policy in `v1/skills/` to go on, and decides for itself, so it may finish
+without proposing anything and never open a gate.
 
 The agent reads the ticket, looks up the charge, and asks to refund it. Nothing
 holds your terminal open while it waits:
