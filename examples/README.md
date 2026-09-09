@@ -77,6 +77,10 @@ last three runs. Reject that many times, then look at it:
       status     paused
       activity   active
 
+If the fourth rejection lands mid-run, the agent stays active until that run
+finishes. Lifecycle rules are evaluated between runs, not during one, so they
+decide whether the next run starts rather than stopping the one in flight.
+
 Further runs are refused until you resume it:
 
     charter resume refund-triage --instance <id>
