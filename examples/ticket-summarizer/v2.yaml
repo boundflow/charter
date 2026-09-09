@@ -5,14 +5,14 @@ name: ticket-summarizer
 version: 2
 description: Summarizes what changed across open tickets since the last look.
 
-model: claude-sonnet-5
+model: claude-haiku-4-5
 
 objective: |
   Review the open support tickets and summarize what needs a human's attention.
   Lead with anything that has been waiting longest.
 
-schedule:
-  every: 15m
+  For each one, open the ticket and the charge behind it, and say what the
+  customer is owed if anything. Do not summarize from the subject line alone.
 
 mcp:
   - name: support

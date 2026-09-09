@@ -35,9 +35,10 @@ def test_examples_load():
 
 def test_agent_bundle_holds_every_version(project):
     bundle = load_agent(project / "ticket-summarizer")
-    assert bundle.versions[1].model == "claude-haiku-4-5"
-    assert bundle.versions[2].model == "claude-sonnet-5"
+    assert set(bundle.versions) == {1, 2}
     assert bundle.latest.version == 2
+    # What a version is for: the same agent told to do the job differently.
+    assert bundle.versions[1].objective != bundle.versions[2].objective
 
 
 def test_contrasting_agent_is_coalesce():

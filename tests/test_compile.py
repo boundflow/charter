@@ -139,8 +139,25 @@ def test_entry_operation_gets_the_same_timeout_as_every_other_round():
     assert compiled.workflow_config.invoke_timeout_seconds == 40 * 60
 
 
-def test_schedule_becomes_repeat_and_triggerable():
-    c = compile_agent(load_agent(EXAMPLES / "ticket-summarizer"), 2)
+def test_schedule_becomes_repeat_and_triggerable(tmp_path):
+    """Written here rather than read from an example: a schedule the examples
+    happen to carry is one they can stop carrying, and this asserts the
+    translation rather than the example."""
+    agent = tmp_path / "scheduled"
+    agent.mkdir()
+    (agent / "v1.yaml").write_text("""
+apiVersion: charter/v1
+kind: AgentConfig
+name: scheduled
+version: 1
+model: claude-haiku-4-5
+objective: Look at the thing.
+schedule:
+  every: 15m
+response_format:
+  summary: { type: string, description: What happened. }
+""".lstrip())
+    c = compile_agent(load_agent(agent))
     assert c.workflow_config.repeat_every_seconds == 900
     assert c.workflow_config.triggerable is True
 

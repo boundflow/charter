@@ -85,10 +85,10 @@ Further runs are refused until you resume it:
 
 ## Rolling a version back
 
-`ticket-summarizer` has no gated tools, so nothing stops for a human. It has two
-versions: v1 uses a cheaper model and runs when you ask, v2 uses a better one and
-runs every fifteen minutes on its own. `lifecycle.yaml` says what to do if v2 is
-not worth it:
+`ticket-summarizer` has no gated tools, so nothing stops for a human. v2 changes
+the prompt: it opens every ticket and the charge behind it rather than working
+from subject lines. Better summaries, more model calls. `lifecycle.yaml` says
+what to do when that costs too much:
 
     - when: { metric: cost, threshold: 0.05 }
       then: { set_version: { target: 1 } }
