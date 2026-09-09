@@ -33,14 +33,23 @@ In a third, give it a ticket:
 
 Tickets are T-1041, T-1042, T-1043 and T-1044.
 
+Nothing holds your terminal open while it runs. Open the console to watch it:
+
+    charter ui
+
+The task shows up, then a gate when the agent proposes a refund. It refreshes on
+its own, and it is where you answer gates, suspend an agent, or read its run
+history and metrics.
+
+From a terminal instead:
+
+    charter pending refund-triage --instance <id>
+
 That prints the call it wants to make and the two commands that answer it. Both
 take a reason, and the reason is not paperwork: it is handed to the agent.
 
     charter approve <id> --agent refund-triage --instance <id> --reason '...'
     charter reject  <id> --agent refund-triage --instance <id> --reason '...'
-
-`charter ui` answers them in a browser instead, with the same fields and a box
-for your reason.
 
 Approve, and the refund goes through and the task finishes with what it did.
 
