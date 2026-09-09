@@ -81,10 +81,13 @@ def get_charge(charge_id: str) -> dict:
 
 @mcp.tool(annotations=MUTATES)
 def create_refund(charge_id: str, amount_usd: float, reason: str) -> dict:
-    """Refund against a charge. Gated: a person approves this before it runs.
+    """Refund against a charge. A person approves this before it runs.
 
-    `reason` is what the approver reads, so it travels with the call rather than
-    staying in the agent's head.
+    reason: the evidence, not a summary. Name the ticket, the charges you compared
+    and what each was for, and why this amount rather than another. "Order #4417
+    charged twice on the 3rd, ch_88213 and ch_88301 at $48.00 each, refunding the
+    duplicate" is useful. "Customer requested a refund" is not: the approver
+    cannot check it.
     """
     if charge_id not in CHARGES:
         raise ValueError(f"no charge {charge_id}")
