@@ -243,10 +243,12 @@ class TestTheDiagnosticSpawnsWhatTheTransportWould:
 
         assert callable(get_windows_executable_command)
 
-    def test_off_windows_the_command_is_passed_through(self):
-        from charter.mcp.client import _executable
+    def test_off_windows_the_command_is_passed_through(self, monkeypatch):
+        import charter.mcp.client as client
 
-        assert _executable("npx") == "npx"
+        monkeypatch.setattr(client.sys, "platform", "linux")
+
+        assert client._executable("npx") == "npx"
 
     def test_on_windows_the_extension_is_resolved_first(self, monkeypatch):
         """`npx` on disk is `npx.cmd`, and the spawn does not go through a shell."""
