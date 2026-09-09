@@ -1292,9 +1292,13 @@ def _gate_fields(g, kind: str) -> list[tuple[str, object]]:
                                        or getattr(g, "input_id", ""))]
     if tool := meta.pop("tool", ""):
         rows.append(("tool", tool))
-    if args := meta.pop("args", None):
-        rows.append(("args", ", ".join(f"{k}={v!r}" for k, v in args.items())
-                     if isinstance(args, dict) else args))
+    args = meta.pop("args", None)
+    if isinstance(args, dict):
+        # One row each. The argument carrying the agent's reasoning is the point of
+        # the screen, and it is unreadable joined onto the end of the others.
+        rows += [(k, v) for k, v in args.items()]
+    elif args:
+        rows.append(("args", args))
     rows += sorted(meta.items())
     if opened := getattr(g, "opened_at", None):
         rows.append(("opened", _stamp(opened)))
