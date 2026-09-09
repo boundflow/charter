@@ -1071,8 +1071,7 @@ def describe(
             if policy:
                 # Comes back as protobuf-JSON camelCase; show it the way it was
                 # written, so what you read here matches runtime.yaml verbatim.
-                ui.kv([(_snake(k), _fmt(v)) for k, v in sorted(policy.items())
-                       if v not in (0, "", [], None)], indent="  ")
+                ui.kv(_policy_rows(policy), indent="  ")
             else:
                 ui.detail("none armed")
 
@@ -1313,6 +1312,25 @@ def _stamp(ts) -> str:
     return ts.isoformat(sep=" ", timespec="seconds") if ts else "-"
 
 
+def _policy_rows(policy: dict) -> list[tuple[str, object]]:
+    """A runtime policy as rows, with `custom` opened up.
+
+    `custom` is Charter's half: BoundFlow carries it and reads none of it, so it
+    arrives as one opaque dict and printed as one it says nothing. These are
+    limits an operator is looking for by name.
+    """
+    rows, custom = [], {}
+    for key, value in sorted(policy.items()):
+        if key == "custom" and isinstance(value, dict):
+            custom = value
+            continue
+        if value not in (0, "", [], None):
+            rows.append((_snake(key), _fmt(value)))
+    rows += [(_snake(k), _fmt(v)) for k, v in sorted(custom.items())
+             if v not in (0, "", [], None)]
+    return rows
+
+
 def _snake(key: str) -> str:
     return "".join(f"_{c.lower()}" if c.isupper() else c for c in key)
 
@@ -1326,9 +1344,14 @@ def _fmt(value):
 
 
 def _one_limit(d: dict) -> str:
+    """One entry of a limit list. Capability limits name a capability, not a tool,
+    and a tool limit may carry a proposal ceiling as well as a call one."""
+    what = d.get("tool") or d.get("capability") or "?"
     n = next((d[k] for k in ("maxCalls", "max_calls", "maxFailures", "max_failures")
               if d.get(k) is not None), "?")
-    return f"{d.get('tool')}={n}"
+    proposals = next((d[k] for k in ("maxProposals", "max_proposals")
+                      if d.get(k) is not None), None)
+    return f"{what}={n}" + (f" ({proposals} proposals)" if proposals else "")
 
 
 def _took(started, finished) -> str:
@@ -1450,8 +1473,7 @@ def status(task_id: str = typer.Argument(..., help="The id `charter run` printed
                 for agent_name, policy in sorted(dict(policies).items()):
                     if len(policies) > 1:
                         ui.detail(agent_name)
-                    ui.kv([(_snake(k), _fmt(v)) for k, v in sorted(dict(policy).items())],
-                          indent="  ")
+                    ui.kv(_policy_rows(dict(policy)), indent="  ")
 
             if info.invoke_context:
                 given = {k: v for k, v in info.invoke_context.items() if not k.startswith("_")}
