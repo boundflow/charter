@@ -27,19 +27,18 @@ In a second terminal, from this directory, bring up an agent and a worker:
     charter apply .
     charter worker .
 
+`charter ui` opens the console, where the agent appears as soon as it exists.
+Leave it open: everything below shows up there as it happens.
+
 In a third, give it a ticket:
 
     charter run refund-triage --instance <id> --ticket_id T-1041
 
 Tickets are T-1041, T-1042, T-1043 and T-1044.
 
-Nothing holds your terminal open while it runs. Open the console to watch it:
-
-    charter ui
-
-The task shows up, then a gate when the agent proposes a refund. It refreshes on
-its own, and it is where you answer gates, suspend an agent, or read its run
-history and metrics.
+Nothing holds your terminal open while it runs. In the console the task appears,
+then a gate when the agent proposes a refund. Answer it there, with a box for
+your reason.
 
 From a terminal instead:
 
@@ -51,7 +50,8 @@ take a reason, and the reason is not paperwork: it is handed to the agent.
     charter approve <id> --agent refund-triage --instance <id> --reason '...'
     charter reject  <id> --agent refund-triage --instance <id> --reason '...'
 
-Approve, and the refund goes through and the task finishes with what it did.
+Approve, and the refund goes through and the task finishes with what it did. The
+console shows it pick back up, and the audit there records who decided and why.
 
 Reject with a reason that says what was wrong, and the agent works from it:
 
