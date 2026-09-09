@@ -60,9 +60,9 @@ Approve that one and the task finishes:
                      $48.00 each. Refunded $24.00 for our duplicate charge; the
                      other $48.00 charge was authorized by the customer and remains.
 
-The `runtime.yaml` we applied caps `support__create_refund` at three calls per
-task. A rejected proposal never runs, so it does not count: what the cap bounds
-is how many refunds actually go through.
+The `runtime.yaml` we applied lets one refund go through per task, and lets the
+agent propose three. A rejected proposal never runs, so it costs nothing against
+the first number. The second is what stops it asking you a fourth time.
 
 The `lifecycle.yaml` we applied pauses the agent after four rejections across the
 last three runs. Keep rejecting, on this ticket or another, until it stops:
