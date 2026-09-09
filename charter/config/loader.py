@@ -92,8 +92,14 @@ class AgentBundle:
         return {t for cfg in self.versions.values() for t in cfg.all_tools}
 
 
-def load_agent(path: Path) -> AgentBundle:
-    """Load one agent directory. Raises ConfigError listing every problem found."""
+def load_agent(path: Path, *, policy: bool = True) -> AgentBundle:
+    """Load one agent directory. Raises ConfigError listing every problem found.
+
+    `policy=False` reads only what the agent *is* — its versions and their skills —
+    and leaves runtime.yaml and lifecycle.yaml on disk unopened. That is what a
+    worker wants: policy is applied, so a worker reads it back from the control
+    plane, and a file it will never act on has no business failing its boot.
+    """
     problems: list[str] = []
     # Resolved so `.name` is a real directory name: Path(".").name is "", which
     # would otherwise reach pydantic as an agent named "".
@@ -133,10 +139,11 @@ def load_agent(path: Path) -> AgentBundle:
     # management you add once you have a fleet.
     runtime_path = path / RUNTIME_FILE
     runtime = (_parse(RuntimePolicyFile, runtime_path, problems)
-               if runtime_path.exists() else default_runtime(path.name))
+               if policy and runtime_path.exists() else default_runtime(path.name))
 
     lifecycle_path = path / LIFECYCLE_FILE
-    lifecycle = _parse(LifecyclePolicyFile, lifecycle_path, problems) if lifecycle_path.exists() else None
+    lifecycle = (_parse(LifecyclePolicyFile, lifecycle_path, problems)
+                 if policy and lifecycle_path.exists() else None)
 
     if problems:
         raise ConfigError(problems)
@@ -239,9 +246,12 @@ def load_worker(worker_yaml: Path) -> WorkerManifest:
     return manifest
 
 
-def load_project(worker_yaml: Path) -> Project:
+def load_project(worker_yaml: Path, *, policy: bool = True) -> Project:
     """Load a worker manifest and the agents it serves. Raises ConfigError listing
-    every problem across every file."""
+    every problem across every file.
+
+    `policy=False` is passed straight to `load_agent`.
+    """
     problems: list[str] = []
     worker_yaml = Path(worker_yaml)
 
@@ -264,7 +274,7 @@ def load_project(worker_yaml: Path) -> Project:
                 f"{worker_yaml.name}: serves {served.agent!r}, but {agent_dir} does not exist")
             continue
         try:
-            agents[served.agent] = load_agent(agent_dir)
+            agents[served.agent] = load_agent(agent_dir, policy=policy)
         except ConfigError as e:
             problems.extend(f"{served.agent}/{p}" for p in e.problems)
 

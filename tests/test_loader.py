@@ -360,3 +360,29 @@ class TestRepositoryServing:
     def test_a_trailing_slash_does_not_double(self):
         assert (artifact.ref_for("ghcr.io/acme/agents/", "leads-finder", 1)
                 == "ghcr.io/acme/agents/leads-finder:v1")
+
+
+class TestTheWorkerDoesNotReadPolicy:
+    """runtime.yaml and lifecycle.yaml are applied, not served. The worker reads its
+    caps back from the control plane, so opening those files could only make it
+    refuse to boot over something it will never act on.
+    """
+
+    def test_a_broken_policy_file_does_not_stop_the_worker(self, project):
+        (project / "refund-triage" / "lifecycle.yaml").write_text("rules: nonsense\n")
+        (project / "refund-triage" / "runtime.yaml").write_text("per_run: 4\n")
+
+        bundle = load_agent(project / "refund-triage", policy=False)
+
+        assert bundle.latest.name == "refund-triage", "the agent still loads"
+        # The same directory still fails for every command that does read policy.
+        with pytest.raises(ConfigError):
+            load_agent(project / "refund-triage")
+
+    def test_the_files_are_left_unread(self, project):
+        """Not just tolerated — never opened. A cap read here would be the one on
+        disk at boot, and lowering it would take a restart rather than an apply."""
+        bundle = load_agent(project / "refund-triage", policy=False)
+
+        assert bundle.lifecycle is None
+        assert bundle.runtime.per_run.max_cost_usd == 1.00, "the default, not 0.30"

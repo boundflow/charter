@@ -126,16 +126,20 @@ def _resolve(value: str) -> str:
     return out
 
 
-def _load(path: Path):
+def _load(path: Path, *, policy: bool = True):
     """Load whatever `path` points at — a worker manifest, a project directory, or a
-    single agent directory."""
+    single agent directory.
+
+    `policy=False` leaves runtime.yaml and lifecycle.yaml unread, which is what
+    `charter worker` wants and what every other command must not have.
+    """
     path = Path(path)
     if path.is_file():
-        return load_project(path)
+        return load_project(path, policy=policy)
     if (path / "worker.yaml").exists():
-        return load_project(path / "worker.yaml")
+        return load_project(path / "worker.yaml", policy=policy)
     try:
-        return load_agent(path)
+        return load_agent(path, policy=policy)
     except ConfigError:
         raise
     except Exception as e:  # noqa: BLE001 — a bug here must still read as a message
@@ -2067,7 +2071,8 @@ def worker(
 ) -> None:
     """Run the generic worker process."""
     try:
-        project = _load(path)
+        # Policy is applied, not served: the caps come back from the control plane.
+        project = _load(path, policy=False)
     except ConfigError as e:
         _fail(e)
 

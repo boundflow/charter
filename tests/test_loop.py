@@ -930,30 +930,30 @@ class TestProposalCap:
     an agent can put the same decision in front of someone all afternoon.
     """
 
-    def _loop(self, cap):
-        cfg, loop = loop_for()
-        loop.runtime.per_run.tool_call_limits = [
-            type(loop.runtime.per_run.tool_call_limits[0])(
-                tool="support__create_refund", max_calls=1, max_proposals=cap)]
-        return loop
+    def _ctx(self, cap, **kw):
+        """The cap comes from applied policy. A worker never reads the directory's
+        runtime.yaml, so setting it on the loaded config would prove nothing."""
+        custom = {"tool_proposal_limits": [
+            {"tool": "support__create_refund", "max_proposals": cap}]} if cap else {}
+        return FakeCtx(policy_custom=custom, **kw)
 
     def test_it_gates_until_the_cap(self):
-        loop = self._loop(2)
-        ctx = FakeCtx(context={})
+        _, loop = loop_for()
+        ctx = self._ctx(2, context={})
         out = loop._gate(ctx, {"name": "support__create_refund", "args": {}})
         assert isinstance(out, AwaitApproval)
         assert ctx.context["_asks"]["support__create_refund"] == 1
 
     def test_past_the_cap_nobody_is_asked(self):
-        loop = self._loop(1)
-        ctx = FakeCtx(context={"_asks": {"support__create_refund": 1}})
+        _, loop = loop_for()
+        ctx = self._ctx(1, context={"_asks": {"support__create_refund": 1}})
         out = loop._gate(ctx, {"name": "support__create_refund", "args": {}})
         assert not isinstance(out, AwaitApproval), "a person was asked past the cap"
         assert out.context["_decision"] == "asked_enough"
 
     def test_no_cap_means_no_ceiling(self):
-        loop = self._loop(None)
-        ctx = FakeCtx(context={"_asks": {"support__create_refund": 99}})
+        _, loop = loop_for()
+        ctx = self._ctx(None, context={"_asks": {"support__create_refund": 99}})
         out = loop._gate(ctx, {"name": "support__create_refund", "args": {}})
         assert isinstance(out, AwaitApproval)
 

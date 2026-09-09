@@ -229,11 +229,11 @@ class CharterWorker:
             live = await cp.get_agent_runtime_policy(wf.id, bundle.name)
             bundle.runtime = charter_policy.runtime_file(bundle.name, live)
         else:
-            # Nothing applied yet, so there is no policy to read. The local file
-            # stands in until `charter apply` runs, which is the next boot.
+            # Nothing applied yet, so there is no policy to read and the worker
+            # never read the directory's. Conservative defaults hold until
+            # `charter apply` runs, which is the next boot.
             log.warning("%s: no instance on the control plane yet — running on "
-                        "the limits in its directory until one is applied",
-                        bundle.name)
+                        "default limits until one is applied", bundle.name)
         return bundle, versions
 
     async def _pull(self, spec):
@@ -252,7 +252,7 @@ class CharterWorker:
                 ref = artifact.ref_for(spec.repository, spec.agent, version)
                 directory = artifact.pull(ref, self._pulled, insecure=spec.insecure)
                 log.info("pulled %s v%d from %s", spec.agent, version, ref)
-            bundle = load_agent(directory)
+            bundle = load_agent(directory, policy=False)
             versions = sorted(spec.versions)
             absent = [v for v in versions if v not in bundle.versions]
             if absent:
@@ -264,7 +264,7 @@ class CharterWorker:
                     f"{', '.join(f'v{v}' for v in sorted(bundle.versions))}")
         else:
             directory = artifact.pull(spec.ref, self._pulled, insecure=spec.insecure)
-            bundle = load_agent(directory)
+            bundle = load_agent(directory, policy=False)
             versions = [max(bundle.versions)]
             log.info("pulled %s v%d from %s", bundle.name, versions[0], spec.ref)
 

@@ -775,21 +775,16 @@ class Loop:
     def _proposal_cap(self, ctx, tool: str) -> int | None:
         """How many times this tool may be proposed in one task, if capped.
 
-        From the governor's policy like `_max_wait`, so lowering the ceiling takes
-        a `charter apply` and not a worker restart. Falls back to the copy loaded
-        at boot when the governor can't be reached.
+        From the governor's policy, which is where the worker's caps come from —
+        it never reads the directory's runtime.yaml. Unreachable governor means no
+        ceiling, which is the same answer as a tool that declares none.
         """
         from .. import policy as charter_policy
         try:
-            live = charter_policy.proposal_caps(ctx.agent_governor(self.cfg.name).policy)
+            caps = charter_policy.proposal_caps(ctx.agent_governor(self.cfg.name).policy)
         except Exception:  # noqa: BLE001
-            live = {}
-        if tool in live:
-            return live[tool]
-        for limit in self.runtime.per_run.tool_call_limits:
-            if limit.tool == tool:
-                return limit.max_proposals
-        return None
+            return None
+        return caps.get(tool)
 
     def _on_reject(self, tool: str) -> str:
         """What a refusal of this tool means, per tool where it says.

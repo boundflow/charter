@@ -218,7 +218,10 @@ plane — which is what makes them different from `store.url`, holding the check
 and files a parked task resumes from.
 
 At boot the worker loads each listed config version and calls
-`worker.workflow(agent, version=N)` once per version. There is one operation —
+`worker.workflow(agent, version=N)` once per version. It reads only what the agent
+is — `v<N>.yaml` and its skills. `runtime.yaml` and `lifecycle.yaml` are policy,
+applied rather than served, and the caps come back from the control plane, so the
+same numbers hold whether the worker was given a checkout or a pulled artifact. There is one operation —
 the entry handler — re-entered after every park. `serves` is what makes a worker fleet-manageable: which process can run
 which agent is declarative, so you can shard agents across workers, or run a
 canary worker holding only `v2` while the fleet stays on `v1`.
