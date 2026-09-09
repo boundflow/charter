@@ -692,7 +692,11 @@ class Loop:
             on_reject=resume("reject"),
             timeout=self._gate_timeout(tool),
             justification=self._justify(action),
-            metadata={"tool": action.get("name", ""), "args": action.get("args", {})},
+            # Without the justification: it is the field above, and anything
+            # rendering both showed the agent's sentence twice.
+            metadata={"tool": action.get("name", ""),
+                      "args": {k: v for k, v in (action.get("args") or {}).items()
+                               if k != "justification"}},
         )
 
     def _max_wait(self, ctx) -> int:

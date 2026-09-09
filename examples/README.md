@@ -39,6 +39,9 @@ take a reason, and the reason is not paperwork: it is handed to the agent.
     charter approve <id> --agent refund-triage --instance <id> --reason '...'
     charter reject  <id> --agent refund-triage --instance <id> --reason '...'
 
+`charter ui` answers them in a browser instead, with the same fields and a box
+for your reason.
+
 Approve, and the refund goes through and the task finishes with what it did.
 
 Reject with a reason that says what was wrong, and the agent works from it:

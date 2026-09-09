@@ -956,3 +956,14 @@ class TestProposalCap:
         ctx = FakeCtx(context={"_asks": {"support__create_refund": 99}})
         out = loop._gate(ctx, {"name": "support__create_refund", "args": {}})
         assert isinstance(out, AwaitApproval)
+
+
+def test_the_justification_is_not_repeated_in_the_metadata():
+    """It is its own field. Anything rendering both, like the console, showed the
+    agent's sentence once as the justification and again inside the arguments."""
+    _, loop = loop_for()
+    out = loop._gate(FakeCtx(context={}),
+                     {"name": "support__create_refund",
+                      "args": {"charge_id": "ch_1", "justification": "charged twice"}})
+    assert out.metadata["args"] == {"charge_id": "ch_1"}
+    assert out.justification == "charged twice"
