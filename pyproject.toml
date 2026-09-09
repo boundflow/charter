@@ -23,10 +23,9 @@ classifiers = [
 ]
 
 dependencies = [
-    # 0.6.0 is the floor: the governor Charter runs agents under (run_governed,
-    # agent_governor), the shared renderer (boundflow.cli.output), and the console
-    # labels `charter ui` sets all arrived in it.
-    "boundflow>=0.6.0",
+    # The floor is what CI tests: the SDK from PyPI against `:latest` in
+    # deploy/local.compose.yml. An older SDK may work and nobody checks.
+    "boundflow>=0.7.0",
     # The harness, and required rather than optional. Charter is the
     # use-an-existing-harness product: an install that can't run deepagents isn't a
     # smaller Charter, it's a Charter that does nothing. BoundFlow keeps these
