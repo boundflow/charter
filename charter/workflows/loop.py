@@ -786,15 +786,17 @@ class Loop:
         """
         name = action.get("name", "a tool")
         args = dict(action.get("args") or {})
-        # Charter's own field, asked of every gated tool. It leads, because it is
-        # the agent's case rather than a restatement of the call.
-        why = str(args.pop("why", "")).strip()
+        # Charter asks every gated MCP tool for this, so it is the agent's own
+        # account and stands alone.
+        if stated := str(args.pop("justification", "")).strip():
+            return stated
+
+        # A harness tool gated by `gate.tools` never passed through that, so there
+        # is nothing but the call to describe.
         detail = ", ".join(f"{k}={v!r}" for k, v in args.items())
         line = f"{self.cfg.name} wants to call {name}"
         if detail:
             line += f" with {detail}"
-        if why:
-            line = f"{why}\n\n{line}"
 
         described = (action.get("description") or "").strip()
         if described and not described.lower().startswith("tool execution requires"):

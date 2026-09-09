@@ -904,13 +904,20 @@ def test_a_policy_sourced_ceiling_parks_as_an_integer():
     assert isinstance(out.delay_seconds, int)
 
 
-def test_the_agents_why_leads_the_justification():
-    """`justification` is the only field a notification carries, so the agent's
-    case for the call goes first and the call itself follows."""
+def test_the_agents_own_words_are_the_justification():
+    """`justification` is the only field a notification carries, and Charter asks
+    every gated MCP tool for it, so it stands alone rather than being wrapped in a
+    sentence describing the call."""
     _, loop = loop_for()
     text = loop._justify({"name": "support__create_refund",
                           "args": {"charge_id": "ch_1", "amount_usd": 48.0,
-                                   "why": "charged twice for order #4417"}})
-    assert text.startswith("charged twice for order #4417")
-    assert "support__create_refund" in text
-    assert "why=" not in text, "why leads it rather than being listed as an argument"
+                                   "justification": "charged twice for order #4417"}})
+    assert text == "charged twice for order #4417"
+
+
+def test_a_harness_tool_gate_still_describes_the_call():
+    """`gate.tools` gates tools that never passed through the MCP wrapper, so
+    nothing asked the agent for a justification and the call is all there is."""
+    _, loop = loop_for()
+    text = loop._justify({"name": "write_file", "args": {"path": "/tmp/x"}})
+    assert "write_file" in text and "/tmp/x" in text

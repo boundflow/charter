@@ -124,6 +124,11 @@ class ToolSpec(Base):
         "What a refusal of THIS tool means, overriding the agent's `gate.on_reject`. "
         "Rejecting an outreach message should let the rest of the run continue; "
         "rejecting a production deploy usually should not."))
+    justify: bool = Field(default=True, description=(
+        "Gated tools only. Adds a required `justification` argument the model must "
+        "fill, which becomes the gate's justification and is stripped before the "
+        "server is called. Turn it off for a call whose arguments already say "
+        "everything, or where the extra tokens are not worth it."))
 
     @property
     def gated(self) -> bool:

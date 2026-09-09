@@ -434,6 +434,13 @@ tools:
   trace.
 - **`always`** — the call is intercepted and parks, every time.
 
+A gated tool also gains a required `justification` argument, which the model fills
+and Charter strips before calling the server. It becomes the gate's
+`justification`, which is the only field a notification carries. The harness
+supplies no reasoning of its own, so without it an approver sees the call and
+nothing else. `justify: false` on a tool turns it off, for a call whose arguments
+already say everything.
+
 Set every tool to `never`, omit `gate`, and omit `ask_human`, and
 you have a fully autonomous agent that never asks anyone anything. It is still
 governed: per-task budget, tool limits, the full audit trail, and lifecycle rules

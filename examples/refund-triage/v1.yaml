@@ -47,6 +47,8 @@ mcp:
       - tool: create_refund
         approval: always
         on_failure: fail
+        # The model must state its case, and the approver reads it.
+        justify: true
 
 response_format:
   resolution:

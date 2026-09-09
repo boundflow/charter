@@ -1294,8 +1294,8 @@ def _gate_fields(g, kind: str) -> list[tuple[str, object]]:
     args = meta.pop("args", None)
     if isinstance(args, dict):
         args = dict(args)
-        if why := str(args.pop("why", "")).strip():
-            rows.append(("why", why))
+        if stated := str(args.pop("justification", "")).strip():
+            rows.append(("justification", stated))
         if args:
             rows.append(("args", ", ".join(f"{k}={v!r}" for k, v in args.items())))
     elif args:

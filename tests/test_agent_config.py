@@ -322,8 +322,8 @@ class TestGatedToolsExplainThemselves:
     def test_the_model_is_asked_for_it(self):
         from charter.mcp.client import _explained
         tool = _explained(self._tool(func=lambda **kw: kw))
-        assert "why" in tool.args_schema["properties"]
-        assert "why" in tool.args_schema["required"]
+        assert "justification" in tool.args_schema["properties"]
+        assert "justification" in tool.args_schema["required"]
 
     def test_the_server_never_sees_it(self):
         """It is not a parameter the tool declared, so passing it through would
@@ -331,10 +331,27 @@ class TestGatedToolsExplainThemselves:
         from charter.mcp.client import _explained
         seen = {}
         tool = _explained(self._tool(func=lambda **kw: seen.update(kw)))
-        tool.func(charge_id="ch_1", why="charged twice")
+        tool.func(charge_id="ch_1", justification="charged twice")
         assert seen == {"charge_id": "ch_1"}
 
     def test_it_is_added_once(self):
         from charter.mcp.client import _explained
         tool = _explained(_explained(self._tool(func=lambda **kw: kw)))
-        assert tool.args_schema["required"].count("why") == 1
+        assert tool.args_schema["required"].count("justification") == 1
+
+    def test_a_tool_can_decline_to_be_asked(self):
+        """`justify: false` for a call whose arguments already say everything."""
+        from charter.config.agent import AgentConfig
+        raw = load()
+        raw["mcp"][0]["tools"] = [{"tool": "create_refund", "approval": "always",
+                                   "justify": False}]
+        cfg = AgentConfig.model_validate(raw)
+        spec = next(t for t in cfg.mcp[0].tools if t.tool == "create_refund")
+        assert spec.justify is False
+
+    def test_it_is_asked_for_by_default(self):
+        from charter.config.agent import AgentConfig
+        raw = load()
+        raw["mcp"][0]["tools"] = [{"tool": "create_refund", "approval": "always"}]
+        cfg = AgentConfig.model_validate(raw)
+        assert next(t for t in cfg.mcp[0].tools if t.tool == "create_refund").justify
