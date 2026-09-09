@@ -17,6 +17,7 @@ from typing import Any
 
 # Keys under `RuntimePolicy.custom`. Named once.
 CAPABILITY_CALL_LIMITS = "capability_call_limits"
+TOOL_PROPOSAL_LIMITS = "tool_proposal_limits"
 # Charter and the harness enforce these; BoundFlow has no field for them because
 # they are this harness's vocabulary, not a control plane's. They travel so a
 # worker holding only an artifact still has them — behaviour comes from the
@@ -62,6 +63,14 @@ def build(cfg, per_run, limits, authority, operation_timeout: int) -> dict[str, 
         custom[CAPABILITY_CALL_LIMITS] = [
             {"capability": l.capability, "max_calls": l.max_calls}
             for l in per_run.capability_call_limits]
+
+    # BoundFlow's ToolCallLimit has max_calls and no ceiling on *asking*, so the
+    # proposal cap travels here alongside the call cap it sits next to in
+    # runtime.yaml, and moves with `charter apply` like every other limit.
+    proposals = [{"tool": l.tool, "max_proposals": l.max_proposals}
+                 for l in per_run.tool_call_limits if l.max_proposals]
+    if proposals:
+        custom[TOOL_PROPOSAL_LIMITS] = proposals
 
     if authority.allowed_spawns:
         custom[ALLOWED_SPAWNS] = list(authority.allowed_spawns)
@@ -133,6 +142,12 @@ def allowed_capabilities(policy) -> set[str]:
 
 def allowed_tools(policy) -> set[str]:
     return set(_of(policy).get(ALLOWED_TOOLS) or [])
+
+
+def proposal_caps(policy) -> dict[str, int]:
+    """Tool -> how many times one task may propose it at a gate."""
+    return {l["tool"]: int(l["max_proposals"])
+            for l in (_of(policy).get(TOOL_PROPOSAL_LIMITS) or [])}
 
 
 def capability_call_caps(policy) -> dict[str, int]:

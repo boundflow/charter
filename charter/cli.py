@@ -1345,13 +1345,12 @@ def _fmt(value):
 
 def _one_limit(d: dict) -> str:
     """One entry of a limit list. Capability limits name a capability, not a tool,
-    and a tool limit may carry a proposal ceiling as well as a call one."""
+    and proposal limits carry their count under their own key."""
     what = d.get("tool") or d.get("capability") or "?"
-    n = next((d[k] for k in ("maxCalls", "max_calls", "maxFailures", "max_failures")
+    n = next((d[k] for k in ("maxCalls", "max_calls", "maxFailures", "max_failures",
+                             "maxProposals", "max_proposals")
               if d.get(k) is not None), "?")
-    proposals = next((d[k] for k in ("maxProposals", "max_proposals")
-                      if d.get(k) is not None), None)
-    return f"{what}={n}" + (f" ({proposals} proposals)" if proposals else "")
+    return f"{what}={n}"
 
 
 def _took(started, finished) -> str:

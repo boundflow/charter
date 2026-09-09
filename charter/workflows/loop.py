@@ -427,7 +427,7 @@ class Loop:
             # ours, and failing a task because we declined to ask would punish the
             # agent for a limit the operator set.
             tool = ctx.context.pop(K_SPENT_ASKS, "that tool")
-            cap = self._proposal_cap(tool)
+            cap = self._proposal_cap(ctx, tool)
             decision = reject(
                 f"Proposal limit reached for {tool!r} (max {cap}). Nobody was asked "
                 f"this time. Do not propose it again; finish with what you have.")
@@ -673,7 +673,7 @@ class Loop:
             return self._sleep(ctx, action, c)
 
         asked = dict(c.get(K_ASKS) or {})
-        cap = self._proposal_cap(tool)
+        cap = self._proposal_cap(ctx, tool)
         if cap and asked.get(tool, 0) >= cap:
             # Spent, so the agent is told rather than a person being asked again.
             # The call does not run: it was gated, and nobody approved it.
@@ -772,8 +772,20 @@ class Loop:
                     return spec.approval_timeout_seconds
         return self.runtime.authority.approval_timeout_seconds
 
-    def _proposal_cap(self, tool: str) -> int | None:
-        """How many times this tool may be proposed in one task, if capped."""
+    def _proposal_cap(self, ctx, tool: str) -> int | None:
+        """How many times this tool may be proposed in one task, if capped.
+
+        From the governor's policy like `_max_wait`, so lowering the ceiling takes
+        a `charter apply` and not a worker restart. Falls back to the copy loaded
+        at boot when the governor can't be reached.
+        """
+        from .. import policy as charter_policy
+        try:
+            live = charter_policy.proposal_caps(ctx.agent_governor(self.cfg.name).policy)
+        except Exception:  # noqa: BLE001
+            live = {}
+        if tool in live:
+            return live[tool]
         for limit in self.runtime.per_run.tool_call_limits:
             if limit.tool == tool:
                 return limit.max_proposals

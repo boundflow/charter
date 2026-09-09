@@ -189,6 +189,20 @@ def test_charters_own_limits_ride_in_custom():
     assert isinstance(custom["allowed_capabilities"], list)
 
 
+def test_the_proposal_ceiling_travels_in_policy():
+    """BoundFlow's ToolCallLimit caps calls, not asks, so a worker reading only the
+    typed field would gate without a ceiling. Left out of `custom`, the cap lived
+    in the worker's local runtime.yaml: unreachable by `charter apply` and absent
+    entirely from a worker serving a pulled artifact.
+    """
+    from charter import policy
+
+    compiled = refund().runtime_policy
+
+    assert all(l.max_calls for l in compiled.tool_call_limits)
+    assert policy.proposal_caps(compiled) == {"support__create_refund": 3}
+
+
 def test_writing_and_reading_custom_cannot_drift():
     """Both ends live in charter/policy.py for this reason: a key spelled one way
     when written and another when read is a policy that silently stops applying,
