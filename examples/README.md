@@ -31,21 +31,7 @@ In a third, give it a ticket:
 
     charter run refund-triage --instance <id> --ticket_id T-1041
 
-There are four tickets:
-
-    T-1041   charged twice for one order
-    T-1042   package never arrived
-    T-1043   wrong size, wants an exchange
-    T-1044   cancel a subscription
-
-The first two are the ones a refund is for. On the other two the agent has the
-refund policy in `v1/skills/` to go on, and decides for itself, so it may finish
-without proposing anything and never open a gate.
-
-The agent reads the ticket, looks up the charge, and asks to refund it. Nothing
-holds your terminal open while it waits:
-
-    charter pending refund-triage --instance <id>
+Tickets are T-1041, T-1042, T-1043 and T-1044.
 
 That prints the call it wants to make and the two commands that answer it. Both
 take a reason, and the reason is not paperwork: it is handed to the agent.
