@@ -194,8 +194,9 @@ def runtime_file(agent: str, policy) -> Any:
             max_parallel_subagents=mine["max_parallel_subagents"],
             # One number covers every tool, because that is how Charter declares it
             # — the policy carries it per tool only because BoundFlow's field is
-            # shaped that way.
-            max_tool_failures=max(per_tool) if per_tool else 0,
+            # shaped that way. An agent with no tools has no limits to carry, and
+            # 0 is not a value the field takes, so the default stands.
+            **({"max_tool_failures": max(per_tool)} if per_tool else {}),
         ),
         limits=Limits(
             max_tokens_per_call=get("max_tokens_per_call", 1024),

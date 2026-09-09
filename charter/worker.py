@@ -211,16 +211,38 @@ class CharterWorker:
         is the whole point of the artifact being a plain tarball of the layout it
         already expects.
 
-        An artifact carries no runtime.yaml, because that is policy and policy is
-        applied rather than shipped. Its numbers come back from the control plane
-        instead, so a worker serving an artifact enforces exactly what a worker
-        serving a checkout does.
+        Either way the runtime policy comes from the control plane, not from the
+        directory. `charter apply` is what puts it there, and a worker that read
+        the local runtime.yaml instead would enforce whatever was on its disk at
+        boot — so lowering a cap would take a restart, and two workers serving the
+        same agent from different checkouts would enforce different numbers.
         """
-        if not spec.from_registry:
-            bundle = self.project.agents[spec.agent]
-            return bundle, spec.versions
+        from . import policy as charter_policy
 
-        from . import artifact, policy as charter_policy
+        if spec.from_registry:
+            bundle, versions = await self._pull(spec)
+        else:
+            bundle, versions = self.project.agents[spec.agent], spec.versions
+
+        wf = await self._workflow_for(cp, bundle.name)
+        if wf is not None:
+            live = await cp.get_agent_runtime_policy(wf.id, bundle.name)
+            bundle.runtime = charter_policy.runtime_file(bundle.name, live)
+        else:
+            # Nothing applied yet, so there is no policy to read. The local file
+            # stands in until `charter apply` runs, which is the next boot.
+            log.warning("%s: no instance on the control plane yet — running on "
+                        "the limits in its directory until one is applied",
+                        bundle.name)
+        return bundle, versions
+
+    async def _pull(self, spec):
+        """Fetch a registry ref and read it as a directory.
+
+        An artifact holds `v<N>.yaml` and `v<N>/skills/` and nothing else, so the
+        unpacked tree is the layout `load_agent` already reads.
+        """
+        from . import artifact
         from .config.loader import load_agent
 
         if spec.repository:
@@ -246,16 +268,6 @@ class CharterWorker:
             versions = [max(bundle.versions)]
             log.info("pulled %s v%d from %s", bundle.name, versions[0], spec.ref)
 
-        wf = await self._workflow_for(cp, bundle.name)
-        if wf is not None:
-            live = await cp.get_agent_runtime_policy(wf.id, bundle.name)
-            bundle.runtime = charter_policy.runtime_file(bundle.name, live)
-        else:
-            # Nothing applied yet, so there is no policy to read. The defaults are
-            # the ones runtime.yaml would have given, and `charter apply` replaces
-            # them on the next boot.
-            log.warning("%s: no instance on the control plane yet — running on "
-                        "default limits until one is applied", bundle.name)
         return bundle, versions
 
     async def _workflow_for(self, cp: ControlPlaneClient, agent: str):

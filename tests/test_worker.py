@@ -74,3 +74,39 @@ def test_a_worker_with_an_unresolved_model_key_refuses_to_start(tmp_path, monkey
     with pytest.raises(RuntimeError) as e:
         asyncio.run(run_worker(load_project(tmp_path / "worker.yaml")))
     assert "ANTHROPIC_API_KEY" in str(e.value)
+
+
+def test_a_checkout_worker_takes_its_limits_from_the_control_plane(monkeypatch):
+    """runtime.yaml is policy, so `charter apply` owns it and the worker reads it
+    back. Read off local disk instead, a lowered cap needs a worker restart, and
+    two workers serving the same agent from different checkouts enforce different
+    numbers. The registry path always did this; the checkout path did not.
+    """
+    from types import SimpleNamespace
+
+    from charter.config.loader import load_agent
+    from charter.config.worker import Served as ServedSpec
+    from charter.worker import CharterWorker
+
+    bundle = load_agent(Path(__file__).parent.parent / "examples" / "refund-triage")
+    assert bundle.runtime.per_run.max_cost_usd == 0.30, "the file on disk"
+
+    applied = SimpleNamespace(custom={}, max_cost_usd=0.05, max_llm_calls=7)
+    cp = SimpleNamespace(
+        get_agent_runtime_policy=lambda *_: _async(applied),
+        list_workflows=lambda: _async([]))
+
+    stub = SimpleNamespace(
+        project=SimpleNamespace(agents={"refund-triage": bundle}),
+        _tenant_id="t",
+        _workflow_for=lambda *_: _async(SimpleNamespace(id="w")))
+
+    spec = ServedSpec(agent="refund-triage", versions=[1])
+    got, _ = asyncio.run(CharterWorker._bundle_for(stub, cp, spec))
+
+    assert got.runtime.per_run.max_cost_usd == 0.05, "applied policy, not the file"
+    assert got.runtime.per_run.max_llm_calls == 7
+
+
+async def _async(value):
+    return value

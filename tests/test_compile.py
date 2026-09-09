@@ -247,3 +247,18 @@ def test_a_dying_worker_hands_the_operation_over_rather_than_stopping_the_agent(
     needs an operator because a process died is not a durable agent.
     """
     assert compile_agent(load_agent(EXAMPLES / "refund-triage")).workflow_config.resumable is True
+
+
+def test_an_agent_with_no_tools_can_be_rebuilt_from_its_policy():
+    """`tool_failure_limits` is emitted per declared tool, so an agent that calls
+    none applies a policy carrying an empty list. Rebuilding a runtime.yaml from
+    that fed 0 to a field that requires a positive number, and the worker died at
+    boot — which is every worker serving the agent `charter init` writes.
+    """
+    from charter import policy
+
+    applied = type("P", (), {"custom": {}, "max_cost_usd": 0.5,
+                             "tool_failure_limits": []})()
+    rebuilt = policy.runtime_file("triage", applied)
+
+    assert rebuilt.per_run.max_tool_failures > 0
