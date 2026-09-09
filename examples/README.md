@@ -61,12 +61,11 @@ Approve that one and the task finishes:
                      other $48.00 charge was authorized by the customer and remains.
 
 The `runtime.yaml` we applied caps `support__create_refund` at three calls per
-task, so the agent gets three tries to land on the right amount. After that the
-call is refused and it has to finish without a refund.
+task. A rejected proposal never runs, so it does not count: what the cap bounds
+is how many refunds actually go through.
 
 The `lifecycle.yaml` we applied pauses the agent after four rejections across the
-last three runs. Three per run is the cap, so run it again on T-1042, or on
-T-1041 a second time, and keep rejecting. Then look at it:
+last three runs. Keep rejecting, on this ticket or another, until it stops:
 
     charter describe refund-triage --instance <id>
 

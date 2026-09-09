@@ -56,6 +56,8 @@ K_COST = "_cost"
 K_LLM_CALLS = "_llm_calls"
 K_GATES = "_gates"
 K_GATED_TOOL = "_gated_tool"
+K_ASKS = "_asks"          # gates raised per tool, this task
+K_SPENT_ASKS = "_spent_asks"
 K_WAITED = "_waited"      # total seconds slept, for the record
 K_WAITED_FOR = "_waited_for"
 K_SECONDS = "_seconds"   # working time, excluding waits for a human
@@ -420,6 +422,15 @@ class Loop:
                     ctx, f"{refused} was not approved ({because}) and this agent is "
                          f"declared on_reject: fail")
             decision = reject(ctx.approval_reason or "no reason given")
+        elif verdict == "asked_enough":
+            # Not routed through `on_reject`: nobody refused this. The ceiling is
+            # ours, and failing a task because we declined to ask would punish the
+            # agent for a limit the operator set.
+            tool = ctx.context.pop(K_SPENT_ASKS, "that tool")
+            cap = self._proposal_cap(tool)
+            decision = reject(
+                f"Proposal limit reached for {tool!r} (max {cap}). Nobody was asked "
+                f"this time. Do not propose it again; finish with what you have.")
         elif verdict == "answer":
             decision = respond(_answer_text(ctx.input_answer))
         elif verdict == "waited":
@@ -661,6 +672,20 @@ class Loop:
         if action.get("name") == WAIT_TOOL:
             return self._sleep(ctx, action, c)
 
+        asked = dict(c.get(K_ASKS) or {})
+        cap = self._proposal_cap(tool)
+        if cap and asked.get(tool, 0) >= cap:
+            # Spent, so the agent is told rather than a person being asked again.
+            # The call does not run: it was gated, and nobody approved it.
+            log.info("proposal cap: agent=%s tool=%s cap=%d", self.cfg.name, tool, cap)
+            c[K_SPENT_ASKS] = tool
+            return Next(ENTRY_OPERATION,
+                        context=task_context(ctx, {**c, K_DECISION: "asked_enough",
+                                                   K_GATED_TOOL: tool}),
+                        timeout=self._operation_timeout())
+        asked[tool] = asked.get(tool, 0) + 1
+        c[K_ASKS] = asked
+
         log.info("gate: agent=%s tool=%s", self.cfg.name, action.get("name", "?"))
         return AwaitApproval(
             on_approve=resume("approve"),
@@ -742,6 +767,13 @@ class Loop:
                 if server.qualified(spec.tool) == tool and spec.approval_timeout_seconds:
                     return spec.approval_timeout_seconds
         return self.runtime.authority.approval_timeout_seconds
+
+    def _proposal_cap(self, tool: str) -> int | None:
+        """How many times this tool may be proposed in one task, if capped."""
+        for limit in self.runtime.per_run.tool_call_limits:
+            if limit.tool == tool:
+                return limit.max_proposals
+        return None
 
     def _on_reject(self, tool: str) -> str:
         """What a refusal of this tool means, per tool where it says.

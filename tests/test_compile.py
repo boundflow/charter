@@ -57,7 +57,7 @@ def test_runtime_policy():
     assert p.max_tokens_per_call == 1024
     assert p.max_call_seconds == 60
     assert {l.tool: l.max_calls for l in p.tool_call_limits} == {
-        "support__create_refund": 3,
+        "support__create_refund": 1,
         "support__get_charge": 5,
         "support__get_ticket": 10,
     }

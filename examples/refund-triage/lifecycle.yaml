@@ -5,6 +5,6 @@ agent: refund-triage
 
 rules:
   # If 4 refund attempts are rejected in the last 3 runs, stay paused until someone
-  # runs `charter resume`. One run may propose at most 3 times (see runtime policy), so this spans more than one run
+  # runs `charter resume`.
   - when: { metric: approval_rejections, threshold: 4 }
     then: { pause: { window: 3 } }
