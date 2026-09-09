@@ -80,8 +80,12 @@ def get_charge(charge_id: str) -> dict:
 
 
 @mcp.tool(annotations=MUTATES)
-def create_refund(charge_id: str, amount_usd: float) -> dict:
-    """Refund against a charge. Gated: a person approves this before it runs."""
+def create_refund(charge_id: str, amount_usd: float, reason: str) -> dict:
+    """Refund against a charge. Gated: a person approves this before it runs.
+
+    `reason` is what the approver reads, so it travels with the call rather than
+    staying in the agent's head.
+    """
     if charge_id not in CHARGES:
         raise ValueError(f"no charge {charge_id}")
     charge = CHARGES[charge_id]
@@ -90,7 +94,7 @@ def create_refund(charge_id: str, amount_usd: float) -> dict:
         raise ValueError(
             f"{amount_usd} exceeds the {outstanding} still refundable on {charge_id}")
     charge["refunded_usd"] += amount_usd
-    return {"charge_id": charge_id, "refunded_usd": amount_usd,
+    return {"charge_id": charge_id, "refunded_usd": amount_usd, "reason": reason,
             "remaining_usd": charge["amount_usd"] - charge["refunded_usd"]}
 
 

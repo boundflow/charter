@@ -1085,12 +1085,18 @@ def describe(
                    ("runs", metrics.run_count),
                    ("cost", f"${metrics.total_cost_usd:.4f}"),
                    ("llm calls", metrics.total_llm_calls),
+                   # BoundFlow's total_latency_seconds. Working time summed over
+                   # runs, so a gate someone answered tomorrow adds nothing.
+                   ("working time", f"{metrics.total_latency_seconds:.1f}s"),
                    ("failures", metrics.total_failures),
-                   ("rejections", metrics.total_approval_rejections)], indent="  ")
+                   ("rejections", metrics.total_approval_rejections),
+                   ("tool failures", ", ".join(f"{t}={n}" for t, n
+                                               in sorted(metrics.tool_failure_counts.items()))
+                    or "none")], indent="  ")
 
             if wf.pending_approval:
                 g = wf.pending_approval
-                ui.gate(agent, "approval", g.approval_id, g.justification, [
+                ui.gate(agent, "approval", g.approval_id, g.justification, fields=_gate_fields(g, "approval"), actions=[
                     f"charter approve {g.approval_id} --agent {agent} "
                     f"--instance {short(wf.id)} --reason '...'",
                     f"charter reject  {g.approval_id} --agent {agent} "
@@ -1098,7 +1104,7 @@ def describe(
                 ], timeout=_when(g.timeout_at))
             elif wf.pending_input:
                 g = wf.pending_input
-                ui.gate(agent, "an answer", g.input_id, g.prompt, [
+                ui.gate(agent, "an answer", g.input_id, g.prompt, fields=_gate_fields(g, "input"), actions=[
                     f"charter answer {g.input_id} '...' --agent {agent} "
                     f"--instance {short(wf.id)}"],
                     timeout=_when(g.timeout_at))
@@ -1237,6 +1243,29 @@ def _config_lines(cfg) -> list[tuple[str, object]]:
             ("timeout", _duration(cfg.invoke_timeout_seconds))]
 
 
+def _gate_fields(g, kind: str) -> list[tuple[str, object]]:
+    """Everything the control plane holds about an open gate.
+
+    `metadata` carries the tool and its arguments as data rather than as the
+    sentence built from them, and an approval that has been open for two hours is
+    a different decision from one raised a minute ago.
+    """
+    meta = dict(getattr(g, "metadata", None) or {})
+    rows: list[tuple[str, object]] = [(kind, getattr(g, "approval_id", None)
+                                       or getattr(g, "input_id", ""))]
+    if tool := meta.pop("tool", ""):
+        rows.append(("tool", tool))
+    if args := meta.pop("args", None):
+        rows.append(("args", ", ".join(f"{k}={v!r}" for k, v in args.items())
+                     if isinstance(args, dict) else args))
+    rows += sorted(meta.items())
+    if opened := getattr(g, "opened_at", None):
+        rows.append(("opened", _stamp(opened)))
+    if until := getattr(g, "timeout_at", None):
+        rows.append(("expires", _stamp(until)))
+    return rows
+
+
 def _stamp(ts) -> str:
     """A timestamp to the second, date included — `_when` gives clock time only,
     which is ambiguous for a hold placed yesterday. "-" for None, because "never"
@@ -1355,9 +1384,14 @@ def status(task_id: str = typer.Argument(..., help="The id `charter run` printed
                 return
             outcome = info.run_outcome.value if info.run_outcome else info.status.value
             ui.kv([("task", task_id),
+                   ("agent", short(info.workflow_id) if info.workflow_id else ""),
+                   ("kind", _enum_name(info.request_type) if info.request_type else ""),
+                   ("sequence", info.sequence_number),
+                   ("status", _enum_name(info.status)),
                    ("outcome", ui.state(outcome)),
                    ("started", info.created_at.strftime("%Y-%m-%d %H:%M:%S") if info.created_at else ""),
-                   ("took", _took(info.created_at, info.completed_at) or "-")])
+                   ("took", _took(info.created_at, info.completed_at) or "-"),
+                   ("timeout", _duration(info.timeout_seconds) if info.timeout_seconds else "")])
 
             # An uncaught exception never got far enough to publish a result, so
             # failure_reason is the only record of it. Printed whole — a truncated
@@ -1367,6 +1401,17 @@ def status(task_id: str = typer.Argument(..., help="The id `charter run` printed
                 ui.err("failed")
                 for line in info.failure_reason.splitlines():
                     ui.detail(line)
+
+            # The limits this run was actually under, which are the ones armed when
+            # it started rather than whatever `charter apply` has since changed.
+            if policies := getattr(info, "agent_runtime_policies", None):
+                typer.echo()
+                typer.secho("policy in force", fg=typer.colors.BRIGHT_BLACK)
+                for agent_name, policy in sorted(dict(policies).items()):
+                    if len(policies) > 1:
+                        ui.detail(agent_name)
+                    ui.kv([(_snake(k), _fmt(v)) for k, v in sorted(dict(policy).items())],
+                          indent="  ")
 
             if info.invoke_context:
                 given = {k: v for k, v in info.invoke_context.items() if not k.startswith("_")}
@@ -1420,7 +1465,7 @@ def pending(agent: str = typer.Argument(..., help="Agent name"),
 
             if wf.pending_approval:
                 g = wf.pending_approval
-                ui.gate(agent, "approval", g.approval_id, g.justification, [
+                ui.gate(agent, "approval", g.approval_id, g.justification, fields=_gate_fields(g, "approval"), actions=[
                     f"charter approve {g.approval_id} --agent {agent} "
                     f"--instance {short(wf.id)} --reason '...'",
                     f"charter reject  {g.approval_id} --agent {agent} "
@@ -1428,7 +1473,7 @@ def pending(agent: str = typer.Argument(..., help="Agent name"),
                 ], timeout=_when(g.timeout_at))
             elif wf.pending_input:
                 g = wf.pending_input
-                ui.gate(agent, "an answer", g.input_id, g.prompt, [
+                ui.gate(agent, "an answer", g.input_id, g.prompt, fields=_gate_fields(g, "input"), actions=[
                     f"charter answer {g.input_id} '...' --agent {agent} "
                     f"--instance {short(wf.id)}",
                 ], timeout=_when(g.timeout_at))
