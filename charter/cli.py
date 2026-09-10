@@ -1118,9 +1118,9 @@ def describe(
                 g = wf.pending_approval
                 ui.gate(agent, "approval", g.approval_id, _gate_body(g), fields=_gate_fields(g, "approval"), actions=[
                     f"charter approve {g.approval_id} --agent {agent} "
-                    f"--instance {short(wf.id)} --reason '...'",
+                    f"--instance {short(wf.id)} --actor <you> --reason '...'",
                     f"charter reject  {g.approval_id} --agent {agent} "
-                    f"--instance {short(wf.id)} --reason '...'",
+                    f"--instance {short(wf.id)} --actor <you> --reason '...'",
                 ], timeout=_when(g.timeout_at))
             elif wf.pending_input:
                 g = wf.pending_input
@@ -1540,9 +1540,9 @@ def pending(agent: str = typer.Argument(..., help="Agent name"),
                 g = wf.pending_approval
                 ui.gate(agent, "approval", g.approval_id, _gate_body(g), fields=_gate_fields(g, "approval"), actions=[
                     f"charter approve {g.approval_id} --agent {agent} "
-                    f"--instance {short(wf.id)} --reason '...'",
+                    f"--instance {short(wf.id)} --actor <you> --reason '...'",
                     f"charter reject  {g.approval_id} --agent {agent} "
-                    f"--instance {short(wf.id)} --reason '...'",
+                    f"--instance {short(wf.id)} --actor <you> --reason '...'",
                 ], timeout=_when(g.timeout_at))
             elif wf.pending_input:
                 g = wf.pending_input

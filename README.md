@@ -197,7 +197,7 @@ Charter stops the task and shows a person the call it wants to make and the
 reasoning behind it:
 
 ```bash
-charter approve apr_01J8Z --reason "third dispute this month"
+charter approve apr_01J8Z --actor dana --reason "third dispute this month"
 ```
 
 Nothing waits in your terminal. The task ends at the gate and resumes when someone

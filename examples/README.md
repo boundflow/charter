@@ -48,15 +48,15 @@ From a terminal instead:
 That prints the call it wants to make and the two commands that answer it. Both
 take a reason, and the reason is not paperwork: it is handed to the agent.
 
-    charter approve <id> --agent refund-triage --instance <id> --reason '...'
-    charter reject  <id> --agent refund-triage --instance <id> --reason '...'
+    charter approve <id> --agent refund-triage --instance <id> --actor <you> --reason '...'
+    charter reject  <id> --agent refund-triage --instance <id> --actor <you> --reason '...'
 
 Approve, and the refund goes through and the task finishes with what it did. The
 console shows it pick back up, and the audit there records who decided and why.
 
 Reject with a reason that says what was wrong, and the agent works from it:
 
-    charter reject <id> --agent refund-triage --instance <id> \
+    charter reject <id> --agent refund-triage --instance <id> --actor <you> \
       --reason 'only half of this is ours. the second charge was authorised by the
                 customer on a different order, so refund 24.00, not 48.00'
 

@@ -748,8 +748,8 @@ break Charter's invariants outright:
 | `charter status <task-id>` | result, cost, tools called, approvals, why it stopped |
 | `charter audit <agent> --instance <id>` | every governance decision recorded |
 | `charter pending <agent> --instance <id>` | the open approval or input gate |
-| `charter approve <id> [--reason]` | resolve to workflow + approval id, decide |
-| `charter reject <id> [--reason]` | same |
+| `charter approve <id> [--actor] [--reason]` | resolve to workflow + approval id, decide |
+| `charter reject <id> [--actor] [--reason]` | same |
 | `charter answer <id> <text>` | respond to an `ask_human` gate |
 | `charter pause <agent> --instance <id> [--now]` | hold it; prints the suspension id |
 | `charter resume <agent> --instance <id> --suspension <id>` | release that hold |
