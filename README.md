@@ -260,7 +260,8 @@ cutting a release.
 `charter apply` compiles your configuration into workflows and policy on the
 [BoundFlow](https://github.com/boundflow/boundflow) control plane. A Charter worker
 runs the agent in your environment and talks to your MCP servers with credentials
-that stay there.
+that stay there. Run as many workers as you like: any worker serving an agent can
+pick up its next task, which is how a parked run resumes on a different one.
 
 The agent loop itself is [deepagents](https://github.com/langchain-ai/deepagents),
 so its tools, subagents, filesystem and skills work here unchanged. Charter makes
@@ -269,21 +270,21 @@ interrupts into approvals a person can answer tomorrow, and holds it to the limi
 your config declares.
 
 ```
-                    BoundFlow
-                  Control Plane
-             state • policy • lifecycle
-                       │
-                      RPC
-                       │
-                       ▼
-              Your environment
-        ┌─────────────────────────┐
-        │ Charter worker          │
-        │                         │
-        │ model ↔ agent loop      │
-        │             │           │
-        │          MCP tools      │
-        └─────────────────────────┘
+                     BoundFlow
+                   Control Plane
+            state • policy • lifecycle
+                         │
+                        RPC
+             ┌───────────┴───────────┐
+             ▼                       ▼
+  ┌────────────────────┐  ┌────────────────────┐
+  │ Charter worker     │  │ Charter worker     │
+  │                    │  │                    │
+  │ model ↔ agent loop │  │ model ↔ agent loop │
+  │          │         │  │          │         │
+  │      MCP tools     │  │      MCP tools     │
+  └────────────────────┘  └────────────────────┘
+                 Your environment
 ```
 
 Charter adds no database or service of its own. Deployed agents keep running
