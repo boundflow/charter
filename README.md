@@ -26,7 +26,8 @@ access to leave your execution environment.
 - **Your network, your data.** Workers run in your environment, so agents reach
   internal services and databases directly. Model keys and prompts never reach the
   control plane, and the agent's conversation, files and traces stay in stores you
-  run.
+  run. Self-host the control plane and use a local model to run Charter fully
+  air-gapped.
 
 [DESIGN.md](DESIGN.md) documents every field.
 
