@@ -72,7 +72,7 @@ class Pause(Base):
 class Cooldown(Base):
     """Pause, then auto-resume after `seconds`."""
 
-    window: int = Field(gt=0)
+    window: int = Field(gt=0, description="How many recent tasks the metric sums over.")
     seconds: int = Field(gt=0)
 
 

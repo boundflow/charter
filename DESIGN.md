@@ -218,7 +218,10 @@ plane — which is what makes them different from `store.url`, holding the check
 and files a parked task resumes from.
 
 At boot the worker loads each listed config version and calls
-`worker.workflow(agent, version=N)` once per version. There is one operation —
+`worker.workflow(agent, version=N)` once per version. It reads only what the agent
+is — `v<N>.yaml` and its skills. `runtime.yaml` and `lifecycle.yaml` are policy,
+applied rather than served, and the caps come back from the control plane, so the
+same numbers hold whether the worker was given a checkout or a pulled artifact. There is one operation —
 the entry handler — re-entered after every park. `serves` is what makes a worker fleet-manageable: which process can run
 which agent is declarative, so you can shard agents across workers, or run a
 canary worker holding only `v2` while the fleet stays on `v1`.
@@ -433,6 +436,13 @@ tools:
   notification. Still counted, still subject to `tool_call_limits`, still in the
   trace.
 - **`always`** — the call is intercepted and parks, every time.
+
+A gated tool also gains a required `justification` argument, which the model fills
+and Charter strips before calling the server. It becomes the gate's
+`justification`, which is the only field a notification carries. The harness
+supplies no reasoning of its own, so without it an approver sees the call and
+nothing else. `justify: false` on a tool turns it off, for a call whose arguments
+already say everything.
 
 Set every tool to `never`, omit `gate`, and omit `ask_human`, and
 you have a fully autonomous agent that never asks anyone anything. It is still
@@ -678,6 +688,9 @@ exactly one of `pause: {window}`, `cooldown: {window, seconds}`, or
 `set_version: {target}`. A `set_version` target must exist on disk *and* appear in
 `serves[].versions` for every worker running the agent.
 
+`set_version` takes no window: it compares totals for the version now running,
+which reset when the version changes.
+
 ### Worker — `worker.yaml`
 
 Not versioned. Every secret is an `${ENV_VAR}` reference, never a literal.
@@ -735,8 +748,8 @@ break Charter's invariants outright:
 | `charter status <task-id>` | result, cost, tools called, approvals, why it stopped |
 | `charter audit <agent> --instance <id>` | every governance decision recorded |
 | `charter pending <agent> --instance <id>` | the open approval or input gate |
-| `charter approve <id> [--reason]` | resolve to workflow + approval id, decide |
-| `charter reject <id> [--reason]` | same |
+| `charter approve <id> [--actor] [--reason]` | resolve to workflow + approval id, decide |
+| `charter reject <id> [--actor] [--reason]` | same |
 | `charter answer <id> <text>` | respond to an `ask_human` gate |
 | `charter pause <agent> --instance <id> [--now]` | hold it; prints the suspension id |
 | `charter resume <agent> --instance <id> --suspension <id>` | release that hold |

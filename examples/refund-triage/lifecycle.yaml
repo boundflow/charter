@@ -4,14 +4,7 @@ kind: LifecyclePolicy
 agent: refund-triage
 
 rules:
-  - when: { metric: num_failures, threshold: 2 }
-    then: { pause: { window: 5 } }
-
-  - when: { metric: cost, threshold: 5.00 }
-    then: { cooldown: { window: 20, seconds: 300 } }
-
+  # If 3 refund attempts are rejected in the last 3 runs, stay paused until someone
+  # runs `charter resume`.
   - when: { metric: approval_rejections, threshold: 3 }
-    then: { set_version: { target: 1 } }
-
-  - when: { metric: tool_failures, threshold: 3, tool: stripe__create_refund }
-    then: { pause: { window: 10 } }
+    then: { pause: { window: 3 } }

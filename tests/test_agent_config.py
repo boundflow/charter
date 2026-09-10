@@ -24,11 +24,11 @@ def test_example_parses():
 
 def test_derived_views():
     cfg = AgentConfig.model_validate(load())
-    assert cfg.gated_tools == ["stripe__create_refund"]
-    assert "zendesk__get_ticket" in cfg.inline_tools
-    assert "stripe__create_refund" not in cfg.inline_tools
-    assert cfg.fail_fast_tools == {"zendesk__get_ticket", "stripe__create_refund"}
-    assert len(cfg.all_tools) == 7
+    assert cfg.gated_tools == ["support__create_refund"]
+    assert "support__get_ticket" in cfg.inline_tools
+    assert "support__create_refund" not in cfg.inline_tools
+    assert cfg.fail_fast_tools == {"support__get_ticket", "support__create_refund"}
+    assert len(cfg.all_tools) == 3
 
 
 def test_invoke_mode_is_derived():
@@ -62,20 +62,21 @@ class TestTemplating:
 class TestMcpServer:
     def test_command_and_url_together_rejected(self):
         raw = load()
-        raw["mcp"][0]["url"] = "https://example.com"
+        raw["mcp"][0]["command"] = "python"
         with pytest.raises(ValidationError, match="exactly one of"):
             AgentConfig.model_validate(raw)
 
     def test_neither_command_nor_url_rejected(self):
         raw = load()
-        raw["mcp"][0].pop("command")
-        raw["mcp"][0].pop("args")
+        raw["mcp"][0].pop("url")
         with pytest.raises(ValidationError, match="exactly one of"):
             AgentConfig.model_validate(raw)
 
     def test_http_url_rejected(self):
+        """Loopback is the exception; anything else over http carries a token in
+        cleartext."""
         raw = load()
-        raw["mcp"][1]["url"] = "http://mcp.stripe__com"
+        raw["mcp"][0]["url"] = "http://mcp.example.com"
         with pytest.raises(ValidationError, match="https"):
             AgentConfig.model_validate(raw)
 
@@ -83,7 +84,7 @@ class TestMcpServer:
         """`env` takes variable NAMES — this file is committed and immutable, so a
         literal secret here would live forever."""
         raw = load()
-        raw["mcp"][1]["env"] = ["sk_live_abc123"]
+        raw["mcp"][0]["env"] = ["sk_live_abc123"]
         with pytest.raises(ValidationError, match="variable NAME"):
             AgentConfig.model_validate(raw)
 
@@ -299,3 +300,58 @@ def test_starting_a_child_can_be_gated():
     and that one is versioned, because it changes what stops for a human."""
     cfg = AgentConfig.model_validate(load(gate={"tools": ["start_async_task"]}))
     assert "start_async_task" in cfg.gate.tools
+
+
+class TestGatedToolsExplainThemselves:
+    """A gated call reaches a person with the agent's case for it.
+
+    The harness hands Charter a tool call and nothing else, so a gate could only
+    ever show the arguments. `why` is Charter's, added to the schema the model
+    sees and removed before the server is called, which never declared it.
+    """
+
+    def _tool(self, coroutine=None, func=None, schema=None):
+        from types import SimpleNamespace
+        return SimpleNamespace(
+            name="support__create_refund", coroutine=coroutine, func=func,
+            args_schema=schema if schema is not None else {
+                "type": "object",
+                "properties": {"charge_id": {"type": "string"}},
+                "required": ["charge_id"]})
+
+    def test_the_model_is_asked_for_it(self):
+        from charter.mcp.client import _explained
+        tool = _explained(self._tool(func=lambda **kw: kw))
+        assert "justification" in tool.args_schema["properties"]
+        assert "justification" in tool.args_schema["required"]
+
+    def test_the_server_never_sees_it(self):
+        """It is not a parameter the tool declared, so passing it through would
+        fail the call."""
+        from charter.mcp.client import _explained
+        seen = {}
+        tool = _explained(self._tool(func=lambda **kw: seen.update(kw)))
+        tool.func(charge_id="ch_1", justification="charged twice")
+        assert seen == {"charge_id": "ch_1"}
+
+    def test_it_is_added_once(self):
+        from charter.mcp.client import _explained
+        tool = _explained(_explained(self._tool(func=lambda **kw: kw)))
+        assert tool.args_schema["required"].count("justification") == 1
+
+    def test_a_tool_can_decline_to_be_asked(self):
+        """`justify: false` for a call whose arguments already say everything."""
+        from charter.config.agent import AgentConfig
+        raw = load()
+        raw["mcp"][0]["tools"] = [{"tool": "create_refund", "approval": "always",
+                                   "justify": False}]
+        cfg = AgentConfig.model_validate(raw)
+        spec = next(t for t in cfg.mcp[0].tools if t.tool == "create_refund")
+        assert spec.justify is False
+
+    def test_it_is_asked_for_by_default(self):
+        from charter.config.agent import AgentConfig
+        raw = load()
+        raw["mcp"][0]["tools"] = [{"tool": "create_refund", "approval": "always"}]
+        cfg = AgentConfig.model_validate(raw)
+        assert next(t for t in cfg.mcp[0].tools if t.tool == "create_refund").justify

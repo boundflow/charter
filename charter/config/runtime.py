@@ -20,7 +20,13 @@ from .agent import AGENT_NAME, Base, Capability, FileRule
 class ToolCallLimit(Base):
     # Namespaced <server>.<tool>; checked against the agent config by the loader.
     tool: str
-    max_calls: int = Field(gt=0)
+    max_calls: int = Field(gt=0, description=(
+        "Times this tool may run in one task. A gated call that is rejected never "
+        "runs, so it does not count against this."))
+    max_proposals: int | None = Field(default=None, gt=0, description=(
+        "Times this tool may be *proposed* in one task, for a gated tool. Past it "
+        "the agent is told and carries on, so a task cannot ask a person the same "
+        "thing all afternoon. Unset is unlimited."))
 
 
 class CapabilityLimit(Base):

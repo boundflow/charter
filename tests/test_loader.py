@@ -35,9 +35,10 @@ def test_examples_load():
 
 def test_agent_bundle_holds_every_version(project):
     bundle = load_agent(project / "ticket-summarizer")
-    assert bundle.versions[1].model == "claude-haiku-4-5"
-    assert bundle.versions[2].model == "claude-sonnet-5"
+    assert set(bundle.versions) == {1, 2}
     assert bundle.latest.version == 2
+    # What a version is for: the same agent told to do the job differently.
+    assert bundle.versions[1].objective != bundle.versions[2].objective
 
 
 def test_contrasting_agent_is_coalesce():
@@ -65,21 +66,26 @@ class TestAgentCrossFile:
 
     def test_tool_call_limit_for_undeclared_tool(self, project):
         def mutate(raw):
-            raw["per_run"]["tool_call_limits"][0]["tool"] = "stripe__nonexistent"
+            raw["per_run"]["tool_call_limits"][0]["tool"] = "support__nonexistent"
         edit(project / "refund-triage" / "runtime.yaml", mutate)
         with pytest.raises(ConfigError, match="no version of this agent declares"):
             load_agent(project / "refund-triage")
 
     def test_lifecycle_rule_for_undeclared_tool(self, project):
         def mutate(raw):
-            raw["rules"][-1]["when"]["tool"] = "stripe__nonexistent"
+            raw["rules"].append(
+                {"when": {"metric": "tool_failures", "threshold": 3,
+                          "tool": "support__nonexistent"},
+                 "then": {"pause": {"window": 5}}})
         edit(project / "refund-triage" / "lifecycle.yaml", mutate)
         with pytest.raises(ConfigError, match="no version of this agent declares"):
             load_agent(project / "refund-triage")
 
     def test_set_version_target_missing_on_disk(self, project):
         def mutate(raw):
-            raw["rules"][2]["then"]["set_version"]["target"] = 7
+            raw["rules"].append(
+                {"when": {"metric": "cost", "threshold": 9.0},
+                 "then": {"set_version": {"target": 7}}})
         edit(project / "refund-triage" / "lifecycle.yaml", mutate)
         with pytest.raises(ConfigError, match="no v7.yaml"):
             load_agent(project / "refund-triage")
@@ -354,3 +360,29 @@ class TestRepositoryServing:
     def test_a_trailing_slash_does_not_double(self):
         assert (artifact.ref_for("ghcr.io/acme/agents/", "leads-finder", 1)
                 == "ghcr.io/acme/agents/leads-finder:v1")
+
+
+class TestTheWorkerDoesNotReadPolicy:
+    """runtime.yaml and lifecycle.yaml are applied, not served. The worker reads its
+    caps back from the control plane, so opening those files could only make it
+    refuse to boot over something it will never act on.
+    """
+
+    def test_a_broken_policy_file_does_not_stop_the_worker(self, project):
+        (project / "refund-triage" / "lifecycle.yaml").write_text("rules: nonsense\n")
+        (project / "refund-triage" / "runtime.yaml").write_text("per_run: 4\n")
+
+        bundle = load_agent(project / "refund-triage", policy=False)
+
+        assert bundle.latest.name == "refund-triage", "the agent still loads"
+        # The same directory still fails for every command that does read policy.
+        with pytest.raises(ConfigError):
+            load_agent(project / "refund-triage")
+
+    def test_the_files_are_left_unread(self, project):
+        """Not just tolerated — never opened. A cap read here would be the one on
+        disk at boot, and lowering it would take a restart rather than an apply."""
+        bundle = load_agent(project / "refund-triage", policy=False)
+
+        assert bundle.lifecycle is None
+        assert bundle.runtime.per_run.max_cost_usd == 1.00, "the default, not 0.30"

@@ -80,6 +80,8 @@ class FakeCp:
             total_llm_calls=7, total_latency_seconds=12.0,
             total_approval_rejections=0, tool_failure_counts={})
         self.approved = []
+        self.rejected = []
+        self.answered = []
         self.resumed: list = []
         self.suspended: list = []
 
@@ -115,6 +117,12 @@ class FakeCp:
 
     async def approve_workflow(self, workflow_id, approval_id, actor="", reason=""):
         self.approved.append((approval_id, actor, reason))
+
+    async def reject_workflow(self, workflow_id, approval_id, actor="", reason=""):
+        self.rejected.append((approval_id, actor, reason))
+
+    async def submit_input(self, workflow_id, input_id, values, actor=""):
+        self.answered.append((input_id, values, actor))
 
     async def resume_workflow(self, workflow_id, suspension_id):
         self.resumed.append((workflow_id, suspension_id))
@@ -159,7 +167,7 @@ class TestAgents:
         cp.workflows = [workflow("refund-demo",
                                  lifecycle_state=LifecycleState.AWAITING_APPROVAL)]
         out = invoke("agents").output
-        assert "waiting on a human" in out
+        assert "awaiting approval" in out
         assert "charter pending refund-demo" in out
 
     def test_points_a_paused_agent_at_resume(self, cp):
@@ -227,7 +235,7 @@ class TestPendingAndApprove:
         cp.workflows = [workflow(
             "refund-demo", lifecycle_state=LifecycleState.AWAITING_APPROVAL,
             pending=PendingApproval(approval_id="apr_1",
-                                    justification="run desk__create_refund\n  amount: 240",
+                                    justification="run support__create_refund\n  amount: 240",
                                     metadata={}, opened_at=NOW, timeout_at=None))]
         out = invoke("pending", "refund-demo", "--instance", "wf_refun").output
         assert "needs approval" in out
@@ -701,3 +709,77 @@ def test_the_console_names_its_extra_when_it_is_missing(monkeypatch):
     assert res.exit_code == 1
     assert "boundflow-charter[ui]" in res.output
     assert "Traceback" not in res.output
+
+
+def _printed_commands(output: str) -> list[str]:
+    """The `charter ...` lines a gate renders as suggestions."""
+    return [line.strip() for line in output.splitlines()
+            if line.strip().startswith("charter ")]
+
+
+class TestPrintedCommandsRun:
+    """A command the CLI prints has to be one the CLI accepts.
+
+    `charter pending` suggested `charter approve <id> --agent <name> --reason ...`,
+    which exits 1 with "has 1 instance — say which" the moment an agent has an
+    instance, and every applied agent has one. Copying the suggestion was the
+    documented path in the leads demo.
+    """
+
+    def _gate(self, cp):
+        cp.workflows = [workflow(
+            "refund-demo", lifecycle_state=LifecycleState.AWAITING_APPROVAL,
+            pending=PendingApproval(approval_id="apr_1", justification="run it",
+                                    metadata={}, opened_at=NOW, timeout_at=None))]
+
+    def test_pending_suggests_commands_that_parse(self, cp):
+        self._gate(cp)
+        printed = _printed_commands(invoke("pending", "refund-demo",
+                                           "--instance", "wf_refun").output)
+        assert printed, "the gate rendered no commands"
+        for cmd in printed:
+            args = [a.strip("'") for a in cmd.split()[1:]]
+            res = invoke(*args)
+            assert res.exit_code == 0, f"{cmd!r} exits {res.exit_code}: {res.output}"
+
+    def test_describe_suggests_commands_that_parse(self, cp):
+        self._gate(cp)
+        printed = _printed_commands(invoke("describe", "refund-demo",
+                                           "--instance", "wf_refun").output)
+        assert printed, "the gate rendered no commands"
+        for cmd in printed:
+            args = [a.strip("'") for a in cmd.split()[1:]]
+            res = invoke(*args)
+            assert res.exit_code == 0, f"{cmd!r} exits {res.exit_code}: {res.output}"
+
+
+def test_a_deleted_instance_is_not_offered_to_pick_from(cp):
+    """`charter agents` hides deleted instances and the picker did not, so the two
+    disagreed about what exists and the picker suggested a dead one by default.
+    """
+    cp.workflows = [workflow("refund-triage",
+                             lifecycle_state=LifecycleState.DELETED),
+                    workflow("refund-triage")]
+
+    out = invoke("describe", "refund-triage").output
+
+    assert "has 1 instance" in out, out
+    assert "deleted" not in out
+
+
+def test_the_gate_shows_the_justification_from_its_own_field(cp):
+    """Charter keeps it out of the arguments so nothing renders it twice, so the
+    row has to come from the approval's `justification`, not from `metadata.args`.
+    """
+    cp.workflows = [workflow(
+        "refund-triage", lifecycle_state=LifecycleState.AWAITING_APPROVAL,
+        pending=PendingApproval(
+            approval_id="apr_1", justification="charged twice for order #4417",
+            metadata={"tool": "support__create_refund",
+                      "args": {"charge_id": "ch_1"}},
+            opened_at=NOW, timeout_at=None))]
+
+    out = invoke("pending", "refund-triage", "--instance", "wf_refun").output
+
+    assert "charged twice for order #4417" in out
+    assert "ch_1" in out

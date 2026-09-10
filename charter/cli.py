@@ -126,16 +126,20 @@ def _resolve(value: str) -> str:
     return out
 
 
-def _load(path: Path):
+def _load(path: Path, *, policy: bool = True):
     """Load whatever `path` points at — a worker manifest, a project directory, or a
-    single agent directory."""
+    single agent directory.
+
+    `policy=False` leaves runtime.yaml and lifecycle.yaml unread, which is what
+    `charter worker` wants and what every other command must not have.
+    """
     path = Path(path)
     if path.is_file():
-        return load_project(path)
+        return load_project(path, policy=policy)
     if (path / "worker.yaml").exists():
-        return load_project(path / "worker.yaml")
+        return load_project(path / "worker.yaml", policy=policy)
     try:
-        return load_agent(path)
+        return load_agent(path, policy=policy)
     except ConfigError:
         raise
     except Exception as e:  # noqa: BLE001 — a bug here must still read as a message
@@ -470,8 +474,8 @@ def _print_compiled(c) -> None:
         action = rule.action.model_dump()
         kind = action.pop("kind", "?")
         detail = " ".join(f"{k}={v}" for k, v in action.items())
-        typer.echo(f"  rule                 {rule.metric.value} >= {rule.threshold:g}"
-                   f" -> {kind} {detail}".rstrip())
+        typer.echo(f"  rule                 metric={rule.metric.value} "
+                   f"threshold={rule.threshold:g} action={kind} {detail}".rstrip())
 
 
 def _apply_single(bundle, *, dry_run: bool) -> None:
@@ -638,7 +642,8 @@ async def _instances(cp, agent: str, tenant: str | None = None) -> list:
     """
     tid = await _tenant_id(cp, tenant)
     return [w for w in await cp.list_workflows()
-            if w.workflow_type == agent and w.tenant_id == tid]
+            if w.workflow_type == agent and w.tenant_id == tid
+            and w.lifecycle_state.value != "deleted"]
 
 
 async def _select(cp, agent: str, *, instance: str | None, all_: bool,
@@ -690,6 +695,28 @@ async def _select(cp, agent: str, *, instance: str | None, all_: bool,
     raise typer.Exit(1)
 
 
+def _rule_row(rule) -> list[str]:
+    """One lifecycle rule as metric, threshold, window, action, tool."""
+    action = rule.action.model_dump()
+    kind = action.pop("kind", "?")
+    window = action.pop("window", "")
+    seconds = action.pop("seconds", None)
+    detail = " ".join(f"{k}={v}" for k, v in action.items())
+    if seconds:
+        detail = f"{seconds:g}s {detail}".strip()
+    return [rule.metric.value, f"{rule.threshold:g}", str(window),
+            f"{kind} {detail}".strip(), rule.tool or ""]
+
+
+def _enum_name(value) -> str:
+    """An enum as its own name, not its Python repr.
+
+    The SDK hands back `WorkflowPolicyAction.SET_VERSION`; an operator reading an
+    audit trail wants `set_version`.
+    """
+    return str(getattr(value, "value", value)).rsplit(".", 1)[-1].lower()
+
+
 def _state_of(w) -> str:
     state = getattr(w, "workflow_state", None)
     return getattr(state, "value", state) or "unknown"
@@ -710,71 +737,32 @@ async def _workflow_for(cp, agent: str, tenant: str | None = None,
                           tenant=tenant, verb=verb, fans_out=False))[0]
 
 
-def _show_inputs(cfg) -> None:
-    """What this agent takes. Printed on the error paths rather than in --help,
-    because Typer builds --help before we know which agent was named — and the
-    moment someone needs this is the moment they got a flag wrong."""
-    if not cfg.inputs:
-        typer.echo("  (this agent declares no inputs)")
-        return
-    typer.echo(f"\ninputs for {cfg.name}:")
-    for name, spec in cfg.inputs.items():
-        flag = f"--{name.replace('_', '-')}"
-        bits = [spec.type]
-        if spec.required:
-            bits.append("required")
-        if spec.default is not None:
-            bits.append(f"default {spec.default}")
-        if spec.enum:
-            bits.append("one of " + "|".join(str(v) for v in spec.enum))
-        typer.echo(f"  {flag:<24} {', '.join(bits)}")
-        if spec.description:
-            typer.echo(f"  {'':<24} {spec.description}")
 
 
-def _coerce(spec, raw: str, name: str):
-    """CLI flags arrive as strings; the declared type is what they must become."""
-    try:
-        if spec.type == "integer":
-            return int(raw)
-        if spec.type == "number":
-            return float(raw)
-        if spec.type == "boolean":
-            return raw.lower() in ("1", "true", "yes", "y")
-        return raw
-    except ValueError:
-        raise typer.BadParameter(f"--{name.replace('_', '-')} must be a {spec.type}")
+
+
 
 
 @app.command(context_settings={"allow_extra_args": True, "ignore_unknown_options": True})
 def run(
     ctx: typer.Context,
-    agent: str = typer.Argument(..., help="Agent name (its directory)"),
-    path: Path = typer.Option(Path("."), "--path", help="Where agents live"),
+    agent: str = typer.Argument(..., help="Agent name"),
     instance: str = typer.Option(None, "--instance", help="Which instance to run on"),
     all_: bool = typer.Option(False, "--all", help="Start a task on every instance"),
     tenant: str = TENANT,
 ) -> None:
-    """Start one task. Declared inputs become --flags, validated before the request
-    is created so a typo fails here instead of burning a run.
+    """Start one task. Declared inputs are passed as --flags.
+
+    No checkout needed: the inputs travel with the versioned config the worker is
+    already serving, so it is the worker that fills declared defaults and refuses a
+    task missing a required one. Validating here as well would mean a second copy
+    of the spec, and the CLI disagreeing with the worker whenever it was stale.
 
     An agent with several instances needs one naming: each has its own state, so
     sending work to the wrong one isn't a scheduling detail, it's the wrong entity
     doing the job.
     """
-    agent_dir = Path(path) / agent
-    if not agent_dir.is_dir():
-        agent_dir = Path(path)
-    try:
-        bundle = load_agent(agent_dir)
-    except ConfigError as e:
-        _err(f"no agent config found for {agent!r} — `run` needs it to validate inputs")
-        for p in e.problems:
-            _err(f"  - {p}")
-        raise typer.Exit(1)
-
-    cfg = bundle.latest
-    flags = {}
+    context = {}
     args = list(ctx.args)
     while args:
         token = args.pop(0)
@@ -787,27 +775,7 @@ def run(
             value = args.pop(0)
         else:
             value = "true"
-        flags[key] = value
-
-    unknown = set(flags) - set(cfg.inputs)
-    if unknown:
-        _err(f"unknown input(s): {', '.join(sorted(unknown))}")
-        _show_inputs(cfg)
-        raise typer.Exit(1)
-
-    context = {}
-    for name, spec in cfg.inputs.items():
-        if name in flags:
-            context[name] = _coerce(spec, flags[name], name)
-        elif spec.default is not None:
-            context[name] = spec.default
-        elif spec.required:
-            _err(f"--{name.replace('_', '-')} is required")
-            _show_inputs(cfg)
-            raise typer.Exit(1)
-        if spec.enum and name in context and context[name] not in spec.enum:
-            _err(f"--{name.replace('_', '-')} must be one of {spec.enum}")
-            raise typer.Exit(1)
+        context[key] = _typed(value)
 
     async def go():
         async with _cp() as cp:
@@ -821,6 +789,22 @@ def run(
                     ui.detail(f"charter status {request_id}")
 
     asyncio.run(go())
+
+
+def _typed(value: str):
+    """A flag is text; the config it feeds declares numbers and booleans.
+
+    Nothing here knows the declared type, so the shape is read off the value. A
+    quoted number stays a number, which is the same guess YAML makes.
+    """
+    if value in ("true", "false"):
+        return value == "true"
+    for cast in (int, float):
+        try:
+            return cast(value)
+        except ValueError:
+            pass
+    return value
 
 
 agent_app = typer.Typer(help="Create and destroy instances of an agent.")
@@ -962,19 +946,38 @@ def agents(tenant: str = TENANT) -> None:
             # The two reasons an agent isn't working, and they need different acts.
             waiting = [w for w in mine
                        if w.lifecycle_state.value in ("awaiting_approval", "awaiting_input")]
-            stopped = [w for w in mine if not ui.working(w.workflow_state.value)]
+            # Cooling down is not stopped: it starts again on its own, so it gets
+            # the time rather than a resume nobody needs to run.
+            cooling = [w for w in mine if w.cooldown_until]
+            deleting = [w for w in mine if w.deletion_requested_at]
+            stopped = [w for w in mine if not ui.working(w.workflow_state.value)
+                       and not w.cooldown_until and not w.deletion_requested_at]
 
+            # The table already carries both states, so these are the commands
+            # for them and not a second telling of what it says.
             if waiting:
                 typer.echo()
-                ui.warn(f"{len(waiting)} waiting on a human")
+                ui.warn("awaiting approval")
                 for w in waiting:
                     ui.detail(f"charter pending {w.workflow_type} --instance {short(w.id)}")
+            if cooling:
+                typer.echo()
+                ui.warn("cooling down")
+                for w in cooling:
+                    ui.detail(f"{w.workflow_type} {short(w.id)} until "
+                              f"{_stamp(w.cooldown_until)}")
+            if deleting:
+                typer.echo()
+                ui.warn("deleting")
+                for w in deleting:
+                    ui.detail(f"{w.workflow_type} {short(w.id)} requested "
+                              f"{_stamp(w.deletion_requested_at)}")
             if stopped:
                 typer.echo()
-                ui.warn(f"{len(stopped)} stopped — no new tasks will start")
+                ui.warn("stopped")
                 for w in stopped:
-                    ui.detail(f"charter audit {w.workflow_type} --instance {short(w.id)}")
                     ui.detail(f"charter resume {w.workflow_type} --instance {short(w.id)}")
+                    ui.detail(f"charter audit {w.workflow_type} --instance {short(w.id)}")
 
     asyncio.run(go())
 
@@ -1072,8 +1075,7 @@ def describe(
             if policy:
                 # Comes back as protobuf-JSON camelCase; show it the way it was
                 # written, so what you read here matches runtime.yaml verbatim.
-                ui.kv([(_snake(k), _fmt(v)) for k, v in sorted(policy.items())
-                       if v not in (0, "", [], None)], indent="  ")
+                ui.kv(_policy_rows(policy), indent="  ")
             else:
                 ui.detail("none armed")
 
@@ -1086,45 +1088,45 @@ def describe(
 
             rules = await cp.get_workflow_lifecycle_policy(wf.id)
             metrics = await cp.get_workflow_metrics(wf.id)
-            observed = {
-                "num_failures": metrics.total_failures,
-                "cost": round(metrics.total_cost_usd, 4),
-                "num_llm_calls": metrics.total_llm_calls,
-                "latency": round(metrics.total_latency_seconds, 1),
-                "approval_rejections": metrics.total_approval_rejections,
-            }
             typer.echo()
             typer.secho("rules", fg=typer.colors.BRIGHT_BLACK)
             if not rules:
                 ui.detail("none armed")
-            labels = [f"{r.metric.value}{f'[{r.tool}]' if r.tool else ''}" for r in rules]
-            width = max((len(l) for l in labels), default=0)
-            for rule, label in zip(rules, labels):
-                action = rule.action.model_dump()
-                kind = action.pop("kind", "?")
-                detail = " ".join(f"{k}={v}" for k, v in action.items())
-                now = (metrics.tool_failure_counts.get(rule.tool, 0) if rule.tool
-                       else observed.get(rule.metric.value, 0))
-                line = (f"  {label.ljust(width)}   {now} of {rule.threshold:g}"
-                        f"   -> {kind} {detail}".rstrip())
-                (ui.warn if now >= rule.threshold else typer.echo)(line)
+            else:
+                ui.table(["metric", "threshold", "window", "action", "tool"],
+                         [_rule_row(r) for r in rules])
 
             typer.echo()
-            typer.secho("so far", fg=typer.colors.BRIGHT_BLACK)
-            ui.kv([("runs", metrics.run_count),
+            typer.secho("metrics", fg=typer.colors.BRIGHT_BLACK)
+            # Totals for the version now running, which is not the window a pause or
+            # cooldown rule reads. Printed as its own block rather than beside a
+            # threshold, where it read as progress toward one.
+            ui.kv([("version", f"v{wf.version}"),
+                   ("runs", metrics.run_count),
                    ("cost", f"${metrics.total_cost_usd:.4f}"),
-                   ("llm calls", metrics.total_llm_calls)], indent="  ")
+                   ("llm calls", metrics.total_llm_calls),
+                   # BoundFlow's total_latency_seconds. Working time summed over
+                   # runs, so a gate someone answered tomorrow adds nothing.
+                   ("working time", f"{metrics.total_latency_seconds:.1f}s"),
+                   ("failures", metrics.total_failures),
+                   ("rejections", metrics.total_approval_rejections),
+                   ("tool failures", ", ".join(f"{t}={n}" for t, n
+                                               in sorted(metrics.tool_failure_counts.items()))
+                    or "none")], indent="  ")
 
             if wf.pending_approval:
                 g = wf.pending_approval
-                ui.gate(agent, "approval", g.approval_id, g.justification, [
-                    f"charter approve {g.approval_id} --agent {agent} --reason '...'",
-                    f"charter reject  {g.approval_id} --agent {agent} --reason '...'",
+                ui.gate(agent, "approval", g.approval_id, _gate_body(g), fields=_gate_fields(g, "approval"), actions=[
+                    f"charter approve {g.approval_id} --agent {agent} "
+                    f"--instance {short(wf.id)} --actor <you> --reason '...'",
+                    f"charter reject  {g.approval_id} --agent {agent} "
+                    f"--instance {short(wf.id)} --actor <you> --reason '...'",
                 ], timeout=_when(g.timeout_at))
             elif wf.pending_input:
                 g = wf.pending_input
-                ui.gate(agent, "an answer", g.input_id, g.prompt, [
-                    f"charter answer {g.input_id} '...' --agent {agent}"],
+                ui.gate(agent, "an answer", g.input_id, g.prompt, fields=_gate_fields(g, "input"), actions=[
+                    f"charter answer {g.input_id} '...' --agent {agent} "
+                    f"--instance {short(wf.id)}"],
                     timeout=_when(g.timeout_at))
 
     asyncio.run(go())
@@ -1161,8 +1163,6 @@ def tasks(agent: str = typer.Argument(...),
             line = (f"{agent}  v{wf.version}  {ui.state(wf.workflow_state.value)}"
                     f"  {ui.state(wf.lifecycle_state.value)}")
             typer.echo(line)
-            if not ui.working(wf.workflow_state.value):
-                ui.warn(f"  stopped — no new tasks will start")
 
             m = await cp.get_workflow_metrics(wf.id)
             typer.echo(f"\n  {m.run_count} run(s), ${m.total_cost_usd:.4f}, "
@@ -1190,15 +1190,21 @@ def tasks(agent: str = typer.Argument(...),
                 ui.dim(f"no matching tasks ({total} total)")
                 return
             reasons = await _reasons(cp, shown)
-            ui.table(["task", "outcome", "started", "took"],
+            # status and outcome are different answers: status is where the request
+            # got to, outcome is what the run decided. A run can be completed and
+            # unsuccessful.
+            ui.table(["task", "kind", "status", "outcome", "started", "took"],
                      [[r.request_id,
-                       ui.state((r.run_outcome or r.status).value),
+                       _enum_name(r.request_type) if r.request_type else "",
+                       _enum_name(r.status),
+                       ui.state(r.run_outcome.value) if r.run_outcome else "",
                        r.created_at.strftime("%m-%d %H:%M") if r.created_at else "",
                        _took(r.created_at, r.completed_at)] for r in shown],
                      notes=[_first_line(reasons.get(r.request_id, r.failure_reason))
                             for r in shown])
             if len(shown) < len(runs):
-                ui.dim(f"  {len(shown)} of {len(runs)} matching ({total} total) — -n 0 for all")
+                ui.dim(f"  {len(shown)} of {len(runs)} matching, {total} total. "
+                       f"-n 0 for all")
 
     asyncio.run(go())
 
@@ -1246,20 +1252,61 @@ def _config_lines(cfg) -> list[tuple[str, object]]:
     rather than the absence it is."""
     if cfg is None:
         return [("config", "none on the control plane — charter apply")]
-    schedule = (f"every {_duration(cfg.repeat_every_seconds)}"
-                if cfg.repeat_every_seconds else "on demand")
-    if not cfg.triggerable:
-        schedule += ", no manual runs"
-    queued = (f", max {cfg.max_queue_depth} queued" if cfg.max_queue_depth
-              else ", server default depth" if cfg.invoke_mode.value == "queue" else "")
-    return [("runs", schedule),
-            ("piled-up invokes", cfg.invoke_mode.value + queued),
-            ("if a worker dies", "another picks it up" if cfg.resumable
-             else "the workflow is interrupted until someone clears it"),
+    # Named after the fields they come from, so a value here can be found in the
+    # YAML that set it.
+    return [("schedule", f"every {_duration(cfg.repeat_every_seconds)}"
+             if cfg.repeat_every_seconds else "on demand"),
+            ("triggerable", "yes" if cfg.triggerable else "no"),
+            ("invoke mode", cfg.invoke_mode.value),
+            ("queue depth", str(cfg.max_queue_depth) if cfg.max_queue_depth
+             else "server default" if cfg.invoke_mode.value == "queue" else "-"),
+            # Retries the run on another worker when the infrastructure fails: a
+            # dead worker, an expired lease, a cancelled operation.
+            ("resumable", "yes" if cfg.resumable else "no"),
             # Not "round deadline": `round` is an internal unit, and the whole
             # point of replacing max_iterations with drafts/questions/tool-failures
             # was that nobody should have to know what one is.
-            ("cancelled after", _duration(cfg.invoke_timeout_seconds))]
+            ("timeout", _duration(cfg.invoke_timeout_seconds))]
+
+
+def _gate_body(g) -> str:
+    """The justification without its opening sentence.
+
+    That sentence names the tool and its arguments, because a notification carries
+    `justification` alone. Here the fields below carry both, so only anything the
+    harness added is worth the space.
+    """
+    text = (getattr(g, "justification", "") or "").strip()
+    if dict(getattr(g, "metadata", None) or {}).get("tool"):
+        return ""            # the fields below carry the call, the why and the args
+    return text
+
+
+def _gate_fields(g, kind: str) -> list[tuple[str, object]]:
+    """Everything the control plane holds about an open gate.
+
+    `metadata` carries the tool and its arguments as data rather than as the
+    sentence built from them, and an approval that has been open for two hours is
+    a different decision from one raised a minute ago.
+    """
+    meta = dict(getattr(g, "metadata", None) or {})
+    rows: list[tuple[str, object]] = [(kind, getattr(g, "approval_id", None)
+                                       or getattr(g, "input_id", ""))]
+    if tool := meta.pop("tool", ""):
+        rows.append(("tool", tool))
+    # From the approval's own field, not from the arguments: the agent writes it
+    # there and Charter keeps it out of the arguments so nothing renders it twice.
+    if stated := str(getattr(g, "justification", "") or "").strip():
+        rows.append(("justification", stated))
+    if args := meta.pop("args", None):
+        rows.append(("args", ", ".join(f"{k}={v!r}" for k, v in args.items())
+                     if isinstance(args, dict) else args))
+    rows += sorted(meta.items())
+    if opened := getattr(g, "opened_at", None):
+        rows.append(("opened", _stamp(opened)))
+    if until := getattr(g, "timeout_at", None):
+        rows.append(("expires", _stamp(until)))
+    return rows
 
 
 def _stamp(ts) -> str:
@@ -1267,6 +1314,25 @@ def _stamp(ts) -> str:
     which is ambiguous for a hold placed yesterday. "-" for None, because "never"
     and "midnight 1970" are not the same thing."""
     return ts.isoformat(sep=" ", timespec="seconds") if ts else "-"
+
+
+def _policy_rows(policy: dict) -> list[tuple[str, object]]:
+    """A runtime policy as rows, with `custom` opened up.
+
+    `custom` is Charter's half: BoundFlow carries it and reads none of it, so it
+    arrives as one opaque dict and printed as one it says nothing. These are
+    limits an operator is looking for by name.
+    """
+    rows, custom = [], {}
+    for key, value in sorted(policy.items()):
+        if key == "custom" and isinstance(value, dict):
+            custom = value
+            continue
+        if value not in (0, "", [], None):
+            rows.append((_snake(key), _fmt(value)))
+    rows += [(_snake(k), _fmt(v)) for k, v in sorted(custom.items())
+             if v not in (0, "", [], None)]
+    return rows
 
 
 def _snake(key: str) -> str:
@@ -1278,13 +1344,25 @@ def _fmt(value):
     read path, snake_case from a pydantic dump on the compile path."""
     if isinstance(value, list):
         return ", ".join(_one_limit(d) if isinstance(d, dict) else str(d) for d in value)
+    return _num(value)
+
+
+def _num(value):
+    """Counts read back as floats, because protobuf JSON has one number type. A
+    ceiling of 40 calls printed as 40.0 reads like a number someone computed."""
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
     return value
 
 
 def _one_limit(d: dict) -> str:
-    n = next((d[k] for k in ("maxCalls", "max_calls", "maxFailures", "max_failures")
+    """One entry of a limit list. Capability limits name a capability, not a tool,
+    and proposal limits carry their count under their own key."""
+    what = d.get("tool") or d.get("capability") or "?"
+    n = next((d[k] for k in ("maxCalls", "max_calls", "maxFailures", "max_failures",
+                             "maxProposals", "max_proposals")
               if d.get(k) is not None), "?")
-    return f"{d.get('tool')}={n}"
+    return f"{what}={_num(n)}"
 
 
 def _took(started, finished) -> str:
@@ -1366,7 +1444,7 @@ def _rule_line(metric: str, value, rules: list, tool: str | None = None) -> None
                       if getattr(rule.then, k))
         at = rule.when.threshold
         near = value >= at
-        text = f"    {label:<28} {value}  (of {at:g} -> {action})"
+        text = f"    {label:<28} {value}  threshold={at:g} action={action}"
         (_warn if near else typer.echo)(text)
 
 
@@ -1380,9 +1458,14 @@ def status(task_id: str = typer.Argument(..., help="The id `charter run` printed
                 return
             outcome = info.run_outcome.value if info.run_outcome else info.status.value
             ui.kv([("task", task_id),
+                   ("agent", short(info.workflow_id) if info.workflow_id else ""),
+                   ("kind", _enum_name(info.request_type) if info.request_type else ""),
+                   ("sequence", info.sequence_number),
+                   ("status", _enum_name(info.status)),
                    ("outcome", ui.state(outcome)),
                    ("started", info.created_at.strftime("%Y-%m-%d %H:%M:%S") if info.created_at else ""),
-                   ("took", _took(info.created_at, info.completed_at) or "-")])
+                   ("took", _took(info.created_at, info.completed_at) or "-"),
+                   ("timeout", _duration(info.timeout_seconds) if info.timeout_seconds else "")])
 
             # An uncaught exception never got far enough to publish a result, so
             # failure_reason is the only record of it. Printed whole — a truncated
@@ -1392,6 +1475,16 @@ def status(task_id: str = typer.Argument(..., help="The id `charter run` printed
                 ui.err("failed")
                 for line in info.failure_reason.splitlines():
                     ui.detail(line)
+
+            # The limits this run was actually under, which are the ones armed when
+            # it started rather than whatever `charter apply` has since changed.
+            if policies := getattr(info, "agent_runtime_policies", None):
+                typer.echo()
+                typer.secho("policy in force", fg=typer.colors.BRIGHT_BLACK)
+                for agent_name, policy in sorted(dict(policies).items()):
+                    if len(policies) > 1:
+                        ui.detail(agent_name)
+                    ui.kv(_policy_rows(dict(policy)), indent="  ")
 
             if info.invoke_context:
                 given = {k: v for k, v in info.invoke_context.items() if not k.startswith("_")}
@@ -1445,14 +1538,17 @@ def pending(agent: str = typer.Argument(..., help="Agent name"),
 
             if wf.pending_approval:
                 g = wf.pending_approval
-                ui.gate(agent, "approval", g.approval_id, g.justification, [
-                    f"charter approve {g.approval_id} --agent {agent} --reason '...'",
-                    f"charter reject  {g.approval_id} --agent {agent} --reason '...'",
+                ui.gate(agent, "approval", g.approval_id, _gate_body(g), fields=_gate_fields(g, "approval"), actions=[
+                    f"charter approve {g.approval_id} --agent {agent} "
+                    f"--instance {short(wf.id)} --actor <you> --reason '...'",
+                    f"charter reject  {g.approval_id} --agent {agent} "
+                    f"--instance {short(wf.id)} --actor <you> --reason '...'",
                 ], timeout=_when(g.timeout_at))
             elif wf.pending_input:
                 g = wf.pending_input
-                ui.gate(agent, "an answer", g.input_id, g.prompt, [
-                    f"charter answer {g.input_id} '...' --agent {agent}",
+                ui.gate(agent, "an answer", g.input_id, g.prompt, fields=_gate_fields(g, "input"), actions=[
+                    f"charter answer {g.input_id} '...' --agent {agent} "
+                    f"--instance {short(wf.id)}",
                 ], timeout=_when(g.timeout_at))
             else:
                 ui.dim(f"{agent}: nothing waiting ({wf.lifecycle_state.value})")
@@ -1679,8 +1775,9 @@ def audit(
                     typer.echo(f"{stamp}  input {e.decision.value}: "
                                f"{(e.answer or {}).get('text', '')}")
                 else:
-                    typer.echo(f"{stamp}  policy fired: {getattr(e, 'metric', '')} -> "
-                               f"{getattr(e, 'action', '')}")
+                    typer.echo(f"{stamp}  policy fired: "
+                               f"metric={_enum_name(getattr(e, 'metric', ''))} "
+                               f"action={_enum_name(getattr(e, 'action', ''))}")
 
     asyncio.run(go())
 
@@ -1982,7 +2079,8 @@ def worker(
 ) -> None:
     """Run the generic worker process."""
     try:
-        project = _load(path)
+        # Policy is applied, not served: the caps come back from the control plane.
+        project = _load(path, policy=False)
     except ConfigError as e:
         _fail(e)
 

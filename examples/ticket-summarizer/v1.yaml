@@ -12,10 +12,8 @@ objective: |
   Lead with anything that has been waiting longest.
 
 mcp:
-  - name: zendesk
-    command: npx
-    args: ["-y", "@zendesk/mcp"]
-    env: [ZENDESK_SUBDOMAIN, ZENDESK_API_TOKEN]
+  - name: support
+    url: http://localhost:8931/mcp
     tools:
       - tool: search_tickets
         on_failure: fail

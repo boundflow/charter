@@ -2,7 +2,8 @@ from pathlib import Path
 
 from boundflow import Cooldown, InvokeMode, Pause, SetVersion, WorkflowMetric
 
-from charter.compile import compile_agent
+from charter.compile import compile_agent, compile_workflow_rules
+from charter.config.lifecycle import LifecyclePolicyFile
 from charter.config.loader import load_agent
 
 EXAMPLES = Path(__file__).parent.parent / "examples"
@@ -10,6 +11,25 @@ EXAMPLES = Path(__file__).parent.parent / "examples"
 
 def refund():
     return compile_agent(load_agent(EXAMPLES / "refund-triage"))
+
+
+def compiled_rules(*rules):
+    """Rules built here rather than read from an example.
+
+    These assert how the compiler translates each action and metric. Reading them
+    off `examples/` tied that coverage to what the example happens to demonstrate,
+    so trimming a rule there silently deleted a compiler test.
+    """
+    return compile_workflow_rules(LifecyclePolicyFile.model_validate({
+        "apiVersion": "charter/v1", "kind": "LifecyclePolicy",
+        "agent": "refund-triage", "rules": list(rules)}))
+
+
+def declared_proposal_caps():
+    """What the example's runtime.yaml declares, read rather than restated, so
+    tuning the example does not break a test about the compiler."""
+    per_run = load_agent(EXAMPLES / "refund-triage").runtime.per_run
+    return {l.tool: l.max_proposals for l in per_run.tool_call_limits if l.max_proposals}
 
 
 def summarizer(version=None):
@@ -44,8 +64,9 @@ def test_runtime_policy():
     assert p.max_tokens_per_call == 1024
     assert p.max_call_seconds == 60
     assert {l.tool: l.max_calls for l in p.tool_call_limits} == {
-        "stripe__get_charge": 5,
-        "zendesk__search_tickets": 10,
+        "support__create_refund": 1,
+        "support__get_charge": 5,
+        "support__get_ticket": 10,
     }
 
 
@@ -65,7 +86,14 @@ def test_convergence_limits_have_no_boundflow_equivalent():
 
 
 def test_workflow_rules():
-    rules = {r.metric: r for r in refund().workflow_rules}
+    rules = {r.metric: r for r in compiled_rules(
+        {"when": {"metric": "num_failures", "threshold": 2},
+         "then": {"pause": {"window": 5}}},
+        {"when": {"metric": "cost", "threshold": 5.0},
+         "then": {"cooldown": {"window": 20, "seconds": 300}}},
+        {"when": {"metric": "approval_rejections", "threshold": 3},
+         "then": {"set_version": {"target": 1}}},
+    )}
 
     failures = rules[WorkflowMetric.NUM_FAILURES]
     assert failures.threshold == 2
@@ -84,9 +112,12 @@ def test_workflow_rules():
 def test_tool_failures_renames_to_boundflows_misnomer():
     """Charter says `tool_failures` because the engine compares a summed count, not
     a ratio. BoundFlow's metric is named TOOL_FAILURE_RATE."""
-    rule = next(r for r in refund().workflow_rules
-                if r.metric == WorkflowMetric.TOOL_FAILURE_RATE)
-    assert rule.tool == "stripe__create_refund"
+    rule, = compiled_rules(
+        {"when": {"metric": "tool_failures", "threshold": 3,
+                  "tool": "support__create_refund"},
+         "then": {"pause": {"window": 10}}})
+    assert rule.metric == WorkflowMetric.TOOL_FAILURE_RATE
+    assert rule.tool == "support__create_refund"
     assert rule.threshold == 3
 
 
@@ -115,8 +146,25 @@ def test_entry_operation_gets_the_same_timeout_as_every_other_round():
     assert compiled.workflow_config.invoke_timeout_seconds == 40 * 60
 
 
-def test_schedule_becomes_repeat_and_triggerable():
-    c = compile_agent(load_agent(EXAMPLES / "ticket-summarizer"), 2)
+def test_schedule_becomes_repeat_and_triggerable(tmp_path):
+    """Written here rather than read from an example: a schedule the examples
+    happen to carry is one they can stop carrying, and this asserts the
+    translation rather than the example."""
+    agent = tmp_path / "scheduled"
+    agent.mkdir()
+    (agent / "v1.yaml").write_text("""
+apiVersion: charter/v1
+kind: AgentConfig
+name: scheduled
+version: 1
+model: claude-haiku-4-5
+objective: Look at the thing.
+schedule:
+  every: 15m
+response_format:
+  summary: { type: string, description: What happened. }
+""".lstrip())
+    c = compile_agent(load_agent(agent))
     assert c.workflow_config.repeat_every_seconds == 900
     assert c.workflow_config.triggerable is True
 
@@ -146,6 +194,21 @@ def test_charters_own_limits_ride_in_custom():
     # Plain JSON-able data, because the wire treats it as a struct — a model here
     # would only be re-parsed by us on the far side.
     assert isinstance(custom["allowed_capabilities"], list)
+
+
+def test_the_proposal_ceiling_travels_in_policy():
+    """BoundFlow's ToolCallLimit caps calls, not asks, so a worker reading only the
+    typed field would gate without a ceiling. Left out of `custom`, the cap lived
+    in the worker's local runtime.yaml: unreachable by `charter apply` and absent
+    entirely from a worker serving a pulled artifact.
+    """
+    from charter import policy
+
+    compiled = refund().runtime_policy
+
+    assert all(l.max_calls for l in compiled.tool_call_limits)
+    assert declared_proposal_caps(), "the example should declare a proposal cap"
+    assert policy.proposal_caps(compiled) == declared_proposal_caps()
 
 
 def test_writing_and_reading_custom_cannot_drift():
@@ -192,3 +255,37 @@ def test_a_dying_worker_hands_the_operation_over_rather_than_stopping_the_agent(
     needs an operator because a process died is not a durable agent.
     """
     assert compile_agent(load_agent(EXAMPLES / "refund-triage")).workflow_config.resumable is True
+
+
+def test_an_agent_with_no_tools_can_be_rebuilt_from_its_policy():
+    """`tool_failure_limits` is emitted per declared tool, so an agent that calls
+    none applies a policy carrying an empty list. Rebuilding a runtime.yaml from
+    that fed 0 to a field that requires a positive number, and the worker died at
+    boot — which is every worker serving the agent `charter init` writes.
+    """
+    from charter import policy
+
+    applied = type("P", (), {"custom": {}, "max_cost_usd": 0.5,
+                             "tool_failure_limits": []})()
+    rebuilt = policy.runtime_file("triage", applied)
+
+    assert rebuilt.per_run.max_tool_failures > 0
+
+
+def test_custom_reads_the_same_off_the_wire_as_off_the_compiler():
+    """The SDK returns a typed object when you write a policy and protobuf JSON —
+    a plain dict — when you read one back. Reading only the attribute made every
+    cap and allowlist vanish on the read path, silently: a worker booting from
+    applied policy enforced nothing it declared.
+    """
+    from charter import policy
+
+    compiled = refund().runtime_policy
+    off_the_wire = {"maxCostUsd": 0.30, "custom": dict(compiled.custom)}
+
+    assert policy.allowed_capabilities(off_the_wire) == \
+        policy.allowed_capabilities(compiled)
+    assert policy.capability_call_caps(off_the_wire) == \
+        policy.capability_call_caps(compiled)
+    assert policy.proposal_caps(off_the_wire) == declared_proposal_caps()
+    assert policy.timeouts(off_the_wire) == policy.timeouts(compiled)

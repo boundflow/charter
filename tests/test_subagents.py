@@ -57,7 +57,7 @@ def test_other_tools_are_untouched():
         return "done"
 
     async def go():
-        return [await mw.awrap_tool_call(Req("desk__get_ticket"), ok)
+        return [await mw.awrap_tool_call(Req("support__get_ticket"), ok)
                 for _ in range(5)]
 
     assert run(go()) == ["done"] * 5

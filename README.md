@@ -57,7 +57,7 @@ export ANTHROPIC_API_KEY=<your model key>   # or another provider's, see worker.
 ```
 
 Remove it with `docker compose -f local.compose.yml down -v`. Cloning the repo
-works too, and gets you the examples and the demo alongside it.
+works too, and gets you the examples alongside it.
 
 For production you have two options. Run the BoundFlow backend yourself, following
 its [deployment docs](https://github.com/boundflow/boundflow/blob/main/docs/deployment.md).
@@ -197,7 +197,7 @@ Charter stops the task and shows a person the call it wants to make and the
 reasoning behind it:
 
 ```bash
-charter approve apr_01J8Z --reason "third dispute this month"
+charter approve apr_01J8Z --actor dana --reason "third dispute this month"
 ```
 
 Nothing waits in your terminal. The task ends at the gate and resumes when someone
@@ -288,10 +288,9 @@ through their workers and the control plane whether or not the CLI is installed.
 
 - [DESIGN.md](DESIGN.md): every field of every file, and the decisions behind them
 - [deploy/](deploy/): running workers as containers, and a control plane locally
-- [examples/](examples/): fuller configurations, for reading. They name real
-  Zendesk and Stripe servers, so they do not run as-is
-- [demo/leads/](demo/leads/): an agent that runs end to end against a local MCP
-  server, where you play the people it contacts
+- [examples/](examples/): two agents over a toy support system. One gates a refund
+  and pauses itself when too many are turned down, the other rolls itself back to
+  an earlier version. They run with nothing but a model key
 
 ## Development
 

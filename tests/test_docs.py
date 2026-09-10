@@ -17,7 +17,7 @@ from charter.config.runtime import RuntimePolicyFile
 from charter.config.worker import WorkerManifest
 
 ROOT = Path(__file__).parent.parent
-DOCS = ["README.md", "DESIGN.md", "demo/leads/README.md", "deploy/README.md"]
+DOCS = ["README.md", "DESIGN.md", "examples/README.md", "deploy/README.md"]
 
 
 def _model_for(doc: dict):

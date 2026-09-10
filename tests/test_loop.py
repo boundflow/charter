@@ -158,8 +158,8 @@ def test_gated_tools_become_interrupts_not_omissions():
     rather than reject and hope the next attempt is right."""
     cfg = load_agent(EXAMPLES / "refund-triage").latest
     gates = interrupt_on(cfg)
-    assert set(gates) == {"stripe__create_refund"}
-    assert gates["stripe__create_refund"]["allowed_decisions"] == [
+    assert set(gates) == {"support__create_refund"}
+    assert gates["support__create_refund"]["allowed_decisions"] == [
         "approve", "edit", "reject"]
 
 
@@ -195,16 +195,16 @@ def test_a_pending_action_parks_the_task():
     cfg, loop = loop_for()
     interrupt = {"__interrupt__": [type("I", (), {
         "value": {"action_requests": [
-            {"name": "stripe__create_refund", "args": {"amount": 40},
+            {"name": "support__create_refund", "args": {"amount": 40},
              "description": "Refund $40 to the customer"}]},
         "id": "int-1"})()]}
     ctx = FakeCtx(results=[FakeResult(interrupt)])
 
     out = run(loop.entry(ctx))
     assert isinstance(out, AwaitApproval)
-    assert "stripe__create_refund" in out.justification
+    assert "support__create_refund" in out.justification
     assert "Refund $40 to the customer" in out.justification
-    assert out.metadata["tool"] == "stripe__create_refund"
+    assert out.metadata["tool"] == "support__create_refund"
     assert out.timeout == loop.runtime.authority.approval_timeout_seconds
     assert ctx.context[K_GATES] == 1
 
@@ -329,13 +329,13 @@ def test_a_gate_says_what_is_about_to_happen():
     _, loop = loop_for()
     interrupt = {"__interrupt__": [type("I", (), {
         "value": {"action_requests": [{
-            "name": "desk__create_refund",
+            "name": "support__create_refund",
             "args": {"charge_id": "ch_9002", "amount_usd": 240},
             "description": "Tool execution requires approval"}]},
         "id": "i"})()]}
 
     out = run(loop.entry(FakeCtx(results=[FakeResult(interrupt)])))
-    assert "desk__create_refund" in out.justification
+    assert "support__create_refund" in out.justification
     assert "ch_9002" in out.justification
     assert "Tool execution requires" not in out.justification
 
@@ -415,7 +415,7 @@ def test_a_fail_fast_tool_ends_the_task():
     lived in the loop that was deleted. A declared field that quietly does nothing
     is worse than not having it."""
     cfg, loop = loop_for()
-    assert "desk__create_refund" in cfg.fail_fast_tools or cfg.fail_fast_tools
+    assert "support__create_refund" in cfg.fail_fast_tools or cfg.fail_fast_tools
 
     tool = next(iter(cfg.fail_fast_tools))
     out = run(loop.entry(FakeCtx(results=[
@@ -434,7 +434,7 @@ def test_an_ordinary_tool_failure_does_not_end_the_task():
     _, loop = loop_for()
     out = run(loop.entry(FakeCtx(results=[
         FakeResult({"resolution": "worked around it"},
-                   tool_failures={"desk__get_ticket": 2})])))
+                   tool_failures={"support__get_charge": 2})])))
 
     assert isinstance(out, Complete)
     assert "failed" not in out.result
@@ -531,7 +531,7 @@ class TestGateGranularity:
         return Loop(bundle.latest, bundle.runtime, tools=empty,
                     chat_model=lambda m: object(), store_url="postgresql://unused")
 
-    def _interrupt(self, tool="stripe__create_refund"):
+    def _interrupt(self, tool="support__create_refund"):
         return {"__interrupt__": [type("I", (), {
             "value": {"action_requests": [
                 {"name": tool, "args": {"amount": 40}, "description": "d"}]},
@@ -562,13 +562,13 @@ class TestGateGranularity:
         scanning statuses never learns the thing it existed to do didn't happen."""
         loop = self._loop(on_reject="fail")
         ctx = FakeCtx(context={K_DECISION: "reject",
-                               "_gated_tool": "stripe__create_refund"},
+                               "_gated_tool": "support__create_refund"},
                       approval_reason="too much",
                       results=[FakeResult({"resolution": "unused"})])
 
         out = run(loop.entry(ctx))
         assert out.result["failed"] is True
-        assert "stripe__create_refund" in out.result["reason"]
+        assert "support__create_refund" in out.result["reason"]
         assert "too much" in out.result["reason"]
 
     def test_an_unanswered_gate_under_fail_says_so(self):
@@ -608,7 +608,7 @@ class TestGatingAnything:
         """Two mechanisms, one for each declaration site — a tool that declares
         `approval: always` shouldn't also need naming here."""
         cfg = self._cfg([])
-        assert "stripe__create_refund" in interrupt_on(cfg)
+        assert "support__create_refund" in interrupt_on(cfg)
 
     def test_a_typo_is_refused_rather_than_gating_nothing(self):
         from charter.config.agent import Gate
@@ -902,3 +902,68 @@ def test_a_policy_sourced_ceiling_parks_as_an_integer():
                                  policy_custom={MAX_WAIT_SECONDS: 300.0})))
     assert out.delay_seconds == 300
     assert isinstance(out.delay_seconds, int)
+
+
+def test_the_agents_own_words_are_the_justification():
+    """`justification` is the only field a notification carries, and Charter asks
+    every gated MCP tool for it, so it stands alone rather than being wrapped in a
+    sentence describing the call."""
+    _, loop = loop_for()
+    text = loop._justify({"name": "support__create_refund",
+                          "args": {"charge_id": "ch_1", "amount_usd": 48.0,
+                                   "justification": "charged twice for order #4417"}})
+    assert text == "charged twice for order #4417"
+
+
+def test_a_harness_tool_gate_still_describes_the_call():
+    """`gate.tools` gates tools that never passed through the MCP wrapper, so
+    nothing asked the agent for a justification and the call is all there is."""
+    _, loop = loop_for()
+    text = loop._justify({"name": "write_file", "args": {"path": "/tmp/x"}})
+    assert "write_file" in text and "/tmp/x" in text
+
+
+class TestProposalCap:
+    """`max_proposals` bounds how often one task may ask a person about a tool.
+
+    `max_calls` counts runs, and a rejected gated call never runs, so without this
+    an agent can put the same decision in front of someone all afternoon.
+    """
+
+    def _ctx(self, cap, **kw):
+        """The cap comes from applied policy. A worker never reads the directory's
+        runtime.yaml, so setting it on the loaded config would prove nothing."""
+        custom = {"tool_proposal_limits": [
+            {"tool": "support__create_refund", "max_proposals": cap}]} if cap else {}
+        return FakeCtx(policy_custom=custom, **kw)
+
+    def test_it_gates_until_the_cap(self):
+        _, loop = loop_for()
+        ctx = self._ctx(2, context={})
+        out = loop._gate(ctx, {"name": "support__create_refund", "args": {}})
+        assert isinstance(out, AwaitApproval)
+        assert ctx.context["_asks"]["support__create_refund"] == 1
+
+    def test_past_the_cap_nobody_is_asked(self):
+        _, loop = loop_for()
+        ctx = self._ctx(1, context={"_asks": {"support__create_refund": 1}})
+        out = loop._gate(ctx, {"name": "support__create_refund", "args": {}})
+        assert not isinstance(out, AwaitApproval), "a person was asked past the cap"
+        assert out.context["_decision"] == "asked_enough"
+
+    def test_no_cap_means_no_ceiling(self):
+        _, loop = loop_for()
+        ctx = self._ctx(None, context={"_asks": {"support__create_refund": 99}})
+        out = loop._gate(ctx, {"name": "support__create_refund", "args": {}})
+        assert isinstance(out, AwaitApproval)
+
+
+def test_the_justification_is_not_repeated_in_the_metadata():
+    """It is its own field. Anything rendering both, like the console, showed the
+    agent's sentence once as the justification and again inside the arguments."""
+    _, loop = loop_for()
+    out = loop._gate(FakeCtx(context={}),
+                     {"name": "support__create_refund",
+                      "args": {"charge_id": "ch_1", "justification": "charged twice"}})
+    assert out.metadata["args"] == {"charge_id": "ch_1"}
+    assert out.justification == "charged twice"

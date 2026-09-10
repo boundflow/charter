@@ -112,8 +112,9 @@ def working(workflow_state: str) -> bool:
     return workflow_state == "active"
 
 
-def gate(agent: str, kind: str, gate_id: str, body: str, actions: list[str],
-         timeout: str = "") -> None:
+def gate(agent: str, kind: str, gate_id: str, body: str,
+         actions: list[str] | None = None, timeout: str = "",
+         fields: list[tuple[str, object]] | None = None) -> None:
     """The one screen that should slow you down.
 
     Everything else here is built to be skimmed; this is a person deciding whether
@@ -132,8 +133,11 @@ def gate(agent: str, kind: str, gate_id: str, body: str, actions: list[str],
     typer.echo()
     for line in body.strip().splitlines():
         typer.echo(f"   {line}")
+    if fields:
+        typer.echo()
+        kv(fields, indent="   ")
     typer.echo()
-    for action in actions:
+    for action in actions or []:
         typer.secho(f"   {action}", fg=typer.colors.BRIGHT_BLACK)
     typer.echo()
 

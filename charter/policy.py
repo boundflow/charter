@@ -17,6 +17,7 @@ from typing import Any
 
 # Keys under `RuntimePolicy.custom`. Named once.
 CAPABILITY_CALL_LIMITS = "capability_call_limits"
+TOOL_PROPOSAL_LIMITS = "tool_proposal_limits"
 # Charter and the harness enforce these; BoundFlow has no field for them because
 # they are this harness's vocabulary, not a control plane's. They travel so a
 # worker holding only an artifact still has them — behaviour comes from the
@@ -62,6 +63,14 @@ def build(cfg, per_run, limits, authority, operation_timeout: int) -> dict[str, 
         custom[CAPABILITY_CALL_LIMITS] = [
             {"capability": l.capability, "max_calls": l.max_calls}
             for l in per_run.capability_call_limits]
+
+    # BoundFlow's ToolCallLimit has max_calls and no ceiling on *asking*, so the
+    # proposal cap travels here alongside the call cap it sits next to in
+    # runtime.yaml, and moves with `charter apply` like every other limit.
+    proposals = [{"tool": l.tool, "max_proposals": l.max_proposals}
+                 for l in per_run.tool_call_limits if l.max_proposals]
+    if proposals:
+        custom[TOOL_PROPOSAL_LIMITS] = proposals
 
     if authority.allowed_spawns:
         custom[ALLOWED_SPAWNS] = list(authority.allowed_spawns)
@@ -120,6 +129,15 @@ def timeouts(policy) -> dict[str, int]:
 
 
 def _of(policy) -> dict[str, Any]:
+    """`custom`, from either shape a policy arrives in.
+
+    The SDK hands back a typed object on the write path and protobuf JSON — a
+    plain dict — on the read path. Reading only the attribute meant every caller
+    saw an empty policy whenever it came off the wire, which is silent: an
+    allowlist reads as "no allowlist" and a cap as "no cap".
+    """
+    if isinstance(policy, dict):
+        return policy.get("custom") or {}
     return getattr(policy, "custom", None) or {}
 
 
@@ -133,6 +151,12 @@ def allowed_capabilities(policy) -> set[str]:
 
 def allowed_tools(policy) -> set[str]:
     return set(_of(policy).get(ALLOWED_TOOLS) or [])
+
+
+def proposal_caps(policy) -> dict[str, int]:
+    """Tool -> how many times one task may propose it at a gate."""
+    return {l["tool"]: int(l["max_proposals"])
+            for l in (_of(policy).get(TOOL_PROPOSAL_LIMITS) or [])}
 
 
 def capability_call_caps(policy) -> dict[str, int]:
@@ -179,8 +203,9 @@ def runtime_file(agent: str, policy) -> Any:
             max_parallel_subagents=mine["max_parallel_subagents"],
             # One number covers every tool, because that is how Charter declares it
             # — the policy carries it per tool only because BoundFlow's field is
-            # shaped that way.
-            max_tool_failures=max(per_tool) if per_tool else 0,
+            # shaped that way. An agent with no tools has no limits to carry, and
+            # 0 is not a value the field takes, so the default stands.
+            **({"max_tool_failures": max(per_tool)} if per_tool else {}),
         ),
         limits=Limits(
             max_tokens_per_call=get("max_tokens_per_call", 1024),
