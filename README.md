@@ -1,6 +1,6 @@
 # Charter
 
-**Build, deploy, and operate production-safe agents that run in your own environment.**
+**Build and operate production-safe agents that run in your own environment.**
 
 ![The Charter console: the fleet with an agent parked on an approval, the decision waiting on a human, and the policy and run history behind it](docs/console.gif)
 
