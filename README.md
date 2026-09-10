@@ -4,11 +4,9 @@
 
 ![The Charter console: the fleet with an agent parked on an approval, the decision waiting on a human, and the policy and run history behind it](docs/console.gif)
 
-Charter is the open-source alternative to managed agent platforms. Define your agent
-and its policies in YAML, run it in your environment with your models and tools, and
-let Charter's persistent control plane handle its operational lifecycle — without
-requiring your model credentials, prompts, tool traffic, or private infrastructure
-access to leave your execution environment.
+Charter is open-source infrastructure for running AI agents in production. You
+define an agent and its policies in YAML. Charter runs it in your environment, with
+your models and tools, and governs it from a persistent control plane.
 
 ## Why Charter
 
