@@ -4,9 +4,9 @@
 
 ![The Charter console: the fleet with an agent parked on an approval, the decision waiting on a human, and the policy and run history behind it](docs/console.gif)
 
-Charter is open-source infrastructure for running AI agents in production. You
-define an agent and its policies in YAML. Charter runs it in your environment, with
-your models and tools, and governs it from a persistent control plane.
+Charter is an open-source platform for running AI agents in production. You define
+an agent and its policies in YAML. Charter runs it on your compute and governs it
+from a persistent control plane.
 
 ## Why Charter
 
