@@ -146,7 +146,7 @@ async def test_a_rejection_reaches_the_model(cp, project, tenant):
     assert info.result["refunded_usd"] == 0
 
 
-async def arm(cp, wf, *rules):
+async def arm(cp, wf, agent, *rules):
     """Arm workflow lifecycle rules, built the way `charter apply` builds them.
 
     Written here rather than added to `playground/` as a lifecycle.yaml: these
@@ -158,7 +158,7 @@ async def arm(cp, wf, *rules):
 
     compiled = compile_workflow_rules(LifecyclePolicyFile.model_validate({
         "apiVersion": "charter/v1", "kind": "LifecyclePolicy",
-        "agent": wf.workflow_type, "rules": list(rules)}))
+        "agent": agent, "rules": list(rules)}))
     await cp.set_workflow_lifecycle_policy(wf.id, compiled)
 
 
@@ -187,7 +187,8 @@ async def test_a_rejection_threshold_pauses_the_agent(cp, project, tenant):
     and a pause rule reading it silently under-counted.
     """
     wf = await one_instance(cp, project, "refund-demo", tenant)
-    await arm(cp, wf, {"when": {"metric": "approval_rejections", "threshold": 1},
+    await arm(cp, wf, "refund-demo",
+              {"when": {"metric": "approval_rejections", "threshold": 1},
                        "then": {"pause": {"window": 1}}})
 
     model = scripted(

@@ -8,10 +8,10 @@ per_run:
   max_cost_usd: 0.30
   max_llm_calls: 40
   tool_call_limits:
-    # This tool may be proposed by the agent 3 times per run but can only be run once
+    # This tool may be proposed by the agent twice per run but can only be run once
     - tool: support__create_refund
       max_calls: 1
-      max_proposals: 3
+      max_proposals: 2
     - tool: support__get_charge
       max_calls: 5
     - tool: support__get_ticket

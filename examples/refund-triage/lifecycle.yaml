@@ -4,7 +4,7 @@ kind: LifecyclePolicy
 agent: refund-triage
 
 rules:
-  # If 4 refund attempts are rejected in the last 3 runs, stay paused until someone
+  # If 3 refund attempts are rejected in the last 3 runs, stay paused until someone
   # runs `charter resume`.
-  - when: { metric: approval_rejections, threshold: 4 }
+  - when: { metric: approval_rejections, threshold: 3 }
     then: { pause: { window: 3 } }

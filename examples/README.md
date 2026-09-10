@@ -23,6 +23,7 @@ reach it by URL:
 
 In a second terminal, from this directory, bring up an agent and a worker:
 
+    charter tenant create default        # once per control plane
     charter agent create refund-triage
     charter apply .
     charter worker .
@@ -73,10 +74,10 @@ Approve that one and the task finishes:
                      other $48.00 charge was authorized by the customer and remains.
 
 The `runtime.yaml` we applied lets one refund go through per task, and lets the
-agent propose three. A rejected proposal never runs, so it costs nothing against
-the first number. The second is what stops it asking you a fourth time.
+agent propose twice. A rejected proposal never runs, so it costs nothing against
+the first number. The second is what stops it asking you a third time.
 
-The `lifecycle.yaml` we applied pauses the agent after four rejections across the
+The `lifecycle.yaml` we applied pauses the agent after three rejections across the
 last three runs. Keep rejecting, on this ticket or another, until it stops:
 
     charter describe refund-triage --instance <id>
@@ -86,7 +87,7 @@ last three runs. Keep rejecting, on this ticket or another, until it stops:
       status     paused
       activity   active
 
-If the fourth rejection lands mid-run, the agent stays active until that run
+If the third rejection lands mid-run, the agent stays active until that run
 finishes. Lifecycle rules are evaluated between runs, not during one, so they
 decide whether the next run starts rather than stopping the one in flight.
 

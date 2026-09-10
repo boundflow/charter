@@ -25,6 +25,13 @@ def compiled_rules(*rules):
         "agent": "refund-triage", "rules": list(rules)}))
 
 
+def declared_proposal_caps():
+    """What the example's runtime.yaml declares, read rather than restated, so
+    tuning the example does not break a test about the compiler."""
+    per_run = load_agent(EXAMPLES / "refund-triage").runtime.per_run
+    return {l.tool: l.max_proposals for l in per_run.tool_call_limits if l.max_proposals}
+
+
 def summarizer(version=None):
     return compile_agent(load_agent(EXAMPLES / "ticket-summarizer"), version)
 
@@ -200,7 +207,8 @@ def test_the_proposal_ceiling_travels_in_policy():
     compiled = refund().runtime_policy
 
     assert all(l.max_calls for l in compiled.tool_call_limits)
-    assert policy.proposal_caps(compiled) == {"support__create_refund": 3}
+    assert declared_proposal_caps(), "the example should declare a proposal cap"
+    assert policy.proposal_caps(compiled) == declared_proposal_caps()
 
 
 def test_writing_and_reading_custom_cannot_drift():
@@ -279,5 +287,5 @@ def test_custom_reads_the_same_off_the_wire_as_off_the_compiler():
         policy.allowed_capabilities(compiled)
     assert policy.capability_call_caps(off_the_wire) == \
         policy.capability_call_caps(compiled)
-    assert policy.proposal_caps(off_the_wire) == {"support__create_refund": 3}
+    assert policy.proposal_caps(off_the_wire) == declared_proposal_caps()
     assert policy.timeouts(off_the_wire) == policy.timeouts(compiled)
