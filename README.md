@@ -1,6 +1,6 @@
 # Charter
 
-**Build, deploy, and operate production-safe agents in your own environment in 10 minutes.**
+**Build, deploy, and operate production-safe agents that run in your own environment.**
 
 ![The Charter console: the fleet with an agent parked on an approval, the decision waiting on a human, and the policy and run history behind it](docs/console.gif)
 
@@ -35,6 +35,8 @@ access to leave your execution environment.
 [DESIGN.md](DESIGN.md) documents every field.
 
 ## Quickstart
+
+Run your first agent in 5 minutes.
 
 ```bash
 pip install boundflow-charter          # add [ui] for the console, [otel] for traces
