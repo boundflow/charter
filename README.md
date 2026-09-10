@@ -1,16 +1,14 @@
 # Charter
 
-**Build and manage production-ready agents that run on your own compute.**
+**Build and operate production-safe agents that run in your own environment.**
 
 ![The Charter console: the fleet with an agent parked on an approval, the decision waiting on a human, and the policy and run history behind it](docs/console.gif)
 
-> **Pre-alpha, and in the open early.** The design is settled enough to read and
-> argue with. The code is not settled enough to run anything you care about.
-> Expect the configuration format to change.
-
-Charter provides the infrastructure for running AI agents in production. You define
-an agent and its policies in YAML. Charter runs it on your compute and governs it
-from a persistent control plane.
+Charter is the open-source alternative to managed agent platforms. Define your agent
+and its policies in YAML, run it in your environment with your models and tools, and
+let Charter's persistent control plane handle its operational lifecycle — without
+requiring your model credentials, prompts, tool traffic, or private infrastructure
+access to leave your execution environment.
 
 ## Why Charter
 
@@ -22,14 +20,25 @@ from a persistent control plane.
   require human approval, and budgets cap what a task may spend.
 - **Fleet operations.** Every agent's operational state, run history, metrics and
   open decisions, from the CLI or the console.
+- **Audit and traces.** Every approval, rejection and policy action is recorded
+  with who took it and why. Model and tool calls export as OpenTelemetry GenAI
+  traces, which Jaeger, Tempo, Datadog and Langfuse can read.
 - **Your network, your data.** Workers run in your environment, so agents reach
   internal services and databases directly. Model keys and prompts never reach the
   control plane, and the agent's conversation, files and traces stay in stores you
-  run.
+  run. Self-host the control plane and use a local model to run Charter fully
+  air-gapped.
 
 [DESIGN.md](DESIGN.md) documents every field.
 
+## Status
+
+Charter is pre-1.0, so the configuration format and CLI can still change between
+releases. [Feedback](https://github.com/boundflow/charter/issues) is welcome.
+
 ## Quickstart
+
+Run your first agent in 5 minutes.
 
 ```bash
 pip install boundflow-charter          # add [ui] for the console, [otel] for traces
@@ -255,7 +264,11 @@ cutting a release.
 `charter apply` compiles your configuration into workflows and policy on the
 [BoundFlow](https://github.com/boundflow/boundflow) control plane. A Charter worker
 runs the agent in your environment and talks to your MCP servers with credentials
-that stay there.
+that stay there. Each worker registers the agents it can run, listed under `serves`
+in its `worker.yaml`, and any worker registered for an agent can pick up its work.
+If the worker running a task crashes or stops, another continues it from its last
+checkpoint, and a run parked for a person resumes on whichever worker is free when
+they answer.
 
 The agent loop itself is [deepagents](https://github.com/langchain-ai/deepagents),
 so its tools, subagents, filesystem and skills work here unchanged. Charter makes
@@ -264,21 +277,21 @@ interrupts into approvals a person can answer tomorrow, and holds it to the limi
 your config declares.
 
 ```
-                    BoundFlow
-                  Control Plane
-             state • policy • lifecycle
-                       │
-                      RPC
-                       │
-                       ▼
-              Your environment
-        ┌─────────────────────────┐
-        │ Charter worker          │
-        │                         │
-        │ model ↔ agent loop      │
-        │             │           │
-        │          MCP tools      │
-        └─────────────────────────┘
+                     BoundFlow
+                   Control Plane
+            state • policy • lifecycle
+                         │
+                        RPC
+             ┌───────────┴───────────┐
+             ▼                       ▼
+  ┌────────────────────┐  ┌────────────────────┐
+  │ Charter worker     │  │ Charter worker     │
+  │                    │  │                    │
+  │ model ↔ agent loop │  │ model ↔ agent loop │
+  │          │         │  │          │         │
+  │      MCP tools     │  │      MCP tools     │
+  └────────────────────┘  └────────────────────┘
+                 Your environment
 ```
 
 Charter adds no database or service of its own. Deployed agents keep running
