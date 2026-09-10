@@ -600,7 +600,7 @@ def test_every_command_the_readme_names_exists():
             names.add(f"{sub.name} {command.name}")
 
     documented = set()
-    for line in Path("README.md").read_text().splitlines():
+    for line in Path("README.md").read_text(encoding="utf-8").splitlines():
         m = re.match(r"^charter ([a-z-]+)(?: ([a-z-]+))?", line.strip())
         if not m:
             continue

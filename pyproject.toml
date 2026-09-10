@@ -38,6 +38,8 @@ dependencies = [
     # A separate distribution from langgraph: `langgraph.checkpoint.postgres` and
     # `langgraph.store.postgres`.
     "langgraph-checkpoint-postgres>=3.1",
+    # langgraph-checkpoint-postgres only pulls in bare `psycopg`, which has no working driver without an extra.
+    "psycopg[binary]>=3.2",
     # `init_chat_model` lives here, and it is how `llm.provider` gets built, so any
     # provider LangChain supports works. Declared rather than inherited from
     # deepagents: we import it directly.

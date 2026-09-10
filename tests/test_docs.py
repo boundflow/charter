@@ -40,7 +40,7 @@ def _blocks():
         path = ROOT / name
         if not path.exists():
             continue
-        for i, block in enumerate(re.findall(r"```ya?ml\n(.*?)```", path.read_text(), re.S)):
+        for i, block in enumerate(re.findall(r"```ya?ml\n(.*?)```", path.read_text(encoding="utf-8"), re.S)):
             yield name, i, block
 
 
@@ -68,7 +68,7 @@ def test_readme_quickstart_is_what_init_writes():
     """
     from charter import scaffold
 
-    readme = (ROOT / "README.md").read_text()
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
     blocks = re.findall(r"```ya?ml\n(.*?)```", readme, re.S)
     for body in scaffold.files("triage").values():
         assert body in blocks, (

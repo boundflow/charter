@@ -2006,6 +2006,22 @@ def worker(
         raise typer.Exit(1) from None
 
 
+def _windows_event_loop() -> None:
+    """Selector rather than the Proactor default, on Windows only.
+
+    psycopg refuses to run async on a ProactorEventLoop, and the checkpointer is
+    async psycopg, so on the default loop a worker cannot write a checkpoint at
+    all. Subprocesses are the other side of this: asyncio spawns them only on
+    Proactor, and the MCP SDK already falls back to `subprocess.Popen` on the
+    NotImplementedError that Selector raises, so stdio servers still start.
+
+    Set here rather than in the library: a process-wide loop policy is the
+    caller's to choose, and Charter is only the caller at its own entry point.
+    """
+    if sys.platform == "win32":
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
+
 def main() -> None:
     """Run the app, rendering control-plane failures as one line.
 
@@ -2014,6 +2030,7 @@ def main() -> None:
     prints that message under forty lines of its own internals — so a wrong task
     id reads like a crash in Charter.
     """
+    _windows_event_loop()
     try:
         app()
     except BoundflowError as e:
