@@ -22,6 +22,9 @@ from a persistent control plane.
   require human approval, and budgets cap what a task may spend.
 - **Fleet operations.** Every agent's operational state, run history, metrics and
   open decisions, from the CLI or the console.
+- **Audit and traces.** Every approval, rejection and policy action is recorded
+  with who took it and why. Model and tool calls export as OpenTelemetry GenAI
+  traces, which Jaeger, Tempo, Datadog and Langfuse read as they are.
 - **Your network, your data.** Workers run in your environment, so agents reach
   internal services and databases directly. Model keys and prompts never reach the
   control plane, and the agent's conversation, files and traces stay in stores you
