@@ -4,10 +4,6 @@
 
 ![The Charter console: the fleet with an agent parked on an approval, the decision waiting on a human, and the policy and run history behind it](docs/console.gif)
 
-> **Pre-alpha, and in the open early.** The design is settled enough to read and
-> argue with. The code is not settled enough to run anything you care about.
-> Expect the configuration format to change.
-
 Charter is the open-source alternative to managed agent platforms. Define your agent
 and its policies in YAML, run it in your environment with your models and tools, and
 let Charter's persistent control plane handle its operational lifecycle — without
@@ -33,6 +29,11 @@ access to leave your execution environment.
   run.
 
 [DESIGN.md](DESIGN.md) documents every field.
+
+## Status
+
+Charter is pre-1.0, so the configuration format and CLI can still change between
+releases. [Feedback](https://github.com/boundflow/charter/issues) is welcome.
 
 ## Quickstart
 
