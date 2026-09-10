@@ -57,7 +57,7 @@ export ANTHROPIC_API_KEY=<your model key>   # or another provider's, see worker.
 ```
 
 Remove it with `docker compose -f local.compose.yml down -v`. Cloning the repo
-works too, and gets you the examples and the demo alongside it.
+works too, and gets you the examples alongside it.
 
 For production you have two options. Run the BoundFlow backend yourself, following
 its [deployment docs](https://github.com/boundflow/boundflow/blob/main/docs/deployment.md).

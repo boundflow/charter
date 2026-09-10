@@ -144,3 +144,66 @@ async def test_a_rejection_reaches_the_model(cp, project, tenant):
 
     assert info.status.value == "completed", info.failure_reason
     assert info.result["refunded_usd"] == 0
+
+
+async def arm(cp, wf, *rules):
+    """Arm workflow lifecycle rules, built the way `charter apply` builds them.
+
+    Written here rather than added to `playground/` as a lifecycle.yaml: these
+    rules act on the agent across runs, so a file would arm them for every other
+    test that serves the same agent.
+    """
+    from charter.compile import compile_workflow_rules
+    from charter.config.lifecycle import LifecyclePolicyFile
+
+    compiled = compile_workflow_rules(LifecyclePolicyFile.model_validate({
+        "apiVersion": "charter/v1", "kind": "LifecyclePolicy",
+        "agent": wf.workflow_type, "rules": list(rules)}))
+    await cp.set_workflow_lifecycle_policy(wf.id, compiled)
+
+
+async def state_becomes(cp, wf_id, wanted, timeout=90):
+    """Poll for a workflow state. Rules are evaluated between runs, so the change
+    lands after the run that crossed the threshold has finished, not during it."""
+    import asyncio
+
+    deadline = asyncio.get_event_loop().time() + timeout
+    seen = None
+    while asyncio.get_event_loop().time() < deadline:
+        wf = next(w for w in await cp.list_workflows() if w.id == wf_id)
+        seen = wf.workflow_state.value
+        if seen == wanted:
+            return wf
+        await asyncio.sleep(2)
+    raise AssertionError(f"workflow_state stayed {seen!r}, wanted {wanted!r}")
+
+
+async def test_a_rejection_threshold_pauses_the_agent(cp, project, tenant):
+    """The README's claim, and the one thing no test covered: a metric crossing a
+    threshold stops the agent on its own.
+
+    `approval_rejections` is the metric that goes wrong quietly — it is counted
+    when a gate is answered, so a worker that dies mid-operation used to drop it,
+    and a pause rule reading it silently under-counted.
+    """
+    wf = await one_instance(cp, project, "refund-demo", tenant)
+    await arm(cp, wf, {"when": {"metric": "approval_rejections", "threshold": 1},
+                       "then": {"pause": {"window": 1}}})
+
+    model = scripted(
+        calls("desk__create_refund", charge_id="ch_7700", amount_usd=89,
+              reason="changed their mind"),
+        submits(resolution="no refund", refunded_usd=0),
+    )
+
+    worker = CharterWorker(project, chat_model=factory(model))
+    async with running(worker):
+        request_id = await cp.invoke_workflow(wf.id, context={"ticket_id": "5150"})
+        gate = await wait_for_gate(cp, wf.id, timeout=90)
+        await cp.reject_workflow(wf.id, gate.approval_id, "e2e", "outside the window")
+        info = await wait_for_run(cp, request_id, timeout=90)
+        assert info.status.value == "completed", info.failure_reason
+
+        paused = await state_becomes(cp, wf.id, "paused")
+
+    assert paused.workflow_state.value == "paused"
