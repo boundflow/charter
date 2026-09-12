@@ -305,22 +305,20 @@ class ToolSet:
         # so a server named `desk_get` with a tool `ticket` collides with `desk` and
         # `get_ticket`. Charter's `__` is unambiguous, and it's already baked into
         # tool_call_limits and lifecycle rules.
-        # NOTE: `handle_tool_errors` is left at its default of True, and that
-        # currently costs us failure counting. The adapter turns a failing tool
-        # into a *returned* error string, and BoundFlow's wrapper counts a failure
-        # only when a call raises — so an MCP tool failure is recorded as a
-        # success. tool_failure_counts stays empty, max_tool_failures never trips,
-        # and `on_failure: fail` never fires. Same shape as reading `isError` under
-        # its 1.x name, which this file has already been bitten by once.
+        # `handle_tool_errors` stays at its default of True on purpose. The
+        # adapter turns a failing tool into a *returned* error string rather than
+        # raising; setting it False lets that exception unwind the whole
+        # invocation, so one broken tool kills the run instead of being reported
+        # to the model. Measured, not assumed.
         #
-        # Setting it False is worse, not better: the exception then propagates out
-        # of the whole invocation, so one failing tool kills the run instead of
-        # being reported to the model, and the agent loses the chance to work
-        # around it. Measured, not assumed.
-        #
-        # The real fix is to classify the returned error in the governed wrapper,
-        # the way a policy denial already is — count it *and* let the model read
-        # it. Tracked separately rather than bodged here.
+        # Counting the returned error is BoundFlow's job — the governed wrapper
+        # classifies `"Error executing tool …"` (and `status="error"`) as a
+        # failure *and* hands the text back, which is what lets
+        # `tool_failure_counts`, `max_tool_failures` and `on_failure: fail` see
+        # declared MCP tools. The hang path below uses the same wording so it
+        # is counted on that path too. Pinned by
+        # `tests/e2e/test_failures.py::test_a_returned_mcp_error_trips_the_failure_breaker`
+        # and `test_a_broken_tool_fails_the_task_naming_the_tool`.
         self._client = MultiServerMCPClient(
             {s.name: _connection(s) for s in cfg.mcp})
 
