@@ -86,6 +86,55 @@ async def test_a_broken_tool_fails_the_task_naming_the_tool(cp, project, tenant)
     assert "always_fails" in info.result["reason"]
 
 
+async def test_a_returned_mcp_error_trips_the_failure_breaker(cp, project, tenant):
+    """The other half of #7. `on_failure: fail` is already pinned above.
+
+    `always_fails` raises inside a real MCP server. The adapter turns that into a
+    *returned* error string rather than an exception, which is what used to make
+    BoundFlow's wrapper count a success: `tool_failure_counts` stayed empty and
+    `max_tool_failures` never tripped, so a broken integration burned the budget
+    instead of its own breaker.
+
+    No `on_failure: fail` here on purpose. The first call must be counted *and*
+    handed back, or the model never gets a second turn. The second call is what
+    trips the cap. Written so the old wrapper would let this task finish.
+    """
+    path = project.path.parent / "ticket-sweeper" / "v1.yaml"
+    raw = yaml.safe_load(path.read_text())
+    raw["mcp"][0]["tools"].append({"tool": "always_fails"})
+    raw["objective"] = "Call always_fails twice, then report."
+    path.write_text(yaml.safe_dump(raw))
+
+    runtime = project.path.parent / "ticket-sweeper" / "runtime.yaml"
+    limits = yaml.safe_load(runtime.read_text())
+    limits["per_run"]["max_tool_failures"] = 1
+    runtime.write_text(yaml.safe_dump(limits))
+    reloaded = load_project(project.path)
+
+    wf = await one_instance(cp, reloaded, "ticket-sweeper", tenant)
+    model = scripted(
+        calls("desk__always_fails", why="testing"),
+        calls("desk__always_fails", why="again"),
+        submits(summary="worked around it", needs_attention=0),
+    )
+
+    info = await run_one(cp, reloaded, "ticket-sweeper", wf, model)
+
+    assert info.result.get("failed") is True, (
+        f"a returned MCP error was not counted, so the breaker never tripped — "
+        f"{info.result}")
+    reason = info.result["reason"]
+    assert "always_fails" in reason, reason
+    assert "max_failures" in reason, reason
+    assert "on_failure" not in reason, reason
+
+    metrics = await cp.get_workflow_metrics(wf.id)
+    counted = metrics.tool_failure_counts.get("desk__always_fails", 0)
+    assert counted == 2, (
+        f"expected both returned errors counted against the cap of 1, got "
+        f"{metrics.tool_failure_counts}")
+
+
 async def test_a_spent_budget_says_which_ceiling_it_hit(cp, project, tenant):
     """Not "it went round a lot" — the reason names the number that stopped it, so
     an operator knows whether to raise it or fix the agent."""

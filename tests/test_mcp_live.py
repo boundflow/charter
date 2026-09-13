@@ -140,9 +140,8 @@ def test_a_failing_tool_reports_its_error_to_the_model():
     one broken tool from killing a run — the model reads the error and can work
     around it.
 
-    The cost is that BoundFlow's wrapper counts a failure only on a raise, so this
-    is currently invisible to tool_failure_counts. See the note in client.py; the
-    fix belongs in the wrapper, not here.
+    Counting that returned error is the governed wrapper's job, not this client's.
+    The e2e suite pins that `tool_failure_counts` and `max_tool_failures` see it.
     """
     async def go():
         ts = await _connected([ToolSpec(tool="get_ticket"),
