@@ -184,38 +184,6 @@ The console shows the same thing in a browser, for all agents:
 charter ui
 ```
 
-### A local model
-
-Inference is bring-your-own, so a model on your own machine is a provider like any
-other. With [Ollama](https://ollama.com) serving `qwen2.5:7b`:
-
-```bash
-pip install 'boundflow-charter[ollama]'
-ollama pull qwen2.5:7b
-```
-
-```yaml
-llm:
-  provider: ollama        # no api_key: a local runtime needs none
-```
-
-and `model: qwen2.5:7b` in the agent's version file. Nothing leaves the machine but
-what the control plane governs on — which tools were called, what was approved,
-whether the run succeeded. The prompts and the model traffic never did.
-
-Three things differ from a hosted provider:
-
-- **Give a call more time.** `max_call_seconds` defaults to 60, and a single call
-  on CPU can take several minutes. Raise it in `runtime.yaml`.
-- **Budget in calls, not dollars.** An unpriced model reports no cost, so
-  `max_cost_usd` never binds. `max_llm_calls` is the ceiling that does.
-- **Size the model for tool calling.** The agent drives itself through tools. 7B
-  class works; `qwen2.5:3b` answered the ticket by writing a file instead of
-  calling `submit_result`, well inside its context window.
-
-The context window belongs to the server rather than to Charter, and Ollama's
-default is small: `OLLAMA_CONTEXT_LENGTH=8192 ollama serve`.
-
 ## Approvals and policy
 
 Tools can be gated on human approval. Behaviour is versioned, so adding one means
@@ -330,6 +298,8 @@ through their workers and the control plane whether or not the CLI is installed.
 ## Documentation
 
 - [DESIGN.md](DESIGN.md): every field of every file, and the decisions behind them
+- [docs/local-models.md](docs/local-models.md): running an agent on a model on your
+  own machine, and what differs from a hosted provider
 - [deploy/](deploy/): running workers as containers, and a control plane locally
 - [examples/](examples/): two agents over a toy support system. One gates a refund
   and pauses itself when too many are turned down, the other rolls itself back to
