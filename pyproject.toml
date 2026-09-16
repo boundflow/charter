@@ -25,7 +25,7 @@ classifiers = [
 dependencies = [
     # The floor is what CI tests: the SDK from PyPI against `:latest` in
     # deploy/local.compose.yml. An older SDK may work and nobody checks.
-    "boundflow>=0.7.0",
+    "boundflow>=0.7.4",
     # The harness, and required rather than optional. Charter is the
     # use-an-existing-harness product: an install that can't run deepagents isn't a
     # smaller Charter, it's a Charter that does nothing. BoundFlow keeps these
