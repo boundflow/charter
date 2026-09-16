@@ -184,6 +184,21 @@ The console shows the same thing in a browser, for all agents:
 charter ui
 ```
 
+### A local model
+
+Inference is bring-your-own, so a model on your own machine is a provider like any
+other. With [Ollama](https://ollama.com), `pip install 'boundflow-charter[ollama]'`
+and point `worker.yaml` at it:
+
+```yaml
+llm:
+  provider: ollama        # no api_key: a local runtime needs none
+```
+
+Name the model in the agent's version file as usual — `model: qwen2.5:7b`.
+[docs/local-models.md](docs/local-models.md) has the rest: calls take longer than a
+hosted provider's, and a dollar budget doesn't bind on a model with no price.
+
 ## Approvals and policy
 
 Tools can be gated on human approval. Behaviour is versioned, so adding one means
