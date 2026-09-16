@@ -56,19 +56,17 @@ Usage is still reported — Ollama returns `usage_metadata` on plain, tool-bound
 streamed calls — so runs are metered and appear in the console. The cost is $0.
 
 **Size the model for tool calling.** The agent drives itself through tools, and
-ending a run means calling `submit_result`.
+it finishes a run by returning the result its `response_format` declares. A model
+that can hold a conversation but can't reliably call a tool will run and never
+arrive.
 
 | Model | Result |
 |---|---|
 | `qwen2.5:7b` | completes the quickstart, 46s to 3m depending on the machine |
-| `qwen2.5:3b` | completes calls, doesn't follow the harness — it answered the ticket by writing a file instead of calling `submit_result`, with prompts well inside its context window |
+| `qwen2.5:3b` | makes calls, but doesn't reach a result — it wrote its answer to a file instead of returning one, with prompts well inside its context window |
 
-A model that never calls `submit_result` burns its call budget and the run is
-recorded as a failure, which is what the lifecycle rules act on.
-
-Forcing the ending is weaker here than elsewhere: on the last permitted call
-Charter offers only `submit_result`, but Ollama cannot force a tool at all, so a
-model can still reply in text instead.
+A run that never produces a result burns its call budget and is recorded as a
+failure, which is what the lifecycle rules act on.
 
 ## Context window
 
