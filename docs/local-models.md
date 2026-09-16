@@ -50,8 +50,8 @@ per_run:
   max_llm_calls: 12
 ```
 
-Usage is still reported — Ollama returns `usage_metadata` on plain, tool-bound and
-streamed calls — so runs are metered and appear in the console. The cost is $0.
+Tokens are still counted, so runs are metered and appear in the console like any
+other. The cost is $0.
 
 **Size the model.** A small model may not manage to return its answer in the shape
 the agent's `response_format` declares. `qwen2.5:7b` did, in 46s to 3m depending on
