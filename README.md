@@ -195,9 +195,8 @@ llm:
   provider: ollama        # no api_key: a local runtime needs none
 ```
 
-Name the model in the agent's version file as usual — `model: qwen2.5:7b`.
-[docs/local-models.md](docs/local-models.md) has the rest: calls take longer than a
-hosted provider's, and a dollar budget doesn't bind on a model with no price.
+Name the model in the agent's version file as usual — `model: qwen2.5:7b`. For
+more information see [docs/local-models.md](docs/local-models.md).
 
 ## Approvals and policy
 
