@@ -1,9 +1,7 @@
 # Local models
 
 Inference is bring-your-own, so a model on your own machine is a provider like any
-other. The control plane governs the run either way — what it records is which
-tools were called, what was approved, whether it succeeded. Prompts and model
-traffic never reach it, from any provider.
+other.
 
 ## Configuration
 
@@ -55,18 +53,13 @@ per_run:
 Usage is still reported — Ollama returns `usage_metadata` on plain, tool-bound and
 streamed calls — so runs are metered and appear in the console. The cost is $0.
 
-**Size the model for tool calling.** The agent drives itself through tools, and
-it finishes a run by returning the result its `response_format` declares. A model
-that can hold a conversation but can't reliably call a tool will run and never
-arrive.
+**Size the model.** A small model may not manage to return its answer in the shape
+the agent's `response_format` declares. `qwen2.5:7b` did, in 46s to 3m depending on
+the machine. `qwen2.5:3b` did not — it wrote its answer to a file instead, with
+prompts well inside its context window.
 
-| Model | Result |
-|---|---|
-| `qwen2.5:7b` | completes the quickstart, 46s to 3m depending on the machine |
-| `qwen2.5:3b` | makes calls, but doesn't reach a result — it wrote its answer to a file instead of returning one, with prompts well inside its context window |
-
-A run that never produces a result burns its call budget and is recorded as a
-failure, which is what the lifecycle rules act on.
+A run that ends without a result is recorded as a failure, which is what the
+lifecycle rules act on.
 
 ## Context window
 
