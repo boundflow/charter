@@ -20,7 +20,7 @@ from charter.provisioning.apply import (
 )
 from charter.worker import CharterWorker
 from tests.e2e.conftest import running, wait_for_run
-from tests.e2e.harness import calls, factory, scripted, submits
+from tests.e2e.harness import calls, factory, says, scripted, submits
 from tests.e2e.test_lifecycle import one_instance, project  # noqa: F401
 
 pytestmark = pytest.mark.asyncio
@@ -157,7 +157,32 @@ async def test_a_spent_budget_says_which_ceiling_it_hit(cp, project, tenant):
     assert info.result["llm_calls"] > 0
 
 
-async def test_a_failed_task_reports_how_far_it_got(cp, project, tenant):
+async def test_a_budget_spent_on_an_answer_in_prose_still_names_the_ceiling(
+        cp, project, tenant):
+    """The last call a budget allows is offered only `submit_result`, so a model
+    that answers in text instead ends the run there rather than on a further call.
+
+    The reason has to carry the ceiling anyway. Without it an operator reads only
+    that the agent didn't submit, and can't tell a model that ran out of room from
+    one that ignored the instruction.
+    """
+    path = project.path.parent / "ticket-sweeper" / "runtime.yaml"
+    raw = yaml.safe_load(path.read_text())
+    raw["per_run"]["max_llm_calls"] = 1
+    path.write_text(yaml.safe_dump(raw))
+    reloaded = load_project(project.path)
+
+    wf = await one_instance(cp, reloaded, "ticket-sweeper", tenant)
+    info = await run_one(cp, reloaded, "ticket-sweeper", wf,
+                         scripted(says("nothing to report")))
+
+    assert info.result["failed"] is True
+    reason = info.result["reason"]
+    assert "max_llm_calls=1" in reason, reason
+    assert "submit_result" in reason, reason
+
+async def test_a_failed_task_reports_how_far_it_got(
+cp, project, tenant):
     """The payload is what an operator reads when a rule pauses the agent, so it
     carries the spend rather than only the reason."""
     path = project.path.parent / "ticket-sweeper" / "runtime.yaml"

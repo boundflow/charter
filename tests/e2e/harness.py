@@ -76,7 +76,12 @@ def scripted(*turns: dict) -> BaseChatModel:
             # A subagent shares this instance, so without telling them apart it
             # would eat turns written for the parent — and replay a tool call it
             # may not even have. Only the parent is given `task`.
-            self.is_subagent = "task" not in names
+            #
+            # A bind of the finalizer alone is the last permitted call, not a
+            # subagent: the governor narrows the offer there. Reading it as a
+            # subagent answers prose and ends the run a turn early.
+            if names != [SUBMIT_RESULT]:
+                self.is_subagent = "task" not in names
             return self
 
         def _generate(self, messages, stop=None, run_manager=None, **kw) -> ChatResult:

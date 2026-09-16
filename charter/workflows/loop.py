@@ -526,12 +526,23 @@ class Loop:
 
         text = _final_text(output.get("messages"))
         if self.cfg.response_format:
+            said = f" (it said: {text[:200]})" if text else ""
             # It was asked for a shape and ended without producing one — a real
             # failure, and worth naming as that rather than as a protobuf error.
+            #
+            # The last call a budget allows is offered only `submit_result`, so a
+            # run that ends here with the budget spent ended *because* of the
+            # ceiling. Name it: an operator reading this has to know whether to
+            # raise the number or fix the agent.
+            cap = self.runtime.per_run.max_llm_calls
+            if cap and ctx.context.get(K_LLM_CALLS, 0) >= cap:
+                return await self._fail(
+                    ctx, f"the agent reached max_llm_calls={cap} and stopped without "
+                         f"calling submit_result, so there is no result in the shape "
+                         f"response_format declares" + said)
             return await self._fail(
                 ctx, "the agent stopped without calling submit_result, so there is "
-                     "no result in the shape response_format declares"
-                     + (f" (it said: {text[:200]})" if text else ""))
+                     "no result in the shape response_format declares" + said)
         # No shape was asked for, so prose is the answer rather than a shortfall.
         return Complete(result={"answer": text})
 
