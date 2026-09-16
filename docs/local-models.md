@@ -77,7 +77,7 @@ OLLAMA_CONTEXT_LENGTH=8192 ollama serve
 ```
 
 4,096 was enough for the quickstart. An agent with tools and a longer conversation
-wants more.
+might need more.
 
 ## Testing
 
