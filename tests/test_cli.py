@@ -84,6 +84,12 @@ class FakeCp:
         self.answered = []
         self.resumed: list = []
         self.suspended: list = []
+        self.invoked: list = []
+
+    async def invoke_workflow(self, workflow_id, context=None):
+        # `charter run` ends here, so this is the request the worker would act on.
+        self.invoked.append((workflow_id, context))
+        return "req_1"
 
     async def list_tenants(self):
         return [Tenant(id="tnt_1", name="default", tenant_group_id="tg_1",
@@ -261,6 +267,66 @@ class TestTasks:
         out = invoke("tasks", "refund-demo", "--instance", "wf_refun").output
         # Whole message, not a column truncated at some number I picked.
         assert "x" * 120 in out
+
+
+class TestRunInputsFile:
+    """`--inputs-file` is the scripted twin of passing every input by flag, and
+    both spellings must reach `invoke_workflow` as the same context — the
+    objective renders from nothing else. It never did: the flag-parsing loop
+    swallowed `--inputs-file /tmp/task.json` as an input named `inputs_file`
+    holding the path, so the worker saw every declared input as missing and
+    failed the task before the model was called."""
+
+    def test_a_file_of_inputs_reaches_the_invoke_context(self, cp, tmp_path):
+        import json as _json
+        f = tmp_path / "task.json"
+        f.write_text(_json.dumps({"ticket_id": "4821", "max_refund_usd": 250}))
+        assert invoke("run", "refund-demo", "--instance", "wf_refun",
+                      "--inputs-file", str(f)).exit_code == 0
+        assert cp.invoked == [("wf_refund-demo", {"ticket_id": "4821",
+                                                  "max_refund_usd": 250})]
+
+    def test_stdin_dash_reads_piped_json(self, cp):
+        res = runner.invoke(
+            cli.app, ["run", "refund-demo", "--instance", "wf_refun",
+                      "--inputs-file", "-"], input='{"ticket_id": "4821"}')
+        assert res.exit_code == 0, res.output
+        assert cp.invoked == [("wf_refund-demo", {"ticket_id": "4821"})]
+
+    def test_the_equals_form_and_flag_inputs_merge(self, cp, tmp_path):
+        """`--inputs-file=` and per-input flags are the same request, so a mix
+        of the two must land in one context — the last spelling of an input
+        wins, same as passing one flag twice."""
+        import json as _json
+        f = tmp_path / "task.json"
+        f.write_text(_json.dumps({"ticket_id": "4821", "priority": "high"}))
+        res = invoke("run", "refund-demo", "--instance", "wf_refun",
+                     f"--inputs-file={f}", "--priority", "low")
+        assert res.exit_code == 0, res.output
+        assert cp.invoked == [("wf_refund-demo",
+                               {"ticket_id": "4821", "priority": "low"})]
+
+    def test_a_file_that_is_not_an_object_is_refused_locally(self, cp, tmp_path):
+        """The worker would read a list as zero declared inputs and fail the
+        task after it started; the CLI can see the shape before submitting."""
+        import json as _json
+        f = tmp_path / "task.json"
+        f.write_text(_json.dumps(["4821"]))
+        res = invoke("run", "refund-demo", "--instance", "wf_refun",
+                     "--inputs-file", str(f))
+        assert res.exit_code != 0
+        assert "object" in res.output
+        assert cp.invoked == []  # refused without burning a run
+
+    def test_a_missing_or_unparsable_file_is_refused_locally(self, cp, tmp_path):
+        f = tmp_path / "task.json"
+        f.write_text("{not json")
+        for where in (str(tmp_path / "nope.json"), str(f)):
+            res = invoke("run", "refund-demo", "--instance", "wf_refun",
+                         "--inputs-file", where)
+            assert res.exit_code != 0
+            assert "--inputs-file" in res.output
+        assert cp.invoked == []
 
 
 class TestUnappliedAgent:

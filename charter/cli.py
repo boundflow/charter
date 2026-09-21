@@ -751,7 +751,8 @@ def run(
     all_: bool = typer.Option(False, "--all", help="Start a task on every instance"),
     tenant: str = TENANT,
 ) -> None:
-    """Start one task. Declared inputs are passed as --flags.
+    """Start one task. Declared inputs are passed as --flags, or as a JSON
+    object with --inputs-file (a path, or - for stdin).
 
     No checkout needed: the inputs travel with the versioned config the worker is
     already serving, so it is the worker that fills declared defaults and refuses a
@@ -768,14 +769,20 @@ def run(
         token = args.pop(0)
         if not token.startswith("--"):
             raise typer.BadParameter(f"unexpected argument {token!r}")
-        key = token[2:].replace("-", "_")
-        if "=" in key:
-            key, value = key.split("=", 1)
+        # Split before normalizing, so a dash inside a value — a path in
+        # `--inputs-file=...`, or any `--flag=some-thing` — survives intact.
+        body, sep, inline = token[2:].partition("=")
+        key = body.replace("-", "_")
+        if sep:
+            value = inline
         elif args and not args[0].startswith("--"):
             value = args.pop(0)
         else:
             value = "true"
-        context[key] = _typed(value)
+        if key == "inputs_file":
+            context.update(_read_inputs(value))
+        else:
+            context[key] = _typed(value)
 
     async def go():
         async with _cp() as cp:
@@ -805,6 +812,32 @@ def _typed(value: str):
         except ValueError:
             pass
     return value
+
+
+def _read_inputs(where: str) -> dict:
+    """The object behind --inputs-file, ready to merge into the invoke context.
+
+    Flags and a JSON file are two spellings of one request, so both must land in
+    the same `invoke_workflow(context=...)`. The file is parsed here rather than
+    by the worker because JSON already carries types — `_typed`'s guessing is for
+    flags, which are always text.
+    """
+    if where == "-":
+        raw = sys.stdin.read()
+    else:
+        try:
+            raw = Path(where).read_text()
+        except OSError as e:
+            raise typer.BadParameter(f"--inputs-file: cannot read {where!r} ({e})")
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as e:
+        raise typer.BadParameter(f"--inputs-file: {where!r} is not JSON ({e})")
+    if not isinstance(parsed, dict):
+        raise typer.BadParameter(
+            f"--inputs-file: expected an object of inputs, "
+            f"got a JSON {type(parsed).__name__}")
+    return parsed
 
 
 agent_app = typer.Typer(help="Create and destroy instances of an agent.")
