@@ -36,6 +36,9 @@ releases. [Feedback](https://github.com/boundflow/charter/issues) is welcome.
 
 ## Quickstart
 
+For native model, tool, and subagent history in Langfuse, see
+[Langfuse tracing](docs/langfuse.md).
+
 Run your first agent in 5 minutes.
 
 ```bash

@@ -30,6 +30,7 @@ from .notify import Notifier
 from .provisioning.apply import resolve_tenant
 from .workflows.loop import Loop
 from .workflows.spawning import Spawner
+from .langfuse_trace import tracing_lifecycle
 
 log = logging.getLogger(__name__)
 
@@ -83,6 +84,7 @@ class CharterWorker:
     # restart is a deploy and a cache would be a second answer to "what is v1"
     # sitting on a disk nobody looks at.
     _pulled_dir: object | None = None
+    _tracing: object | None = None
 
     @property
     def _pulled(self):
@@ -127,7 +129,8 @@ class CharterWorker:
             resolve(manifest.control_plane.endpoint),
             resolve(manifest.control_plane.api_key))
 
-        async with cp:
+        async with cp, tracing_lifecycle(manifest.langfuse) as tracing:
+            self._tracing = tracing
             # Resolved once, up front: every child a spawner creates belongs to the
             # same tenant as its parent, and looking it up per spawn would be a
             # round trip on the model's critical path.
@@ -184,7 +187,8 @@ class CharterWorker:
                                      self._chat_model,
                                      resolve(self.project.manifest.store.url),
                                      skills=bundle.skills.get(version),
-                                     spawner=self._spawner(cp, allowed)))
+                                     spawner=self._spawner(cp, allowed),
+                                     tracing=self._tracing))
                 try:
                     if missing:
                         # Caught at boot rather than the first time the model tries

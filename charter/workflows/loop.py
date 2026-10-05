@@ -257,7 +257,7 @@ class Loop:
 
     def __init__(self, cfg: AgentConfig, runtime, tools, chat_model,
                  store_url: str, skills: Path | None = None,
-                 spawner=None) -> None:
+                 spawner=None, tracing=None) -> None:
         self.cfg = cfg
         self.runtime = runtime
         # The ToolSet, not its tools: it hasn't connected yet when the worker builds
@@ -271,6 +271,7 @@ class Loop:
         # Creates durable children, or None when this agent declares no `spawns`.
         # Needs the control plane, so the worker builds it rather than the Loop.
         self.spawner = spawner
+        self.tracing = tracing
 
     # ── the budget the harness can't see ────────────────────────────────────
 
@@ -458,7 +459,7 @@ class Loop:
                 prompt = self._prompt(ctx)
                 result = await ctx.run_governed(
                     self.cfg.name,
-                    lambda model, tools: create_deep_agent(
+                    lambda model, tools: self._invoke(ctx, h, create_deep_agent(
                         model=model,
                         tools=tools,
                         system_prompt=prompt,
@@ -466,8 +467,7 @@ class Loop:
                         interrupt_on=interrupt_on(self.cfg),
                         skills=skills or None,
                         **self._wiring(h, spawner),
-                    ).ainvoke(h.first({"messages": [{"role": "user", "content": prompt}]}),
-                              h.config),
+                    ), h.first({"messages": [{"role": "user", "content": prompt}]})),
                     chat_model=self.chat_model(self.cfg.model),
                     # Passed explicitly rather than sniffed off the chat model.
                     # The versioned config is where the model id actually lives, and
@@ -545,6 +545,13 @@ class Loop:
                      "no result in the shape response_format declares" + said)
         # No shape was asked for, so prose is the answer rather than a shortfall.
         return Complete(result={"answer": text})
+
+    async def _invoke(self, ctx, h, runnable, payload):
+        if self.tracing is None:
+            return await runnable.ainvoke(payload, h.config)
+        return await self.tracing.invoke(runnable, payload, h.config, ctx=ctx,
+                                         agent=self.cfg.name, version=self.cfg.version,
+                                         model=self.cfg.model)
 
     SKILLS_ROOT = "/skills"
 

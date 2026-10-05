@@ -234,6 +234,12 @@ class TraceSink(Base):
         return self
 
 
+class LangfuseConfig(Base):
+    """Native harness tracing; credentials use LANGFUSE_* environment variables."""
+
+    session_input: str | None = None
+
+
 class ModelPrice(Base):
     """Per 1M tokens."""
 
@@ -255,6 +261,7 @@ class WorkerManifest(Base):
     serves: list[Served] = Field(min_length=1)
     notifications: Notifications | None = None
     trace_sink: TraceSink | None = None
+    langfuse: LangfuseConfig | None = None
     # Tenant-global in BoundFlow, not per-agent — which is why it lives here.
     model_pricing: dict[str, ModelPrice] = Field(default_factory=dict)
 

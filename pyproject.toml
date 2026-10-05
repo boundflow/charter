@@ -67,6 +67,7 @@ ui = ["boundflow[ui]"]
 # `trace_sink: {kind: otel}` builds an OTLP exporter. Theirs again, so the sink and
 # the exporter can never disagree about the OTel version.
 otel = ["boundflow[otel]"]
+langfuse = ["langfuse>=4.17,<5"]
 # Model providers. `llm.provider` takes anything LangChain can build; these are
 # just the integration packages, so you can name one instead of looking it up.
 openai = ["langchain-openai>=0.2"]
