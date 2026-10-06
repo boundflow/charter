@@ -10,7 +10,7 @@ Not versioned. Everything secret is an ${ENV_VAR} reference resolved at boot.
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import Field, model_validator
 
@@ -56,6 +56,15 @@ class Llm(Base):
     # For an OpenAI-compatible server you host — vLLM, LM Studio, llama.cpp — or a
     # provider on a non-default host.
     base_url: str = ""
+    options: dict[str, Any] = Field(default_factory=dict, description=(
+        "Provider model options, e.g. Ollama num_ctx and reasoning. Secrets belong in api_key."))
+
+    @model_validator(mode="after")
+    def _options(self):
+        reserved = {"model", "model_provider", "api_key", "base_url", "configurable_fields", "config_prefix"}
+        if overlap := reserved.intersection(self.options):
+            raise ValueError("llm.options cannot override: " + ", ".join(sorted(overlap)))
+        return self
 
 
 class Store(Base):

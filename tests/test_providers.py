@@ -55,3 +55,20 @@ def test_an_unbuildable_provider_says_what_to_install(project):
 def test_anthropic_still_builds(project):
     worker = _worker(project, provider="anthropic", api_key="k")
     assert type(worker._chat_model("claude-haiku-4-5")).__name__ == "ChatAnthropic"
+
+
+def test_ollama_options_reach_model(project):
+    pytest.importorskip("langchain_ollama")
+    worker = _worker(project, provider="ollama", api_key="",
+                     base_url="http://127.0.0.1:11434",
+                     options={"reasoning": False, "num_ctx": 16384})
+    model = worker._chat_model("qwen3:14b")
+    assert model.reasoning is False
+    assert model.num_ctx == 16384
+    assert model.base_url == "http://127.0.0.1:11434"
+
+
+@pytest.mark.parametrize("key", ["model", "model_provider", "api_key", "base_url"])
+def test_options_cannot_override_declared_identity(key):
+    with pytest.raises(ValueError, match="cannot override"):
+        Llm(options={key: "unexpected"})

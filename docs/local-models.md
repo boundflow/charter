@@ -15,6 +15,11 @@ In `worker.yaml`:
 ```yaml
 llm:
   provider: ollama        # no api_key: a local runtime needs none
+  base_url: http://127.0.0.1:11434
+  options:
+    num_ctx: 16384
+    reasoning: false     # for models supporting thinking, such as Qwen3
+    temperature: 0.2
 ```
 
 The model name is in the agent's version file, like any other model:
@@ -63,7 +68,7 @@ lifecycle rules act on.
 
 ## Context window
 
-The window belongs to the server, not to Charter, and Ollama's default is small:
+Set per-request context using `llm.options.num_ctx` above, or set a server default:
 
 ```bash
 OLLAMA_CONTEXT_LENGTH=8192 ollama serve
@@ -71,6 +76,12 @@ OLLAMA_CONTEXT_LENGTH=8192 ollama serve
 
 4,096 was enough for the quickstart. An agent with tools and a longer conversation
 might need more.
+
+`llm.options` passes provider-specific constructor options to LangChain. Keys
+`model`, `model_provider`, `api_key`, `base_url`, `configurable_fields` and
+`config_prefix` cannot be overridden there. Governed call limits still take
+precedence over provider output limits. Options are plain configuration, not a
+secret store; credentials belong in the dedicated environment-backed fields.
 
 ## Testing
 

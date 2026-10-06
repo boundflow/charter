@@ -109,7 +109,7 @@ class CharterWorker:
         # LangChain's own factory, so the providers Charter serves are the ones it
         # serves — and a new one there needs nothing here. BoundFlow still refuses a
         # model that reports no token usage.
-        extra = {}
+        extra = dict(llm.options)
         if llm.api_key:
             extra["api_key"] = resolve(llm.api_key)
         if llm.base_url:
