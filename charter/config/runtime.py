@@ -136,8 +136,8 @@ class Limits(Base):
         "How long one tool call may take before it's treated as a failure."))
 
 
-# Floor so a tiny budget still gets room to dispatch; ceiling so a wedged round
-# can't hold its lease for hours.
+# Floor so a tiny budget still gets room to dispatch. The default ceiling keeps
+# ordinary rounds bounded; an operator may explicitly permit a longer round.
 MIN_OPERATION_SECONDS, MAX_OPERATION_SECONDS = 60, 3600
 
 
@@ -195,6 +195,11 @@ class RuntimePolicyFile(Base):
     per_run: PerRun
     limits: Limits = Field(default_factory=Limits)
     authority: Authority = Field(default_factory=Authority)
+    operation_timeout_ceiling_seconds: int = Field(default=MAX_OPERATION_SECONDS,
+        ge=MIN_OPERATION_SECONDS, le=86400, description=(
+            "Control-plane ceiling for one operation, in seconds. Defaults to one hour. "
+            "Explicitly raise it for long local builds; call limits and the total "
+            "per-run time budget still apply. Maximum one day."))
 
     @model_validator(mode="after")
     def _check_authority(self) -> RuntimePolicyFile:
@@ -227,7 +232,7 @@ class RuntimePolicyFile(Base):
             # No round may outlast the whole task's allowance, or the ceiling would
             # only ever be noticed after it had already been passed.
             worst_case = min(worst_case, self.per_run.max_seconds)
-        return int(min(max(worst_case, MIN_OPERATION_SECONDS), MAX_OPERATION_SECONDS))
+        return int(min(max(worst_case, MIN_OPERATION_SECONDS), self.operation_timeout_ceiling_seconds))
 
 
 # What an agent gets when it ships no runtime.yaml. Deliberately conservative: an

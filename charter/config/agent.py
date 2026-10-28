@@ -504,7 +504,39 @@ class Schedule(Base):
         return self
 
 
+class SubagentFileOwnership(Base):
+    write_tools: dict[str, list[str]] = Field(min_length=1,
+        description='Declared write tool -> path argument names, including aliases. Only these tools are constrained.')
+    max_files: int = Field(default=4, ge=1, le=100, strict=True)
+
+    @model_validator(mode='after')
+    def _check(self):
+        if any(not fields or len(set(fields)) != len(fields) or
+               any(not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', field) for field in fields)
+               for fields in self.write_tools.values()):
+            raise ValueError('write_tools needs nonempty unique path argument names')
+        return self
+
+
 class AgentConfig(Base):
+    retain_tool_progress: bool = Field(default=False, strict=True, description=(
+        'Retain bounded checkpointed invocation metadata for repeated_read_tools and declared '
+        'ownership write tools. Show selectors/return outcomes after compaction without replacing '
+        'source, blocking reads, granting permissions or claiming acceptance. Defaults disabled.'))
+    normalize_tool_integer_arguments: bool = Field(default=False, strict=True, description=(
+        'Opt in to canonical decimal-string transport for tool fields declared integer-only '
+        'or nullable integer. Normal validation, bounds, required guards and permissions remain; '
+        'actual conversions are logged and annotated on tool results. Other strings are unchanged.'))
+    repeated_read_tools: list[str] = Field(default_factory=list, description=(
+        'Opt-in read-only tools: three consecutive identical successful reads receive computed '
+        'recovery feedback; six fail visibly. Changed arguments/results reset detection. '
+        'No tool results are cached, replaced or removed.'))
+    normalize_qwen_tool_fragments: bool = Field(default=False, strict=True, description=(
+        'Opt in to strict schema-validated normalization of a whole Qwen native function '
+        'fragment missing only its opening tool_call tag; ordinary tool governance applies.'))
+    tool_format_retries: int = Field(default=0, ge=0, le=3, strict=True, description=(
+        "Opt-in retries when the model prints known tool function tags without structured calls. "
+        "Printed text is never executed; exhausted retries fail the task. Existing call budgets still apply."))
     apiVersion: Literal["charter/v1"]
     kind: Literal["AgentConfig"]
 
@@ -518,10 +550,56 @@ class AgentConfig(Base):
     objective: str = Field(min_length=1, description=(
         "What this agent is responsible for, in plain English. Becomes the system "
         "prompt. Supports {{ inputs.<name> }} and nothing else."))
+    initial_message: str = Field(
+        default="Carry out the current task described above, using the supplied inputs and constraints.",
+        min_length=1,
+        description="First user-role message. Supports declared input templates; keep stable policy in objective.")
 
     inputs: dict[str, InputSpec] = Field(default_factory=dict)
     schedule: Schedule | None = None
     mcp: list[McpServer] = Field(default_factory=list)
+    tool_input_bindings: dict[str, dict[str, str]] = Field(default_factory=dict,
+        description="Tool name -> argument -> declared input name. Caller-bound arguments are hidden from the model schema.")
+    coordinator_tools: list[str] | None = Field(default=None,
+        description="Optional declared-tool subset for the parent. Specialists retain their explicitly assigned tools.")
+    coordinator_after_handoff_tools: list[str] = Field(default_factory=list,
+        description='Optional coordinator tools deferred until its first specialist task returns. Specialists retain their tools; this routes initial diagnosis to them without changing acceptance requirements.')
+    subagent_context_inputs: list[str] = Field(default_factory=list,
+        description="Declared caller inputs automatically preserved in inline task descriptions. Opt in only to context appropriate for every specialist; never include credentials.")
+    coordinator_context_inputs: list[str] = Field(default_factory=list,
+        description="Declared caller inputs reattached to each coordinator model request after compaction. Opt in only to durable task constraints; never include credentials. This is not added to saved history.")
+    subagent_required_tools: list[str] = Field(default_factory=list,
+        description="Opt-in coordinator tool prerequisites for task delegation. Require successful declared tool receipts in retained history or checkpointed state, not prose claims. This does not validate result semantics.")
+    subagent_review_tools: list[str] = Field(default_factory=list,
+        description='Declared tools that by default must complete before first delegation, and always after each specialist batch. Tool success may report failed checks; this proves execution, not acceptance.')
+    subagent_initial_review_required: bool = Field(default=True, strict=True,
+        description='Require review before the first task (default). False permits explicitly requested implementation after required reads; fresh review after every specialist remains mandatory.')
+    coordinator_final_review_retries: int = Field(default=0, ge=0, le=2, strict=True,
+        description='Opt-in bounded model continuations when a coordinator attempts to finish without its required post-specialist review. Does not execute reviews, fabricate receipts, or permit unreviewed completion.')
+    coordinator_assignment_input: str | None = Field(default=None,
+        description='Optional declared boolean input enabling a narrow initial assignment view after an explicit failed-check receipt. Default disabled. Same model, task tool, budgets, ownership and fresh review remain.')
+    coordinator_assignment_context_tools: list[str] = Field(default_factory=list,
+        description='Declared read-only metadata tools whose actual bounded receipts accompany the assignment view. Full durable tool history remains retained.')
+    coordinator_assignment_requires_failure: bool = Field(default=True, strict=True,
+        description='Default: assignment requires explicit failed-check evidence. False routes user-requested implementation after required reads, without inferring any checker outcome; requires initial review to be deferred.')
+    coordinator_assignment_contract_input: str | None = Field(default=None,
+        description='Optional declared string input bound verbatim as the first assignment contract, replacing generated design notes. Original scope and permissions remain; never select credentials.')
+    coordinator_assignment_diagnostic_tool: str | None = Field(default=None, description=(
+        'Optional one initial independent review attempt after preparation and before first '
+        'request-based assignment. Preserve its actual result or evidence gap; never replaces '
+        'the mandatory fresh review after specialist work. Must be a declared review tool.'))
+    coordinator_assignment_prepare_tool: str | None = Field(default=None,
+        description='Optional declared coordinator tool offered alone after initial reads and before first assignment. Its actual setup receipt accompanies the handoff; preparation is not acceptance. Default disabled.')
+    caller_deadline_input: str | None = Field(default=None,
+        description='Optional declared string input containing an aware ISO caller deadline. A live reminder reaches coordinator and inline specialists; enforcement limits, tools and review requirements do not change. Default disabled.')
+    subagent_required_read_tools: list[str] = Field(default_factory=list,
+        description='Opt-in tools each inline specialist must complete in its own history or checkpointed state before using ownership-declared write tools. Does not validate relevance, freshness or understanding of evidence.')
+    subagent_file_ownership: SubagentFileOwnership | None = Field(default=None,
+        description='Opt-in owned_files task argument and exclusive write ownership for configured inline specialists. Not an OS sandbox.')
+    builtin_tools_exclude: list[Literal['ls', 'read_file', 'write_file', 'edit_file', 'glob', 'grep', 'execute']] = Field(
+        default_factory=list, description="Built-in tools hidden and rejected for parent and inline specialists. Keep read_file if scratch history/tool-result retrieval is needed.")
+    builtin_tool_hints: dict[Literal['ls', 'read_file', 'write_file', 'edit_file', 'glob', 'grep', 'execute', 'task'], str] = Field(
+        default_factory=dict, description="Optional routing hints prepended to built-in tool descriptions and appended to their error messages.")
     # Structured output, handed to the harness as its response format. Omit and the
     # agent answers in prose, which is what most agents want.
     response_format: dict[str, FieldSpec] | None = None
@@ -573,6 +651,96 @@ class AgentConfig(Base):
         self._check_servers_unique()
         self._check_subagents()
         self._check_templates()
+        if set(self.subagent_context_inputs) - set(self.inputs):
+            raise ValueError('subagent_context_inputs must name declared inputs')
+        if set(self.coordinator_context_inputs) - set(self.inputs):
+            raise ValueError('coordinator_context_inputs must name declared inputs')
+        if self.caller_deadline_input is not None:
+            selected_deadline = self.inputs.get(self.caller_deadline_input)
+            if selected_deadline is None or selected_deadline.type != 'string':
+                raise ValueError('caller_deadline_input must name a declared string input')
+        evidence_tools = set(self.subagent_required_tools) | set(self.subagent_review_tools)
+        if self.coordinator_final_review_retries and (not self.subagent_review_tools or not self.subagents):
+            raise ValueError('coordinator_final_review_retries requires review tools and configured specialists')
+        if not self.subagent_initial_review_required and (not self.subagent_review_tools or not self.subagents):
+            raise ValueError('subagent_initial_review_required=false requires review tools and configured specialists')
+        if not self.coordinator_assignment_requires_failure:
+            if self.coordinator_assignment_input is None or self.subagent_initial_review_required:
+                raise ValueError('Request-based assignment requires coordinator_assignment_input and subagent_initial_review_required=false')
+        assignment_tools = set(self.coordinator_assignment_context_tools)
+        if self.coordinator_assignment_diagnostic_tool is not None:
+            if (self.coordinator_assignment_input is None or self.coordinator_assignment_requires_failure
+                    or not self.coordinator_assignment_prepare_tool
+                    or self.coordinator_assignment_diagnostic_tool not in self.subagent_review_tools
+                    or self.coordinator_assignment_diagnostic_tool == self.coordinator_assignment_prepare_tool):
+                raise ValueError('coordinator_assignment_diagnostic_tool requires prepared request-based assignment and a distinct declared review tool')
+            assignment_tools.add(self.coordinator_assignment_diagnostic_tool)
+        if self.coordinator_assignment_prepare_tool is not None:
+            if self.coordinator_assignment_input is None:
+                raise ValueError('coordinator_assignment_prepare_tool requires coordinator_assignment_input')
+            assignment_tools.add(self.coordinator_assignment_prepare_tool)
+        if self.coordinator_assignment_contract_input is not None:
+            contract = self.inputs.get(self.coordinator_assignment_contract_input)
+            if self.coordinator_assignment_input is None or contract is None or contract.type != 'string':
+                raise ValueError('coordinator_assignment_contract_input requires an assignment selector and a declared string input')
+        if self.coordinator_assignment_input is not None:
+            selected = self.inputs.get(self.coordinator_assignment_input)
+            if selected is None or selected.type != 'boolean':
+                raise ValueError('coordinator_assignment_input must name a declared boolean input')
+            if not self.subagent_review_tools or not self.subagents:
+                raise ValueError('coordinator_assignment_input requires review tools and configured specialists')
+        elif assignment_tools:
+            raise ValueError('coordinator_assignment_context_tools requires coordinator_assignment_input')
+        if assignment_tools - set(self.all_tools):
+            raise ValueError('coordinator_assignment_context_tools must name declared tools')
+        if self.coordinator_tools is not None and assignment_tools - set(self.coordinator_tools):
+            raise ValueError('coordinator_assignment_context_tools must be available to the coordinator')
+        if self.subagent_file_ownership and assignment_tools & set(self.subagent_file_ownership.write_tools):
+            raise ValueError('coordinator_assignment_context_tools cannot include ownership-declared write tools')
+        deferred = set(self.coordinator_after_handoff_tools)
+        if deferred - set(self.all_tools):
+            raise ValueError('coordinator_after_handoff_tools must name declared tools')
+        if deferred and not self.subagents:
+            raise ValueError('coordinator_after_handoff_tools requires configured specialists')
+        if deferred & evidence_tools:
+            raise ValueError('coordinator_after_handoff_tools cannot defer delegation prerequisites')
+        if self.coordinator_tools is not None and deferred - set(self.coordinator_tools):
+            raise ValueError('coordinator_after_handoff_tools must be available to the coordinator')
+        if evidence_tools - set(self.all_tools):
+            raise ValueError('subagent_required_tools/subagent_review_tools must name declared tools')
+        if self.subagent_file_ownership:
+            if set(self.subagent_file_ownership.write_tools) - set(self.all_tools):
+                raise ValueError('subagent_file_ownership must name declared tools')
+            if not self.subagents:
+                raise ValueError('subagent_file_ownership requires configured specialists')
+        if self.coordinator_tools is not None and evidence_tools - set(self.coordinator_tools):
+            raise ValueError('subagent_required_tools/subagent_review_tools must be available to the coordinator')
+        if set(self.repeated_read_tools) - set(self.inline_tools):
+            raise ValueError('repeated_read_tools must name declared inline tools')
+        if self.subagent_file_ownership and set(self.repeated_read_tools) & set(self.subagent_file_ownership.write_tools):
+            raise ValueError('repeated_read_tools must not include write tools')
+        if self.subagent_required_read_tools:
+            if not self.subagent_file_ownership:
+                raise ValueError('subagent_required_read_tools requires subagent_file_ownership')
+            reads = set(self.subagent_required_read_tools)
+            if reads - set(self.inline_tools):
+                raise ValueError('subagent_required_read_tools must name declared inline tools')
+            if reads & set(self.subagent_file_ownership.write_tools):
+                raise ValueError('subagent_required_read_tools must not include write tools')
+            for specialist in self.subagents:
+                inherited = self.coordinator_tools if self.coordinator_tools is not None else self.inline_tools
+                if reads - set(specialist.tools or inherited):
+                    raise ValueError('subagent_required_read_tools must be available to every specialist')
+        if self.coordinator_tools is not None:
+            unknown = set(self.coordinator_tools) - set(self.all_tools)
+            if unknown:
+                raise ValueError(f'coordinator_tools: unknown declared tools {sorted(unknown)}')
+        for tool, bindings in self.tool_input_bindings.items():
+            if tool not in self.all_tools:
+                raise ValueError(f'tool_input_bindings: unknown declared tool {tool!r}')
+            for argument, input_name in bindings.items():
+                if not argument or input_name not in self.inputs:
+                    raise ValueError(f'tool_input_bindings: {tool}.{argument} needs a declared input, got {input_name!r}')
         self._check_schedule()
         return self
 
@@ -610,7 +778,7 @@ class AgentConfig(Base):
     def _check_templates(self) -> None:
         """Only {{ inputs.<name> }}, and only for inputs that exist. An undeclared
         reference is a mistake we can catch now instead of at task time."""
-        sources = [("objective", self.objective)]
+        sources = [("objective", self.objective), ("initial_message", self.initial_message)]
         for where, text in sources:
             for ref in template_refs(text):
                 if not ref.startswith("inputs."):

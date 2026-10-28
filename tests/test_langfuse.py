@@ -153,3 +153,31 @@ def test_enabled_tracing_requires_credentials(monkeypatch):
         monkeypatch.delenv(name, raising=False)
     with pytest.raises(RuntimeError, match="LANGFUSE_PUBLIC_KEY"):
         LangfuseTracing(LangfuseConfig())
+
+
+@pytest.mark.asyncio
+async def test_cancelled_delegation_exports_its_parent_tool(tracing):
+    from deepagents import create_deep_agent
+    started = asyncio.Event()
+
+    @tool
+    async def probe(label: str) -> str:
+        """Wait for the operator to interrupt this probe."""
+        started.set()
+        await asyncio.Event().wait()
+        return 'unreachable'
+
+    tracer, exporter = tracing
+    agent = create_deep_agent(model=ScriptedBuilder(), tools=[probe])
+    ctx = SimpleNamespace(context={'project_id': 'cancelled'}, request_id='cancelled-run', workflow_id='wf')
+    task = asyncio.create_task(tracer.invoke(agent, {'messages': [{'role': 'user', 'content': 'Build'}]},
+                                            {}, ctx=ctx, agent='builder', version=1))
+    await asyncio.wait_for(started.wait(), 5)
+    task.cancel('operator suspension')
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    tracer.client.flush()
+    spans = exporter.get_finished_spans()
+    ids = {s.context.span_id for s in spans}
+    assert all(s.parent is None or s.parent.span_id in ids for s in spans), [s.name for s in spans]
+    assert len([s for s in spans if s.name == 'task']) == 2

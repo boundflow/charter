@@ -11,6 +11,7 @@ would be testing LangGraph, not us.
 """
 
 import asyncio
+import json
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -37,6 +38,74 @@ from charter.workflows.loop import (
 )
 
 EXAMPLES = Path(__file__).parent.parent / "examples"
+
+
+def test_coordinator_tool_subset_preserves_specialist_tools_and_governed_wrappers():
+    from types import SimpleNamespace
+    _, loop = loop_for()
+    read = SimpleNamespace(name='support__get_ticket')
+    write = SimpleNamespace(name='support__create_refund')
+    internal = SimpleNamespace(name='ask_human')
+    tools = [read, write, internal]
+    assert loop._coordinator_tools(tools) is tools
+    loop.cfg.coordinator_tools = [read.name]
+    assert loop._coordinator_tools(tools) == [read, internal]
+    original = SimpleNamespace(name=write.name)
+    harness = SimpleNamespace(wiring={'subagents': [{'name': 'specialist', 'tools': [original]}]})
+    assert loop._wiring(harness, None, tools)['subagents'][0]['tools'] == [write]
+    assert tools == [read, write, internal]
+    loop.cfg.builtin_tools_exclude = ['write_file', 'edit_file']
+    wiring = loop._wiring(harness, None, tools)
+    from charter.harness.tool_visibility import BuiltinToolExclusions
+    assert any(isinstance(m, BuiltinToolExclusions) for m in wiring['middleware'])
+    assert any(isinstance(m, BuiltinToolExclusions) for m in wiring['subagents'][0]['middleware'])
+    assert 'middleware' not in harness.wiring['subagents'][0]
+    loop.cfg.subagent_context_inputs = ['ticket_id']
+    wiring = loop._wiring(harness, None, tools,
+        inputs={'ticket_id': 'original-ticket', 'not_selected': 'must-not-propagate'})
+    from charter.harness.subagent_context import SubagentContext
+    context = next(m for m in wiring['middleware'] if isinstance(m, SubagentContext))
+    assert json.loads(context.serialized) == {'ticket_id': 'original-ticket'}
+    loop.cfg.coordinator_context_inputs = ['ticket_id']
+    wiring = loop._wiring(harness, None, tools,
+        inputs={'ticket_id': 'original-ticket', 'not_selected': 'must-not-propagate'})
+    from charter.harness.subagent_context import CoordinatorContextReminder
+    reminder = next(m for m in wiring['middleware'] if isinstance(m, CoordinatorContextReminder))
+    assert json.loads(reminder.serialized) == {'ticket_id': 'original-ticket'}
+    assert loop._context_reservation({'ticket_id': 'original-ticket'}) >= reminder.reserved_tokens()
+    assert not any(isinstance(m, CoordinatorContextReminder) for m in wiring['subagents'][0]['middleware'])
+    loop.cfg.tool_format_retries = 2
+    wiring = loop._wiring(harness, None, tools, inputs={'ticket_id': 'original-ticket'})
+    from charter.harness.tool_format import ToolFormatRecovery
+    assert any(isinstance(m, ToolFormatRecovery) for m in wiring['middleware'])
+    assert any(isinstance(m, ToolFormatRecovery) for m in wiring['subagents'][0]['middleware'])
+    loop.cfg.repeated_read_tools = [read.name]
+    wiring = loop._wiring(harness, None, tools, inputs={'ticket_id': 'original-ticket'})
+    from charter.harness.read_loop import ReadLoopRecovery
+    assert any(isinstance(m, ReadLoopRecovery) for m in wiring['middleware'])
+    assert any(isinstance(m, ReadLoopRecovery) for m in wiring['subagents'][0]['middleware'])
+    loop.cfg.subagent_required_tools = [read.name]
+    wiring = loop._wiring(harness, None, tools, inputs={'ticket_id': 'original-ticket'})
+    from charter.harness.delegation_prerequisites import DelegationPrerequisites
+    assert any(isinstance(m, DelegationPrerequisites) for m in wiring['middleware'])
+    assert not any(isinstance(m, DelegationPrerequisites) for m in wiring['subagents'][0]['middleware'])
+    from charter.config.agent import SubagentFileOwnership
+    from charter.harness.file_ownership import FileOwnership, OwnedWrites
+    loop.cfg.subagent_file_ownership = SubagentFileOwnership(write_tools={write.name: ['path']})
+    wiring = loop._wiring(harness, None, tools, inputs={'ticket_id': 'original-ticket'})
+    owner = next(m for m in wiring['middleware'] if isinstance(m, FileOwnership))
+    guard = next(m for m in wiring['subagents'][0]['middleware'] if isinstance(m, OwnedWrites))
+    assert guard.ownership is owner
+    loop.cfg.subagent_required_read_tools = [read.name]
+    wiring = loop._wiring(harness, None, tools, inputs={'ticket_id': 'original-ticket'})
+    from charter.harness.delegation_prerequisites import SpecialistReadPrerequisites
+    assert not any(isinstance(m, SpecialistReadPrerequisites) for m in wiring['middleware'])
+    reader_guard = next(m for m in wiring['subagents'][0]['middleware'] if isinstance(m, SpecialistReadPrerequisites))
+    assert reader_guard.required_tools == {read.name}
+    assert reader_guard.write_tools == {write.name}
+    compiled = SimpleNamespace(wiring={'subagents': [{'name': 'compiled', 'runnable': object()}]})
+    with pytest.raises(ValueError, match='precompiled'):
+        loop._wiring(compiled, None, tools, inputs={'ticket_id': 'original-ticket'})
 
 
 class FakeResult:
@@ -454,6 +523,22 @@ def test_a_spent_budget_reports_what_it_spent():
     assert out.result["cost_usd"] == pytest.approx(0.042)
 
 
+@pytest.mark.parametrize('content,metadata', [('', {}), ('Partial', {'done_reason': 'length'})])
+def test_rejected_final_output_does_not_double_charge_completed_round(content, metadata):
+    from langchain_core.messages import AIMessage
+    _, loop = loop_for()
+    loop.cfg = loop.cfg.model_copy(update={'response_format': None})
+    ctx = FakeCtx(context={K_LLM_CALLS: 5, K_COST: .1}, results=[
+        FakeResult({'messages': [AIMessage(content=content, response_metadata=metadata)]},
+                   calls=2, cost=.042)])
+    governor = ctx.agent_governor('x')
+    governor.llm_calls, governor.cost_usd = 2, .042
+    out = run(loop.entry(ctx))
+    assert out.result['failed']
+    assert out.result['llm_calls'] == 7
+    assert out.result['cost_usd'] == pytest.approx(.142)
+
+
 @pytest.mark.parametrize("answer,expected", [
     ({"answer": "start with 4821"}, "start with 4821"),
     ({"text": "use the newest"}, "use the newest"),
@@ -775,6 +860,29 @@ async def test_an_agent_with_no_declared_shape_publishes_its_prose():
     assert result.result == {"answer": "Nothing needs attention today."}
 
 
+@pytest.mark.asyncio
+async def test_empty_final_reply_does_not_publish_a_tool_receipt():
+    from langchain_core.messages import AIMessage, ToolMessage
+    _, loop = loop_for()
+    loop.cfg = loop.cfg.model_copy(update={'response_format': None})
+    result = await _published(loop, {'messages': [
+        AIMessage(content='I will build it'),
+        ToolMessage(content='Saved app/routes.py', tool_call_id='write'),
+        AIMessage(content='', additional_kwargs={'reasoning_content':'I need to keep working'})]})
+    assert result.result['failed'] is True
+    assert 'without a final assistant response' in result.result['reason']
+
+
+@pytest.mark.asyncio
+async def test_length_limited_response_is_not_published_as_complete():
+    from langchain_core.messages import AIMessage
+    _, loop = loop_for()
+    loop.cfg = loop.cfg.model_copy(update={'response_format': None})
+    result = await _published(loop, {'messages': [AIMessage(content='Partial plan', response_metadata={'done_reason':'length'})]})
+    assert result.result['failed'] is True
+    assert 'token limit' in result.result['reason']
+
+
 # ── inputs the task was never given ──────────────────────────────────────────
 
 
@@ -835,6 +943,45 @@ async def test_a_declared_default_reaches_the_prompt_however_the_task_arrived():
 
 
 # ── a gate is per tool, not per agent ───────────────────────────────────────
+
+
+def test_initial_message_uses_declared_inputs_and_requires_missing_values():
+    _, loop = loop_for()
+    loop.cfg.initial_message = 'Review ticket {{ inputs.ticket_id }} with limit {{ inputs.max_refund_usd }}'
+    ctx = FakeCtx()
+    ctx.context = {'ticket_id': '4821'}
+    assert loop._initial_message(ctx) == 'Review ticket 4821 with limit 100'
+    ctx.context = {}
+    assert 'ticket_id' in loop._unfilled(ctx)
+
+
+@pytest.mark.asyncio
+async def test_declared_subagent_tools_use_parent_governance_and_failure_caps():
+    from types import SimpleNamespace
+    from boundflow import AgentGovernor, RuntimePolicy
+    from boundflow.policies import ToolFailureLimit
+    from boundflow.llm import ToolFailureLimitExceeded
+    from boundflow.langchain_client import governed_tools
+    from langchain_core.tools import tool
+
+    @tool
+    async def broken(value: str) -> str:
+        """A failing integration returning an MCP-style error."""
+        return 'Error executing tool broken: path is required'
+
+    gov = AgentGovernor('test', RuntimePolicy(tool_failure_limits=[ToolFailureLimit(tool='broken', max_failures=1)]),
+                        'test-model', collect_spans=False)
+    wrapped = governed_tools(gov, [broken])
+    _, loop = loop_for()
+    harness = SimpleNamespace(wiring={'subagents': [{'name': 'specialist', 'tools': [broken]}]})
+    wiring = loop._wiring(harness, None, wrapped)
+    child_tool = wiring['subagents'][0]['tools'][0]
+    await child_tool.ainvoke({'value': 'one'})
+    with pytest.raises(ToolFailureLimitExceeded):
+        await child_tool.ainvoke({'value': 'two'})
+    assert gov.tool_failure_counts['broken'] == 2
+    assert gov.calls_per_tool['broken'] == 2
+    assert harness.wiring['subagents'][0]['tools'][0] is broken
 
 
 class TestPerToolGates:

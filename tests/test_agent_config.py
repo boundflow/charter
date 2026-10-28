@@ -22,6 +22,85 @@ def test_example_parses():
     assert cfg.version == 1
 
 
+def test_read_loop_recovery_is_opt_in_for_declared_nonwrite_tools():
+    assert AgentConfig.model_validate(load()).repeated_read_tools == []
+    read = 'support__get_ticket'
+    assert AgentConfig.model_validate(load(repeated_read_tools=[read])).repeated_read_tools == [read]
+    with pytest.raises(ValidationError, match='declared inline tools'):
+        AgentConfig.model_validate(load(repeated_read_tools=['unknown']))
+    child = {'name': 'writer', 'description': 'Repair', 'prompt': 'Repair'}
+    with pytest.raises(ValidationError, match='must not include write tools'):
+        AgentConfig.model_validate(load(repeated_read_tools=[read], subagents=[child],
+            subagent_file_ownership={'write_tools': {read: ['path']}}))
+
+
+def test_delegation_prerequisites_are_opt_in_and_require_visible_declared_tools():
+    assert AgentConfig.model_validate(load()).subagent_required_tools == []
+    cfg = AgentConfig.model_validate(load(subagent_required_tools=['support__get_ticket']))
+    assert cfg.subagent_required_tools == ['support__get_ticket']
+    with pytest.raises(ValidationError, match='declared tools'):
+        AgentConfig.model_validate(load(subagent_required_tools=['unknown']))
+    with pytest.raises(ValidationError, match='available to the coordinator'):
+        AgentConfig.model_validate(load(subagent_required_tools=['support__get_ticket'], coordinator_tools=[]))
+    assert AgentConfig.model_validate(load()).subagent_review_tools == []
+    assert AgentConfig.model_validate(load(subagent_review_tools=['support__get_ticket'])).subagent_review_tools
+    with pytest.raises(ValidationError, match='declared tools'):
+        AgentConfig.model_validate(load(subagent_review_tools=['unknown']))
+    with pytest.raises(ValidationError, match='available to the coordinator'):
+        AgentConfig.model_validate(load(subagent_review_tools=['support__get_ticket'], coordinator_tools=[]))
+
+
+def test_file_ownership_requires_declared_write_tools_and_specialists():
+    assert AgentConfig.model_validate(load()).subagent_file_ownership is None
+    options = {'write_tools': {'support__create_refund': ['path', 'file_path']}, 'max_files': 4}
+    child = {'name': 'writer', 'description': 'Assigned writes', 'prompt': 'Write assigned files'}
+    cfg = AgentConfig.model_validate(load(subagents=[child], subagent_file_ownership=options))
+    assert cfg.subagent_file_ownership.max_files == 4
+    with pytest.raises(ValidationError, match='configured specialists'):
+        AgentConfig.model_validate(load(subagent_file_ownership=options))
+    with pytest.raises(ValidationError, match='declared tools'):
+        AgentConfig.model_validate(load(subagents=[child], subagent_file_ownership={'write_tools': {'unknown': ['path']}}))
+    for invalid in [True, '4', 0, 101]:
+        with pytest.raises(ValidationError):
+            AgentConfig.model_validate(load(subagents=[child], subagent_file_ownership={**options, 'max_files': invalid}))
+    for fields in [[], ['path', 'path'], ['not.a.field']]:
+        with pytest.raises(ValidationError):
+            AgentConfig.model_validate(load(subagents=[child], subagent_file_ownership={'write_tools': {'support__create_refund': fields}}))
+
+
+def test_specialist_read_prerequisites_require_usable_nonwrite_tools():
+    assert AgentConfig.model_validate(load()).subagent_required_read_tools == []
+    read = 'support__get_ticket'
+    write = 'support__create_refund'
+    child = {'name': 'writer', 'description': 'Repair', 'prompt': 'Repair', 'tools': [read]}
+    options = dict(subagents=[child], subagent_required_read_tools=[read],
+                   subagent_file_ownership={'write_tools': {write: ['path']}})
+    assert AgentConfig.model_validate(load(**options)).subagent_required_read_tools == [read]
+    with pytest.raises(ValidationError, match='requires subagent_file_ownership'):
+        AgentConfig.model_validate(load(**{**options, 'subagent_file_ownership': None}))
+    with pytest.raises(ValidationError, match='declared inline tools'):
+        AgentConfig.model_validate(load(**{**options, 'subagent_required_read_tools': ['unknown']}))
+    with pytest.raises(ValidationError, match='declared inline tools'):
+        AgentConfig.model_validate(load(**{**options, 'subagent_required_read_tools': [write]}))
+    with pytest.raises(ValidationError, match='every specialist'):
+        AgentConfig.model_validate(load(**{**options, 'subagents': [{**child, 'tools': []}], 'coordinator_tools': []}))
+    assert AgentConfig.model_validate(load(**{**options, 'subagents': [{**child, 'tools': []}]}))
+    with pytest.raises(ValidationError, match='must not include write tools'):
+        AgentConfig.model_validate(load(**{**options, 'subagent_file_ownership': {'write_tools': {read: ['path']}}}))
+
+
+def test_tool_format_recovery_is_opt_in_and_bounded():
+    assert AgentConfig.model_validate(load()).normalize_qwen_tool_fragments is False
+    assert AgentConfig.model_validate(load(normalize_qwen_tool_fragments=True)).normalize_qwen_tool_fragments is True
+    with pytest.raises(ValidationError):
+        AgentConfig.model_validate(load(normalize_qwen_tool_fragments='true'))
+    assert AgentConfig.model_validate(load()).tool_format_retries == 0
+    assert AgentConfig.model_validate(load(tool_format_retries=2)).tool_format_retries == 2
+    for invalid in [-1, 4, True, '2']:
+        with pytest.raises(ValidationError):
+            AgentConfig.model_validate(load(tool_format_retries=invalid))
+
+
 def test_derived_views():
     cfg = AgentConfig.model_validate(load())
     assert cfg.gated_tools == ["support__create_refund"]
@@ -46,7 +125,49 @@ def test_unknown_key_rejected():
         AgentConfig.model_validate(load(retries=3))
 
 
+def test_tool_bindings_require_declared_tools_and_inputs():
+    valid = {'support__get_ticket': {'ticket_id': 'ticket_id'}}
+    assert AgentConfig.model_validate(load(tool_input_bindings=valid)).tool_input_bindings == valid
+    with pytest.raises(ValidationError, match='unknown declared tool'):
+        AgentConfig.model_validate(load(tool_input_bindings={'invented': {'id': 'ticket_id'}}))
+    with pytest.raises(ValidationError, match='needs a declared input'):
+        AgentConfig.model_validate(load(tool_input_bindings={'support__get_ticket': {'id': 'missing'}}))
+
+
+def test_coordinator_tool_subset_rejects_unknown_tools():
+    assert AgentConfig.model_validate(load(coordinator_tools=[])).coordinator_tools == []
+    with pytest.raises(ValidationError, match='coordinator_tools'):
+        AgentConfig.model_validate(load(coordinator_tools=['invented']))
+
+
+def test_subagent_context_is_explicit_and_uses_declared_inputs():
+    assert AgentConfig.model_validate(load()).subagent_context_inputs == []
+    assert AgentConfig.model_validate(load(subagent_context_inputs=['ticket_id'])).subagent_context_inputs == ['ticket_id']
+    with pytest.raises(ValidationError, match='subagent_context_inputs'):
+        AgentConfig.model_validate(load(subagent_context_inputs=['undeclared_secret']))
+
+
+def test_coordinator_context_is_explicit_and_uses_declared_inputs():
+    assert AgentConfig.model_validate(load()).coordinator_context_inputs == []
+    assert AgentConfig.model_validate(load(coordinator_context_inputs=['ticket_id'])).coordinator_context_inputs == ['ticket_id']
+    with pytest.raises(ValidationError, match='coordinator_context_inputs'):
+        AgentConfig.model_validate(load(coordinator_context_inputs=['undeclared_secret']))
+
+
+def test_builtin_exclusions_are_opt_in_and_do_not_accept_mcp_names():
+    assert AgentConfig.model_validate(load()).builtin_tools_exclude == []
+    assert AgentConfig.model_validate(load(builtin_tools_exclude=['write_file'])).builtin_tools_exclude == ['write_file']
+    with pytest.raises(ValidationError):
+        AgentConfig.model_validate(load(builtin_tools_exclude=['support__get_ticket']))
+
+
 class TestTemplating:
+    def test_initial_message_validates_declared_inputs(self):
+        with pytest.raises(ValidationError, match='initial_message.*not a declared input'):
+            AgentConfig.model_validate(load(initial_message='{{ inputs.missing }}'))
+        cfg = AgentConfig.model_validate(load(initial_message='Ticket {{ inputs.ticket_id }}'))
+        assert cfg.initial_message == 'Ticket {{ inputs.ticket_id }}'
+
     def test_undeclared_input_rejected(self):
         raw = load(objective="Resolve {{ inputs.nonexistent }}.")
         with pytest.raises(ValidationError, match="not a declared input"):
@@ -273,6 +394,20 @@ def policy_with(**authority):
         "apiVersion": "charter/v1", "kind": "RuntimePolicy",
         "agent": "leads-finder", "per_run": {"max_llm_calls": 5},
         "authority": authority})
+
+
+def test_coordinator_inspection_can_be_deferred_without_deferring_prerequisites():
+    options = {'coordinator_after_handoff_tools': ['support__get_ticket'],
+               'subagents': [{'name': 'worker', 'description': 'Implement a slice'}]}
+    assert AgentConfig.model_validate(load(**options)).coordinator_after_handoff_tools == ['support__get_ticket']
+    assert AgentConfig.model_validate(load()).coordinator_after_handoff_tools == []
+    for change, message in [({'coordinator_after_handoff_tools': ['unknown']}, 'declared tools'),
+                            ({'subagents': []}, 'configured specialists'),
+                            ({'subagent_required_tools': ['support__get_ticket']}, 'prerequisites'),
+                            ({'subagent_review_tools': ['support__get_ticket']}, 'prerequisites'),
+                            ({'coordinator_tools': []}, 'available to the coordinator')]:
+        with pytest.raises(ValidationError, match=message):
+            AgentConfig.model_validate(load(**{**options, **change}))
 
 
 def test_spawning_defaults_to_none_allowed():

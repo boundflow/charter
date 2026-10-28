@@ -69,16 +69,23 @@ def task_id(ctx) -> str:
     return ctx.context.get("task_id") or ctx.request_id
 
 
-def _final_text(messages) -> str:
-    """The last thing the agent actually said, or "" if it said nothing."""
+def _last_assistant(messages):
     for m in reversed(list(messages or [])):
-        content = getattr(m, "content", None)
-        if isinstance(content, str) and content.strip():
-            return content.strip()
-        if isinstance(content, list):
-            parts = [b.get("text", "") for b in content if isinstance(b, dict)]
-            if joined := " ".join(p for p in parts if p).strip():
-                return joined
+        role = m.get('role', m.get('type')) if isinstance(m, dict) else getattr(m, 'type', 'ai')
+        if role in ('ai', 'assistant'):
+            return m
+    return None
+
+
+def _final_text(messages) -> str:
+    """Only the latest assistant reply; never turn a tool receipt into success."""
+    m = _last_assistant(messages)
+    content = m.get('content') if isinstance(m, dict) else getattr(m, 'content', None)
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        parts = [b.get('text', '') for b in content if isinstance(b, dict) and b.get('type', 'text') == 'text']
+        return ' '.join(p for p in parts if p).strip()
     return ""
 
 
@@ -355,7 +362,7 @@ class Loop:
         c[K_COST] = c.get(K_COST, 0.0) + result.cost_usd
         c[K_LLM_CALLS] = c.get(K_LLM_CALLS, 0) + result.llm_calls_used
 
-    async def _fail(self, ctx, reason: str) -> Complete:
+    async def _fail(self, ctx, reason: str, *, charge_governor: bool = True) -> Complete:
         """Record a customer-domain failure and still return a result.
 
         `mark_failed()` increments num_failures for the lifecycle rules while the run
@@ -368,7 +375,10 @@ class Loop:
         # when the round completes — and a task that fails on a spent budget never
         # gets there. It was reporting `llm_calls: 0` on a run that failed
         # precisely because of what it spent.
-        self._charge_from_governor(ctx)
+        # A returned result has already charged this round. Only interrupted
+        # rounds need the governor fallback; charging both doubles failure usage.
+        if charge_governor:
+            self._charge_from_governor(ctx)
         log.warning("task failed: agent=%s reason=%s", self.cfg.name, reason)
         try:
             async with durable_harness(ctx, self.cfg.name, self.store_url) as h:
@@ -394,6 +404,7 @@ class Loop:
         branch here that could get the two out of step.
         """
         from deepagents import create_deep_agent
+        from ..harness.context import with_context_profile
 
         if missing := self._unfilled(ctx):
             # Before the harness opens and before a single call is spent. An agent
@@ -451,7 +462,7 @@ class Loop:
         action = None
         spawner = self._task_spawner(ctx)
         try:
-            agent_tools = self._tools()
+            agent_tools = self._tools(ctx)
             async with durable_harness(ctx, self.cfg.name, self.store_url,
                                        resume=decision, cfg=self.cfg,
                                        tools=agent_tools) as h:
@@ -460,14 +471,15 @@ class Loop:
                 result = await ctx.run_governed(
                     self.cfg.name,
                     lambda model, tools: self._invoke(ctx, h, create_deep_agent(
-                        model=model,
-                        tools=tools,
+                        model=with_context_profile(model, reserved_input_tokens=
+                            self._context_reservation(self._inputs(ctx))),
+                        tools=self._coordinator_tools(tools),
                         system_prompt=prompt,
                         # Ours to declare, theirs to enforce, durable because of us.
                         interrupt_on=interrupt_on(self.cfg),
                         skills=skills or None,
-                        **self._wiring(h, spawner),
-                    ), h.first({"messages": [{"role": "user", "content": prompt}]})),
+                        **self._wiring(h, spawner, tools, inputs=self._inputs(ctx)),
+                    ), h.first({"messages": [{"role": "user", "content": self._initial_message(ctx)}]})),
                     chat_model=self.chat_model(self.cfg.model),
                     # Passed explicitly rather than sniffed off the chat model.
                     # The versioned config is where the model id actually lives, and
@@ -475,7 +487,7 @@ class Loop:
                     # an integration that doesn't expose one leaves BoundFlow unable
                     # to price the call, which silently disables every cost cap.
                     model=self.cfg.model,
-                    tools=self._tools(),
+                    tools=self._tools(ctx),
                     output_schema=response_schema(self.cfg),
                     budget=self._remaining(ctx),
                 )
@@ -496,7 +508,7 @@ class Loop:
         self._charge_seconds(ctx, started)
 
         if (over := self._out_of_time(ctx)) is not None:
-            return await self._fail(ctx, over)
+            return await self._fail(ctx, over, charge_governor=False)
 
         # `on_failure: fail` was declared and unenforced after the harness rewrite
         # — the check went with the loop it lived in. A tool whose failure should
@@ -504,7 +516,7 @@ class Loop:
         if broken := self._fail_fast(result):
             return await self._fail(
                 ctx, f"{broken} failed and is declared on_failure: fail — the task "
-                     f"stopped rather than working around it")
+                     f"stopped rather than working around it", charge_governor=False)
 
         if action is not None:
             return self._gate(ctx, action)
@@ -525,6 +537,13 @@ class Loop:
             return Complete(result=output)
 
         text = _final_text(output.get("messages"))
+        last = _last_assistant(output.get('messages'))
+        metadata = last.get('response_metadata', {}) if isinstance(last, dict) else getattr(last, 'response_metadata', {})
+        pending_calls = last.get('tool_calls', []) if isinstance(last, dict) else getattr(last, 'tool_calls', [])
+        if pending_calls:
+            return await self._fail(ctx, 'model ended on a tool call without a final assistant response', charge_governor=False)
+        if metadata.get('done_reason') == 'length' or metadata.get('finish_reason') in ('length', 'max_tokens'):
+            return await self._fail(ctx, 'model stopped at its output/context token limit; the partial response is not a completed result', charge_governor=False)
         if self.cfg.response_format:
             said = f" (it said: {text[:200]})" if text else ""
             # It was asked for a shape and ended without producing one — a real
@@ -539,11 +558,13 @@ class Loop:
                 return await self._fail(
                     ctx, f"the agent reached max_llm_calls={cap} and stopped without "
                          f"calling submit_result, so there is no result in the shape "
-                         f"response_format declares" + said)
+                         f"response_format declares" + said, charge_governor=False)
             return await self._fail(
                 ctx, "the agent stopped without calling submit_result, so there is "
-                     "no result in the shape response_format declares" + said)
+                     "no result in the shape response_format declares" + said, charge_governor=False)
         # No shape was asked for, so prose is the answer rather than a shortfall.
+        if not text:
+            return await self._fail(ctx, 'model ended without a final assistant response; tool receipts and reasoning are not a completed result', charge_governor=False)
         return Complete(result={"answer": text})
 
     async def _invoke(self, ctx, h, runnable, payload):
@@ -578,7 +599,27 @@ class Loop:
                 await backend.awrite(target, path.read_text())
         return [f"{self.SKILLS_ROOT}/"]
 
-    def _wiring(self, h, spawner) -> dict:
+    def _context_reservation(self, inputs) -> int:
+        # Reminders are appended after the harness's compaction middleware.
+        # Reserve their size in the model profile so compaction does not spend
+        # that space on history before the exact caller constraints are added.
+        from ..harness.subagent_context import CoordinatorContextReminder, SubagentContextReminder
+        reservations = [0]
+        for names, reminder in ((self.cfg.coordinator_context_inputs, CoordinatorContextReminder),
+                                (self.cfg.subagent_context_inputs, SubagentContextReminder)):
+            if names:
+                reservations.append(reminder({key: inputs[key] for key in names}).reserved_tokens())
+        deadline_reservation = 0
+        if self.cfg.caller_deadline_input and inputs.get(self.cfg.caller_deadline_input):
+            from ..harness.caller_deadline import CallerDeadline
+            deadline_reservation = CallerDeadline(inputs[self.cfg.caller_deadline_input]).reserved_tokens()
+        progress_reservation = 0
+        if self.cfg.retain_tool_progress:
+            from ..harness.tool_progress import ToolProgress
+            progress_reservation = ToolProgress([]).reserved_tokens()
+        return max(reservations) + deadline_reservation + progress_reservation
+
+    def _wiring(self, h, spawner, governed_tools=None, *, inputs=None) -> dict:
         """The harness's wiring, plus our subagent bounds.
 
         Appended rather than replacing: `h.wiring` carries the policy BoundFlow
@@ -587,14 +628,129 @@ class Loop:
         just a tool.
         """
         wiring = dict(h.wiring)
+        if governed_tools is not None:
+            # durable_harness is opened before run_governed creates the wrappers.
+            # Its specialist specs therefore contain raw MCP tools. Callbacks skip
+            # declared names (their wrappers count them), so handing those raw tools
+            # to children silently bypasses accounting and failure limits.
+            by_name = {tool.name: tool for tool in governed_tools}
+            wiring['subagents'] = [
+                {**spec, 'tools': [by_name[tool.name] for tool in spec['tools']]}
+                if 'tools' in spec else dict(spec)
+                for spec in wiring.get('subagents', [])
+            ]
         extra = subagent_limits(self.runtime.per_run) + spawn_middleware(spawner)
+        if self.cfg.coordinator_context_inputs:
+            from ..harness.subagent_context import CoordinatorContextReminder
+            extra.append(CoordinatorContextReminder(
+                {key: (inputs or {})[key] for key in self.cfg.coordinator_context_inputs}))
+        if self.cfg.subagent_file_ownership:
+            from ..harness.file_ownership import FileOwnership, OwnedWrites
+            config = self.cfg.subagent_file_ownership
+            if any('runnable' in spec for spec in wiring.get('subagents', [])):
+                raise ValueError('File ownership requires middleware-capable inline specialists, not precompiled runnables')
+            ownership = FileOwnership(config.write_tools, config.max_files, [s.name for s in self.cfg.subagents])
+            extra.append(ownership)
+            wiring['subagents'] = [
+                {**spec, 'middleware': [*spec.get('middleware', []), OwnedWrites(ownership)]}
+                if 'runnable' not in spec else dict(spec)
+                for spec in wiring.get('subagents', [])]
+        if self.cfg.repeated_read_tools:
+            from ..harness.read_loop import ReadLoopRecovery
+            extra.append(ReadLoopRecovery(self.cfg.repeated_read_tools))
+            wiring['subagents'] = [
+                {**spec, 'middleware': [*spec.get('middleware', []), ReadLoopRecovery(self.cfg.repeated_read_tools)]}
+                if 'runnable' not in spec else dict(spec)
+                for spec in wiring.get('subagents', [])]
+        if self.cfg.normalize_tool_integer_arguments:
+            from ..harness.integer_arguments import CanonicalIntegerArguments
+            extra.append(CanonicalIntegerArguments())
+            wiring['subagents'] = [
+                {**spec, 'middleware': [*spec.get('middleware', []), CanonicalIntegerArguments()]}
+                if 'runnable' not in spec else dict(spec)
+                for spec in wiring.get('subagents', [])]
+        if self.cfg.tool_format_retries or self.cfg.normalize_qwen_tool_fragments:
+            from ..harness.tool_format import ToolFormatRecovery
+            extra.append(ToolFormatRecovery(self.cfg.tool_format_retries, self.cfg.normalize_qwen_tool_fragments))
+            wiring['subagents'] = [
+                {**spec, 'middleware': [*spec.get('middleware', []), ToolFormatRecovery(self.cfg.tool_format_retries, self.cfg.normalize_qwen_tool_fragments)]}
+                if 'runnable' not in spec else dict(spec)
+                for spec in wiring.get('subagents', [])]
+        if self.cfg.subagent_required_tools or self.cfg.subagent_review_tools or self.cfg.coordinator_after_handoff_tools:
+            from ..harness.delegation_prerequisites import DelegationPrerequisites
+            extra.append(DelegationPrerequisites(self.cfg.subagent_required_tools, self.cfg.subagent_review_tools,
+                                                self.cfg.coordinator_after_handoff_tools,
+                                                self.cfg.coordinator_final_review_retries,
+                                                self.cfg.subagent_initial_review_required))
+        if (self.cfg.coordinator_assignment_input is not None
+                and (inputs or {}).get(self.cfg.coordinator_assignment_input) is True):
+            from ..harness.assignment_context import AssignmentContext
+            extra.append(AssignmentContext(render(self.cfg.initial_message, inputs or {}),
+                self.cfg.subagent_required_tools, self.cfg.subagent_review_tools,
+                self.cfg.coordinator_assignment_context_tools,
+                self.cfg.coordinator_assignment_requires_failure,
+                routing_retries=self.cfg.tool_format_retries,
+                contract=(inputs or {}).get(self.cfg.coordinator_assignment_contract_input)
+                    if self.cfg.coordinator_assignment_contract_input else None,
+                prepare_tool=self.cfg.coordinator_assignment_prepare_tool,
+                diagnostic_tool=self.cfg.coordinator_assignment_diagnostic_tool))
+        if self.cfg.subagent_required_read_tools:
+            from ..harness.delegation_prerequisites import SpecialistReadPrerequisites
+            wiring['subagents'] = [
+                {**spec, 'middleware': [*spec.get('middleware', []), SpecialistReadPrerequisites(
+                    self.cfg.subagent_required_read_tools, self.cfg.subagent_file_ownership.write_tools)]}
+                for spec in wiring.get('subagents', [])]
+        if self.cfg.subagent_context_inputs:
+            from ..harness.subagent_context import SubagentContext, SubagentContextReminder
+            selected = {key: (inputs or {})[key] for key in self.cfg.subagent_context_inputs}
+            extra.append(SubagentContext(selected))
+            wiring['subagents'] = [
+                {**spec, 'middleware': [*spec.get('middleware', []), SubagentContextReminder(selected)]}
+                if 'runnable' not in spec else dict(spec)
+                for spec in wiring.get('subagents', [])]
+        if self.cfg.builtin_tools_exclude or self.cfg.builtin_tool_hints:
+            from ..harness.tool_visibility import BuiltinToolExclusions
+            extra.append(BuiltinToolExclusions(self.cfg.builtin_tools_exclude, self.cfg.builtin_tool_hints))
+            wiring['subagents'] = [
+                {**spec, 'middleware': [*spec.get('middleware', []),
+                    BuiltinToolExclusions(self.cfg.builtin_tools_exclude, self.cfg.builtin_tool_hints)]}
+                if 'runnable' not in spec else dict(spec)
+                for spec in wiring.get('subagents', [])
+            ]
+        if self.cfg.caller_deadline_input and (inputs or {}).get(self.cfg.caller_deadline_input):
+            from ..harness.caller_deadline import CallerDeadline
+            deadline = CallerDeadline(inputs[self.cfg.caller_deadline_input])
+            extra.append(deadline)  # After assignment-view shortening; keep the notice visible.
+            wiring['subagents'] = [
+                {**spec, 'middleware': [*spec.get('middleware', []), deadline]}
+                if 'runnable' not in spec else dict(spec)
+                for spec in wiring.get('subagents', [])]
+        if self.cfg.retain_tool_progress:
+            from ..harness.tool_progress import ToolProgress
+            writes = self.cfg.subagent_file_ownership.write_tools if self.cfg.subagent_file_ownership else ()
+            extra.append(ToolProgress(self.cfg.repeated_read_tools, writes))
+            wiring['subagents'] = [
+                {**spec, 'middleware': [*spec.get('middleware', []), ToolProgress(self.cfg.repeated_read_tools, writes)]}
+                if 'runnable' not in spec else dict(spec)
+                for spec in wiring.get('subagents', [])]
         if extra:
             wiring["middleware"] = list(wiring.get("middleware") or []) + extra
         return wiring
 
-    def _tools(self) -> list:
+    def _coordinator_tools(self, tools) -> list:
+        allowed = self.cfg.coordinator_tools
+        if allowed is None:
+            return tools
+        declared = set(self.cfg.all_tools)
+        return [tool for tool in tools if tool.name not in declared or tool.name in allowed]
+
+    def _tools(self, ctx=None) -> list:
         """Declared MCP tools, plus whichever of ours this agent's config turns on."""
         tools = self.tools.langchain_tools()
+        if self.cfg.tool_input_bindings:
+            from ..harness.tool_inputs import bind_tool_inputs
+            tools = bind_tool_inputs(tools, self.cfg.tool_input_bindings,
+                                     self._inputs(ctx) if ctx is not None else {})
         for extra in (ask_tool(self.cfg), wait_tool(self.cfg)):
             if extra is not None:
                 tools.append(extra)
@@ -624,10 +780,15 @@ class Loop:
         missing.
         """
         have = self._inputs(ctx)
+        templates = self.cfg.objective + '\n' + self.cfg.initial_message
+        bound_inputs = {name for mapping in self.cfg.tool_input_bindings.values() for name in mapping.values()}
         return [name for name in self.cfg.inputs
                 if name not in have
-                and (f"{{{{ inputs.{name} }}}}" in self.cfg.objective
-                     or f"{{{{inputs.{name}}}}}" in self.cfg.objective)]
+                and (name in bound_inputs or f"{{{{ inputs.{name} }}}}" in templates
+                     or f"{{{{inputs.{name}}}}}" in templates)]
+
+    def _initial_message(self, ctx) -> str:
+        return render(self.cfg.initial_message, self._inputs(ctx))
 
     def _ask_for(self, missing: list[str]) -> str:
         """A reason that says what to do about it.

@@ -34,6 +34,31 @@ def native_callback(public_key):
         def __init__(self):
             super().__init__(public_key=public_key)
             self.governed_models = set()
+            self.open_tools = {}
+
+        def on_tool_start(self, serialized, input_str, *, run_id, parent_run_id=None, **kwargs):
+            self.open_tools[run_id] = parent_run_id
+            return super().on_tool_start(serialized, input_str, run_id=run_id,
+                                         parent_run_id=parent_run_id, **kwargs)
+
+        def on_tool_end(self, output, *, run_id, **kwargs):
+            try:
+                return super().on_tool_end(output, run_id=run_id, **kwargs)
+            finally:
+                self.open_tools.pop(run_id, None)
+
+        def on_tool_error(self, error, *, run_id, **kwargs):
+            try:
+                return super().on_tool_error(error, run_id=run_id, **kwargs)
+            finally:
+                self.open_tools.pop(run_id, None)
+
+        def close_unfinished_tools(self, error):
+            # Deep Agents cancellation can skip task's on_tool_error callback.
+            # Close only observations whose actual starts we saw; never invent
+            # calls, outputs or usage for the interrupted work.
+            for run_id, parent in list(self.open_tools.items()):
+                self.on_tool_error(error, run_id=run_id, parent_run_id=parent)
 
         def on_chat_model_start(self, serialized, messages, *, run_id, **kwargs):
             identity = (serialized or {}).get("id") or []
@@ -99,9 +124,13 @@ class LangfuseTracing:
                 with self.client.start_as_current_observation(
                     as_type="agent", name=f"{agent} v{version}", input=payload,
                 ) as root:
-                    result = await runnable.ainvoke(payload, config)
-                    root.update(output=result)
-                    return result
+                    try:
+                        result = await runnable.ainvoke(payload, config)
+                        root.update(output=result)
+                        return result
+                    except BaseException as error:
+                        callback.close_unfinished_tools(error)
+                        raise
         finally:
             _task_trace_id.reset(token)
 
